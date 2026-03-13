@@ -200,7 +200,10 @@ async function searchPg(
 
   const results: SearchResult[] = [];
   const { minScore, includeSkeleton, includeSummary } = options;
-  const { alpha, beta } = scoring;
+  const { alpha, beta, gamma } = scoring;
+
+  // Collect child file scores per directory for child-to-parent propagation
+  const childScoresByDir = new Map<string, number[]>();
 
   // --- File results ---
   for (const row of fileRows) {
@@ -216,6 +219,12 @@ async function searchPg(
     const parentBoost = dirSim > minScore ? 0.3 * dirSim : 0;
 
     const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
+    if (finalScore >= minScore) {
+      // Track child scores for parent directory boosting
+      const scores = childScoresByDir.get(dirKey) ?? [];
+      scores.push(finalScore);
+      childScoresByDir.set(dirKey, scores);
+    }
     if (finalScore < minScore) continue;
 
     const result: SearchResult = {
@@ -237,12 +246,22 @@ async function searchPg(
     const repoId = parseInt(row.repo_id);
     const concatSim = parseFloat(row.concat_sim);
     const summarySim = parseFloat(row.summary_sim);
-    const finalScore = Math.max(concatSim, summarySim);
+    let finalScore = Math.max(concatSim, summarySim);
+
+    // Child-to-parent boost: if >= 2 child files scored above minScore,
+    // boost directory by gamma * AVG(top child scores)
+    const dirKey = `${row.repo_id}:${row.dir_path}`;
+    const childScores = childScoresByDir.get(dirKey) ?? [];
+    if (childScores.length >= 2) {
+      const avg = childScores.reduce((a, b) => a + b, 0) / childScores.length;
+      finalScore += gamma * avg;
+    }
+
     if (finalScore < minScore) continue;
 
     const result: SearchResult = {
       filePath: row.dir_path,
-      cosineSimilarity: finalScore,
+      cosineSimilarity: Math.max(concatSim, summarySim),
       finalScore,
       type: "dir",
       inProject: repoId === currentRepoId,
@@ -365,7 +384,10 @@ async function searchSqlite(
 
   const results: SearchResult[] = [];
   const { minScore, includeSkeleton, includeSummary } = options;
-  const { alpha, beta } = scoring;
+  const { alpha, beta, gamma } = scoring;
+
+  // Collect child file scores per directory for child-to-parent propagation
+  const childScoresByDir = new Map<string, number[]>();
 
   // --- File results ---
   for (const row of fileRows) {
@@ -379,6 +401,11 @@ async function searchSqlite(
     const parentBoost = dirSim > minScore ? 0.3 * dirSim : 0;
 
     const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
+    if (finalScore >= minScore) {
+      const scores = childScoresByDir.get(dirKey) ?? [];
+      scores.push(finalScore);
+      childScoresByDir.set(dirKey, scores);
+    }
     if (finalScore < minScore) continue;
 
     const result: SearchResult = {
@@ -399,12 +426,22 @@ async function searchSqlite(
   for (const row of dirRows) {
     const concatSim = row.concat_distance != null ? 1 - row.concat_distance : 0;
     const summarySim = row.summary_distance != null ? 1 - row.summary_distance : 0;
-    const finalScore = Math.max(concatSim, summarySim);
+    let finalScore = Math.max(concatSim, summarySim);
+
+    // Child-to-parent boost: if >= 2 child files scored above minScore,
+    // boost directory by gamma * AVG(top child scores)
+    const dirKey = `${row.repo_id}:${row.dir_path}`;
+    const childScores = childScoresByDir.get(dirKey) ?? [];
+    if (childScores.length >= 2) {
+      const avg = childScores.reduce((a, b) => a + b, 0) / childScores.length;
+      finalScore += gamma * avg;
+    }
+
     if (finalScore < minScore) continue;
 
     const result: SearchResult = {
       filePath: row.dir_path,
-      cosineSimilarity: finalScore,
+      cosineSimilarity: Math.max(concatSim, summarySim),
       finalScore,
       type: "dir",
       inProject: row.repo_id === currentRepoId,

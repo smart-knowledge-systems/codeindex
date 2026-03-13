@@ -303,6 +303,7 @@ async function cmdSearch(
     topN?: number;
     scope?: string;
     includeSkeleton?: boolean;
+    includeSummary?: boolean;
     json?: boolean;
     pretty?: boolean;
   },
@@ -311,6 +312,7 @@ async function cmdSearch(
     minScore: opts.minScore,
     topN: opts.topN,
     includeSkeleton: opts.includeSkeleton,
+    includeSummary: opts.includeSummary,
   };
 
   if (opts.scope === "all") {
@@ -422,6 +424,8 @@ async function cmdConfig(repoRoot: string, args: string[]) {
       updates.scoring = { ...((updates.scoring as object) ?? {}), alpha: parseFloat(value) };
     else if (key === "beta")
       updates.scoring = { ...((updates.scoring as object) ?? {}), beta: parseFloat(value) };
+    else if (key === "gamma")
+      updates.scoring = { ...((updates.scoring as object) ?? {}), gamma: parseFloat(value) };
     else if (key === "min-score")
       updates.scoring = { ...((updates.scoring as object) ?? {}), minScore: parseFloat(value) };
   }
@@ -489,6 +493,7 @@ async function main() {
           topN: getFlag("--top-n") ? parseInt(getFlag("--top-n")!) : undefined,
           scope: getFlag("--scope"),
           includeSkeleton: args.includes("--include-skeleton"),
+          includeSummary: args.includes("--include-summary"),
           json: !args.includes("--pretty"),
           pretty: args.includes("--pretty"),
         });
@@ -530,6 +535,7 @@ Commands:
     --top-n <n>        Max results
     --scope <s>        project|all|name1,name2
     --include-skeleton Include skeleton text
+    --include-summary  Include directory summaries
     --pretty           Human-readable output
   export               Export pg to sqlite
     --out <path>       Output path (default .codeindex.db)
