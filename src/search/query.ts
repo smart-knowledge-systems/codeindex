@@ -89,6 +89,63 @@ interface SqliteRepoRow {
 }
 
 // ---------------------------------------------------------------------------
+// Scope filtering helpers
+// ---------------------------------------------------------------------------
+
+const LANG_ALIASES: Record<string, string[]> = {
+  ts: [".ts", ".tsx"],
+  typescript: [".ts", ".tsx"],
+  js: [".js", ".jsx"],
+  javascript: [".js", ".jsx"],
+  python: [".py"],
+  py: [".py"],
+  rust: [".rs"],
+  rs: [".rs"],
+  go: [".go"],
+  java: [".java"],
+  c: [".c", ".h"],
+  cpp: [".cpp", ".hpp", ".cc", ".cxx", ".hh"],
+  "c++": [".cpp", ".hpp", ".cc", ".cxx", ".hh"],
+  csharp: [".cs"],
+  "c#": [".cs"],
+  cs: [".cs"],
+};
+
+function resolveLangExtensions(langs: string[]): string[] {
+  const exts = new Set<string>();
+  for (const lang of langs) {
+    const key = lang.toLowerCase();
+    const mapped = LANG_ALIASES[key];
+    if (mapped) {
+      for (const e of mapped) exts.add(e);
+    } else {
+      // Treat as raw extension: ".foo" or "foo" -> ".foo"
+      exts.add(key.startsWith(".") ? key : `.${key}`);
+    }
+  }
+  return [...exts];
+}
+
+function parseSince(since: string): Date {
+  const match = since.match(/^(\d+)([dwm])$/);
+  if (match) {
+    const n = parseInt(match[1]);
+    const unit = match[2];
+    const now = new Date();
+    if (unit === "d") now.setDate(now.getDate() - n);
+    else if (unit === "w") now.setDate(now.getDate() - n * 7);
+    else if (unit === "m") now.setMonth(now.getMonth() - n);
+    return now;
+  }
+  // Try ISO date
+  const d = new Date(since);
+  if (isNaN(d.getTime())) {
+    throw new Error(`Invalid --since value: "${since}". Use Nd, Nw, Nm, or ISO date.`);
+  }
+  return d;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -119,6 +176,12 @@ async function searchPg(
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
   const repoIdList = repoIds.join(",");
 
+  // Resolve scope filters
+  const langExts =
+    options.lang && options.lang.length > 0 ? resolveLangExtensions(options.lang) : null;
+  const dirFilters = options.dir && options.dir.length > 0 ? options.dir : null;
+  const sinceDate = options.since ? parseSince(options.since) : null;
+
   // --- Repo info map ---
   const repoInfoRows = (await pgUnsafe(
     `SELECT id, root_path, name FROM repos WHERE id IN (${repoIdList})`,
@@ -129,14 +192,54 @@ async function searchPg(
   }
 
   // --- Files ---
+  let fileFilterSql = "";
+  const fileFilterParams: string[] = [];
+  let paramIdx = 1;
+
+  if (langExts) {
+    fileFilterSql += ` AND file_type IN (${langExts.map(() => `$${paramIdx++}`).join(",")})`;
+    fileFilterParams.push(...langExts);
+  }
+  if (dirFilters) {
+    const dirConds = dirFilters.map(() => `file_path LIKE $${paramIdx++}`).join(" OR ");
+    fileFilterSql += ` AND (${dirConds})`;
+    fileFilterParams.push(...dirFilters.map((d) => `${d.replace(/\/$/, "")}/%`));
+  }
+  if (sinceDate) {
+    fileFilterSql += ` AND indexed_at >= $${paramIdx++}`;
+    fileFilterParams.push(sinceDate.toISOString());
+  }
+
   const fileRows = (await pgUnsafe(
     `SELECT id, repo_id, file_path, skeleton, file_type,
             1 - (embedding <=> ${vecLiteral}) AS similarity
      FROM files
-     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL`,
+     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL${fileFilterSql}`,
+    fileFilterParams.length > 0 ? fileFilterParams : undefined,
   )) as PgFileRow[];
 
   // --- Directories ---
+  let dirFilterSql = "";
+  const dirFilterParams: unknown[] = [];
+  let dirParamIdx = 1;
+
+  if (dirFilters) {
+    const dirConds = dirFilters
+      .map(() => {
+        const p1 = `$${dirParamIdx++}`;
+        const p2 = `$${dirParamIdx++}`;
+        return `(dir_path LIKE ${p1} OR dir_path = ${p2})`;
+      })
+      .join(" OR ");
+    dirFilterSql += ` AND (${dirConds})`;
+    dirFilterParams.push(
+      ...dirFilters.flatMap((d) => {
+        const clean = d.replace(/\/$/, "");
+        return [`${clean}/%`, clean];
+      }),
+    );
+  }
+
   const dirRows = (await pgUnsafe(
     `SELECT id, repo_id, dir_path, summary,
             1 - (concat_embedding <=> ${vecLiteral}) AS concat_sim,
@@ -145,15 +248,25 @@ async function searchPg(
                  ELSE 0
             END AS summary_sim
      FROM directories
-     WHERE repo_id IN (${repoIdList}) AND concat_embedding IS NOT NULL`,
+     WHERE repo_id IN (${repoIdList}) AND concat_embedding IS NOT NULL${dirFilterSql}`,
+    dirFilterParams.length > 0 ? dirFilterParams : undefined,
   )) as PgDirRow[];
 
   // --- Commits ---
+  let commitFilterSql = "";
+  const commitFilterParams: unknown[] = [];
+
+  if (sinceDate) {
+    commitFilterSql += ` AND authored_at >= $1`;
+    commitFilterParams.push(sinceDate.toISOString());
+  }
+
   const commitRows = (await pgUnsafe(
     `SELECT id, repo_id, commit_hash, message,
             1 - (embedding <=> ${vecLiteral}) AS similarity
      FROM commits
-     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL`,
+     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL${commitFilterSql}`,
+    commitFilterParams.length > 0 ? commitFilterParams : undefined,
   )) as PgCommitRow[];
 
   // --- File–commit links for boost (limited to commitDepth) ---
@@ -320,6 +433,12 @@ async function searchSqlite(
   const repoIdList = repoIds.join(",");
   const knnLimit = Math.max((options.topN || 50) * 3, 200);
 
+  // Resolve scope filters
+  const langExts =
+    options.lang && options.lang.length > 0 ? resolveLangExtensions(options.lang) : null;
+  const dirFilters = options.dir && options.dir.length > 0 ? options.dir : null;
+  const sinceDate = options.since ? parseSince(options.since) : null;
+
   // --- Repo info map ---
   const repoInfoRows = db
     .prepare(`SELECT id, root_path, name FROM repos WHERE id IN (${repoIdList})`)
@@ -330,6 +449,23 @@ async function searchSqlite(
   }
 
   // --- Files (KNN via vec0 MATCH) ---
+  // KNN queries in sqlite-vec don't support arbitrary WHERE; post-filter instead
+  let fileFilterSql = "";
+  const fileFilterParams: string[] = [];
+  if (langExts) {
+    fileFilterSql += ` AND f.file_type IN (${langExts.map(() => "?").join(",")})`;
+    fileFilterParams.push(...langExts);
+  }
+  if (dirFilters) {
+    const dirConds = dirFilters.map(() => "f.file_path LIKE ?").join(" OR ");
+    fileFilterSql += ` AND (${dirConds})`;
+    fileFilterParams.push(...dirFilters.map((d) => `${d.replace(/\/$/, "")}/%`));
+  }
+  if (sinceDate) {
+    fileFilterSql += ` AND f.indexed_at >= ?`;
+    fileFilterParams.push(sinceDate.toISOString());
+  }
+
   const fileRows = db
     .prepare(
       `SELECT f.id, f.repo_id, f.file_path, f.skeleton, f.file_type,
@@ -337,11 +473,24 @@ async function searchSqlite(
        FROM file_embeddings fe
        JOIN files f ON f.id = fe.file_id
        WHERE fe.embedding MATCH ? AND fe.k = ?
-         AND f.repo_id IN (${repoIdList})`,
+         AND f.repo_id IN (${repoIdList})${fileFilterSql}`,
     )
-    .all(embBuf, knnLimit) as SqliteFileRow[];
+    .all(embBuf, knnLimit, ...fileFilterParams) as SqliteFileRow[];
 
   // --- Directories (KNN via vec0 MATCH for concat, then point lookup for summary) ---
+  let dirFilterSql = "";
+  const dirFilterParams: string[] = [];
+  if (dirFilters) {
+    const dirConds = dirFilters.map(() => "(d.dir_path LIKE ? OR d.dir_path = ?)").join(" OR ");
+    dirFilterSql += ` AND (${dirConds})`;
+    dirFilterParams.push(
+      ...dirFilters.flatMap((d) => {
+        const clean = d.replace(/\/$/, "");
+        return [`${clean}/%`, clean];
+      }),
+    );
+  }
+
   const dirConcatRows = db
     .prepare(
       `SELECT d.id, d.repo_id, d.dir_path, d.summary,
@@ -349,9 +498,9 @@ async function searchSqlite(
        FROM dir_concat_embeddings dce
        JOIN directories d ON d.id = dce.dir_id
        WHERE dce.embedding MATCH ? AND dce.k = ?
-         AND d.repo_id IN (${repoIdList})`,
+         AND d.repo_id IN (${repoIdList})${dirFilterSql}`,
     )
-    .all(embBuf, knnLimit) as (SqliteDirRow & { concat_distance: number })[];
+    .all(embBuf, knnLimit, ...dirFilterParams) as (SqliteDirRow & { concat_distance: number })[];
 
   // Enrich with summary distances where available
   const dirRows: SqliteDirRow[] = dirConcatRows.map((row) => {
@@ -371,6 +520,13 @@ async function searchSqlite(
   });
 
   // --- Commits (KNN via vec0 MATCH) ---
+  let commitFilterSql = "";
+  const commitFilterParams: string[] = [];
+  if (sinceDate) {
+    commitFilterSql += ` AND c.authored_at >= ?`;
+    commitFilterParams.push(sinceDate.toISOString());
+  }
+
   const commitRows = db
     .prepare(
       `SELECT c.id, c.repo_id, c.commit_hash, c.message,
@@ -378,9 +534,9 @@ async function searchSqlite(
        FROM commit_embeddings ce
        JOIN commits c ON c.id = ce.commit_id
        WHERE ce.embedding MATCH ? AND ce.k = ?
-         AND c.repo_id IN (${repoIdList})`,
+         AND c.repo_id IN (${repoIdList})${commitFilterSql}`,
     )
-    .all(embBuf, knnLimit) as SqliteCommitRow[];
+    .all(embBuf, knnLimit, ...commitFilterParams) as SqliteCommitRow[];
 
   // --- File–commit links (point-to-point distance, not KNN) ---
   const linkRows = db
@@ -585,6 +741,9 @@ export async function search(
     includeSummary: options?.includeSummary ?? false,
     includeSnippet: options?.includeSnippet ?? false,
     scoringOverrides: options?.scoringOverrides ?? {},
+    lang: options?.lang ?? [],
+    dir: options?.dir ?? [],
+    since: options?.since ?? "",
   };
 
   const queryEmbedding = await embedSingle(query);

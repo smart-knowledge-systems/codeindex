@@ -23,6 +23,9 @@ export interface SearchOptions {
   includeSummary?: boolean;
   includeSnippet?: boolean;
   scoringOverrides?: Partial<ScoringConfig>;
+  lang?: string[];
+  dir?: string[];
+  since?: string;
 }
 
 export interface SkeletonEntry {
