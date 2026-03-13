@@ -5,6 +5,7 @@ import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
+import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -170,6 +171,7 @@ async function searchPg(
   repoIds: number[],
   currentRepoId: number,
   queryEmbedding: number[],
+  query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
 ): Promise<SearchResult[]> {
@@ -321,6 +323,24 @@ async function searchPg(
   // Collect child file scores per directory for child-to-parent propagation
   const childScoresByDir = new Map<string, number[]>();
 
+  // --- BM25 hybrid scoring ---
+  const { hybridWeight, lengthPenaltyWeight } = scoring;
+  const bm25Docs = fileRows.filter((r) => r.skeleton).map((r) => ({ id: r.id, text: r.skeleton! }));
+  const bm25Index = bm25Docs.length > 0 ? buildBM25Index(bm25Docs) : null;
+  const bm25Scores = bm25Index ? scoreBM25(bm25Index, query) : new Map<string, number>();
+  const maxBM25 = bm25Scores.size > 0 ? Math.max(...bm25Scores.values()) : 1;
+
+  // Average skeleton length for length normalization
+  let totalSkeletonLen = 0;
+  let skeletonCount = 0;
+  for (const row of fileRows) {
+    if (row.skeleton) {
+      totalSkeletonLen += row.skeleton.length;
+      skeletonCount++;
+    }
+  }
+  const avgSkeletonLen = skeletonCount > 0 ? totalSkeletonLen / skeletonCount : 1;
+
   // --- File results ---
   for (const row of fileRows) {
     const fileId = parseInt(row.id);
@@ -334,9 +354,27 @@ async function searchPg(
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
     const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
-    const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
+    // Length normalization penalty
+    const skeletonLen = row.skeleton?.length ?? 0;
+    const lengthPenalty =
+      skeletonLen > 0
+        ? Math.max(0, Math.log(skeletonLen / avgSkeletonLen)) * lengthPenaltyWeight
+        : 0;
+
+    // Semantic score with length penalty
+    const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
+
+    // BM25 keyword score
+    const rawBM25 = bm25Scores.get(row.id) ?? 0;
+    const normalizedBM25 = maxBM25 > 0 ? rawBM25 / maxBM25 : 0;
+
+    // Hybrid fusion
+    const finalScore =
+      hybridWeight > 0
+        ? (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
+        : semanticScore;
+
     if (finalScore >= minScore) {
-      // Track child scores for parent directory boosting
       const scores = childScoresByDir.get(dirKey) ?? [];
       scores.push(finalScore);
       childScoresByDir.set(dirKey, scores);
@@ -353,6 +391,7 @@ async function searchPg(
       repoName: repoInfo?.name,
       repoPath: repoInfo?.rootPath,
     };
+    if (normalizedBM25 > 0) result.keywordScore = normalizedBM25;
     if (repoId !== currentRepoId) result.repoId = row.repo_id;
     if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
     const commitIds = commitIdsByFileId.get(fileId);
@@ -362,8 +401,10 @@ async function searchPg(
         cosineSimilarity: fileSim,
         commitBoost,
         parentBoost,
+        keywordScore: normalizedBM25,
+        lengthPenalty,
         weights: { alpha, beta, gamma },
-        formula: `${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} = ${finalScore.toFixed(3)}`,
+        formula: `(1-${hybridWeight})*[${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} - ${lengthPenalty.toFixed(3)}] + ${hybridWeight}*${normalizedBM25.toFixed(3)} = ${finalScore.toFixed(3)}`,
       };
     }
     results.push(result);
@@ -446,6 +487,7 @@ async function searchSqlite(
   currentRepoId: number,
   repoRoot: string,
   queryEmbedding: number[],
+  query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
 ): Promise<SearchResult[]> {
@@ -603,6 +645,29 @@ async function searchSqlite(
   // Collect child file scores per directory for child-to-parent propagation
   const childScoresByDir = new Map<string, number[]>();
 
+  // --- BM25 hybrid scoring ---
+  const { hybridWeight, lengthPenaltyWeight } = scoring;
+  const bm25DocsSqlite = fileRows
+    .filter((r) => r.skeleton)
+    .map((r) => ({ id: String(r.id), text: r.skeleton! }));
+  const bm25IndexSqlite = bm25DocsSqlite.length > 0 ? buildBM25Index(bm25DocsSqlite) : null;
+  const bm25ScoresSqlite = bm25IndexSqlite
+    ? scoreBM25(bm25IndexSqlite, query)
+    : new Map<string, number>();
+  const maxBM25Sqlite = bm25ScoresSqlite.size > 0 ? Math.max(...bm25ScoresSqlite.values()) : 1;
+
+  // Average skeleton length for length normalization
+  let totalSkeletonLenSqlite = 0;
+  let skeletonCountSqlite = 0;
+  for (const row of fileRows) {
+    if (row.skeleton) {
+      totalSkeletonLenSqlite += row.skeleton.length;
+      skeletonCountSqlite++;
+    }
+  }
+  const avgSkeletonLenSqlite =
+    skeletonCountSqlite > 0 ? totalSkeletonLenSqlite / skeletonCountSqlite : 1;
+
   // --- File results ---
   for (const row of fileRows) {
     const fileSim = 1 - row.distance;
@@ -614,7 +679,26 @@ async function searchSqlite(
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
     const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
-    const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
+    // Length normalization penalty
+    const skeletonLen = row.skeleton?.length ?? 0;
+    const lengthPenalty =
+      skeletonLen > 0
+        ? Math.max(0, Math.log(skeletonLen / avgSkeletonLenSqlite)) * lengthPenaltyWeight
+        : 0;
+
+    // Semantic score with length penalty
+    const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
+
+    // BM25 keyword score
+    const rawBM25 = bm25ScoresSqlite.get(String(row.id)) ?? 0;
+    const normalizedBM25 = maxBM25Sqlite > 0 ? rawBM25 / maxBM25Sqlite : 0;
+
+    // Hybrid fusion
+    const finalScore =
+      hybridWeight > 0
+        ? (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
+        : semanticScore;
+
     if (finalScore >= minScore) {
       const scores = childScoresByDir.get(dirKey) ?? [];
       scores.push(finalScore);
@@ -632,6 +716,7 @@ async function searchSqlite(
       repoName: repoInfo?.name,
       repoPath: repoInfo?.rootPath,
     };
+    if (normalizedBM25 > 0) result.keywordScore = normalizedBM25;
     if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
     if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
     const commitIds = commitIdsByFileId.get(row.id);
@@ -641,8 +726,10 @@ async function searchSqlite(
         cosineSimilarity: fileSim,
         commitBoost,
         parentBoost,
+        keywordScore: normalizedBM25,
+        lengthPenalty,
         weights: { alpha, beta, gamma },
-        formula: `${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} = ${finalScore.toFixed(3)}`,
+        formula: `(1-${hybridWeight})*[${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} - ${lengthPenalty.toFixed(3)}] + ${hybridWeight}*${normalizedBM25.toFixed(3)} = ${finalScore.toFixed(3)}`,
       };
     }
     results.push(result);
@@ -799,13 +886,21 @@ export async function search(
   let results: SearchResult[];
 
   if (config.store === "pg") {
-    results = await searchPg(repoIds, currentRepoId, queryEmbedding, resolvedOptions, scoring);
+    results = await searchPg(
+      repoIds,
+      currentRepoId,
+      queryEmbedding,
+      query,
+      resolvedOptions,
+      scoring,
+    );
   } else {
     results = await searchSqlite(
       repoIds,
       currentRepoId,
       repoRoot,
       queryEmbedding,
+      query,
       resolvedOptions,
       scoring,
     );

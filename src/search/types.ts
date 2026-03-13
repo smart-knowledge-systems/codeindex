@@ -21,6 +21,7 @@ export interface SearchResult {
   commitIds?: string[];
   skeleton?: string;
   summary?: string;
+  keywordScore?: number;
   lineStart?: number;
   lineEnd?: number;
   snippet?: string;
@@ -80,6 +81,8 @@ export interface ScoringConfig {
   gamma: number;
   minScore: number;
   parentBoostMultiplier: number;
+  hybridWeight: number;
+  lengthPenaltyWeight: number;
 }
 
 export interface RepoRecord {
