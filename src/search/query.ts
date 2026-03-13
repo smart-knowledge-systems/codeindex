@@ -175,6 +175,8 @@ async function searchPg(
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
 ): Promise<SearchResult[]> {
+  // Ensure HNSW search quality on the connection used for this query
+  await pgUnsafe("SET LOCAL hnsw.ef_search = 40");
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
   const repoIdList = repoIds.join(",");
 

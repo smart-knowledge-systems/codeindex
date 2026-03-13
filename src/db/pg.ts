@@ -13,8 +13,6 @@ export async function getPg(): Promise<InstanceType<typeof SQL>> {
     username: config.pg.user,
     max: 10,
   });
-  // Set HNSW search quality parameter for the session
-  await _pg.unsafe("SET hnsw.ef_search = 40");
   return _pg;
 }
 
