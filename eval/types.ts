@@ -21,6 +21,7 @@ export interface EvalResult {
   queryId: string;
   query: string;
   precision5: number;
+  hitRate5: number;
   recall: number;
   mrr: number;
   ndcg: number;
@@ -33,6 +34,7 @@ export interface EvalSummary {
   configName: string;
   model?: string;
   avgPrecision5: number;
+  avgHitRate5: number;
   avgRecall: number;
   avgMrr: number;
   avgNdcg: number;

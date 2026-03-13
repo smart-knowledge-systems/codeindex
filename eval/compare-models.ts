@@ -58,6 +58,7 @@ async function main() {
   const results = await runEval(repoRoot, dataset);
 
   const avgP5 = results.reduce((s, r) => s + r.precision5, 0) / results.length;
+  const avgHR5 = results.reduce((s, r) => s + r.hitRate5, 0) / results.length;
   const avgRecall = results.reduce((s, r) => s + r.recall, 0) / results.length;
   const avgMrr = results.reduce((s, r) => s + r.mrr, 0) / results.length;
   const avgNdcg = results.reduce((s, r) => s + r.ndcg, 0) / results.length;
@@ -67,6 +68,7 @@ async function main() {
     configName: `model-${model}`,
     model,
     avgPrecision5: avgP5,
+    avgHitRate5: avgHR5,
     avgRecall: avgRecall,
     avgMrr: avgMrr,
     avgNdcg: avgNdcg,
@@ -79,22 +81,22 @@ async function main() {
   fs.writeFileSync(outFile, JSON.stringify(summary, null, 2));
 
   // Print comparison table row
-  console.log("| Model | nDCG@10 | MRR | P@5 | Recall | Cost/1K files |");
-  console.log("|-------|---------|-----|-----|--------|---------------|");
+  console.log("| Model | nDCG@10 | MRR | P@5 | HR@5 | Recall | Cost/1K files |");
+  console.log("|-------|---------|-----|-----|------|--------|---------------|");
   console.log(
-    `| ${model} | ${avgNdcg.toFixed(3)} | ${avgMrr.toFixed(3)} | ${avgP5.toFixed(3)} | ${avgRecall.toFixed(3)} | $${costPer1k.toFixed(4)} |`,
+    `| ${model} | ${avgNdcg.toFixed(3)} | ${avgMrr.toFixed(3)} | ${avgP5.toFixed(3)} | ${avgHR5.toFixed(3)} | ${avgRecall.toFixed(3)} | $${costPer1k.toFixed(4)} |`,
   );
 
   // If previous model results exist, include them in the table
   const resultFiles = fs.readdirSync(outputDir).filter((f) => f.startsWith("model-") && f.endsWith(".json"));
   if (resultFiles.length > 1) {
     console.log("\n--- Full Comparison ---\n");
-    console.log("| Model | nDCG@10 | MRR | P@5 | Recall | Cost/1K files |");
-    console.log("|-------|---------|-----|-----|--------|---------------|");
+    console.log("| Model | nDCG@10 | MRR | P@5 | HR@5 | Recall | Cost/1K files |");
+    console.log("|-------|---------|-----|-----|------|--------|---------------|");
     for (const f of resultFiles) {
       const data: EvalSummary = JSON.parse(fs.readFileSync(path.join(outputDir, f), "utf-8"));
       console.log(
-        `| ${data.model ?? data.configName} | ${data.avgNdcg.toFixed(3)} | ${data.avgMrr.toFixed(3)} | ${data.avgPrecision5.toFixed(3)} | ${data.avgRecall.toFixed(3)} | $${(data.costPer1kFiles ?? -1).toFixed(4)} |`,
+        `| ${data.model ?? data.configName} | ${data.avgNdcg.toFixed(3)} | ${data.avgMrr.toFixed(3)} | ${data.avgPrecision5.toFixed(3)} | ${(data.avgHitRate5 ?? 0).toFixed(3)} | ${data.avgRecall.toFixed(3)} | $${(data.costPer1kFiles ?? -1).toFixed(4)} |`,
       );
     }
   }

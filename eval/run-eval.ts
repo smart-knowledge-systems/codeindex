@@ -15,6 +15,14 @@ function computePrecisionAt5(returnedFiles: string[], expectedFiles: string[]): 
   return hits / 5;
 }
 
+/** HitRate@5: fraction of expected files found in top 5 results. */
+function computeHitRateAt5(returnedFiles: string[], expectedFiles: string[]): number {
+  if (expectedFiles.length === 0) return returnedFiles.length === 0 ? 1 : 0;
+  const top5 = returnedFiles.slice(0, 5);
+  const hits = top5.filter((f) => expectedFiles.includes(f)).length;
+  return hits / Math.min(5, expectedFiles.length);
+}
+
 function computeRecall(returnedFiles: string[], expectedFiles: string[]): number {
   if (expectedFiles.length === 0) return returnedFiles.length === 0 ? 1 : 0;
   const hits = expectedFiles.filter((f) => returnedFiles.includes(f)).length;
@@ -85,6 +93,7 @@ export async function runEval(
       .map((r) => r.filePath);
 
     const precision5 = computePrecisionAt5(returnedFiles, q.expectedFiles);
+    const hitRate5 = computeHitRateAt5(returnedFiles, q.expectedFiles);
     const recall = computeRecall(returnedFiles, q.expectedFiles);
     const mrr = computeMrr(returnedFiles, q.expectedFiles);
     const ndcg = computeNdcg(returnedFiles, q.expectedFiles);
@@ -93,6 +102,7 @@ export async function runEval(
       queryId: q.id,
       query: q.query,
       precision5,
+      hitRate5,
       recall,
       mrr,
       ndcg,
@@ -116,7 +126,8 @@ function generateMarkdown(summary: EvalSummary, ripgrepSummary?: EvalSummary): s
   lines.push(`## Aggregate Metrics\n`);
   lines.push(`| Metric | Value |`);
   lines.push(`|--------|-------|`);
-  lines.push(`| Avg Precision@5 | ${summary.avgPrecision5.toFixed(3)} |`);
+  lines.push(`| Avg P@5 | ${summary.avgPrecision5.toFixed(3)} |`);
+  lines.push(`| Avg HitRate@5 | ${summary.avgHitRate5.toFixed(3)} |`);
   lines.push(`| Avg Recall | ${summary.avgRecall.toFixed(3)} |`);
   lines.push(`| Avg MRR | ${summary.avgMrr.toFixed(3)} |`);
   lines.push(`| Avg nDCG@10 | ${summary.avgNdcg.toFixed(3)} |`);
@@ -124,12 +135,20 @@ function generateMarkdown(summary: EvalSummary, ripgrepSummary?: EvalSummary): s
   if (summary.costPer1kFiles != null)
     lines.push(`| Cost / 1K files | $${summary.costPer1kFiles.toFixed(4)} |`);
 
+  lines.push("");
+  lines.push(
+    `> **P@5** = hits in top 5 / 5 (standard). **HitRate@5** = hits in top 5 / min(5, expected) — more useful when most queries have 1 expected file.`,
+  );
+
   if (ripgrepSummary) {
     lines.push(`\n## Ripgrep Baseline Comparison\n`);
     lines.push(`| Metric | codeindex | ripgrep |`);
     lines.push(`|--------|-----------|---------|`);
     lines.push(
-      `| Avg Precision@5 | ${summary.avgPrecision5.toFixed(3)} | ${ripgrepSummary.avgPrecision5.toFixed(3)} |`,
+      `| Avg P@5 | ${summary.avgPrecision5.toFixed(3)} | ${ripgrepSummary.avgPrecision5.toFixed(3)} |`,
+    );
+    lines.push(
+      `| Avg HitRate@5 | ${summary.avgHitRate5.toFixed(3)} | ${ripgrepSummary.avgHitRate5.toFixed(3)} |`,
     );
     lines.push(
       `| Avg Recall | ${summary.avgRecall.toFixed(3)} | ${ripgrepSummary.avgRecall.toFixed(3)} |`,
@@ -143,11 +162,11 @@ function generateMarkdown(summary: EvalSummary, ripgrepSummary?: EvalSummary): s
   }
 
   lines.push(`\n## Per-Query Results\n`);
-  lines.push(`| Query | P@5 | Recall | MRR | nDCG |`);
-  lines.push(`|-------|-----|--------|-----|------|`);
+  lines.push(`| Query | P@5 | HR@5 | Recall | MRR | nDCG |`);
+  lines.push(`|-------|-----|------|--------|-----|------|`);
   for (const r of summary.results) {
     lines.push(
-      `| ${r.queryId} | ${r.precision5.toFixed(2)} | ${r.recall.toFixed(2)} | ${r.mrr.toFixed(2)} | ${r.ndcg.toFixed(2)} |`,
+      `| ${r.queryId} | ${r.precision5.toFixed(2)} | ${r.hitRate5.toFixed(2)} | ${r.recall.toFixed(2)} | ${r.mrr.toFixed(2)} | ${r.ndcg.toFixed(2)} |`,
     );
   }
 
@@ -191,6 +210,7 @@ async function main() {
   const results = await runEval(repoRoot, dataset);
 
   const avgPrecision5 = results.reduce((s, r) => s + r.precision5, 0) / results.length;
+  const avgHitRate5 = results.reduce((s, r) => s + r.hitRate5, 0) / results.length;
   const avgRecall = results.reduce((s, r) => s + r.recall, 0) / results.length;
   const avgMrr = results.reduce((s, r) => s + r.mrr, 0) / results.length;
   const avgNdcg = results.reduce((s, r) => s + r.ndcg, 0) / results.length;
@@ -198,6 +218,7 @@ async function main() {
   const summary: EvalSummary = {
     configName,
     avgPrecision5,
+    avgHitRate5,
     avgRecall,
     avgMrr,
     avgNdcg,
@@ -216,7 +237,8 @@ async function main() {
       rgResults.push({
         queryId: q.id,
         query: q.query,
-        precision5: rg.precision5,
+        precision5: computePrecisionAt5(rg.returnedFiles, q.expectedFiles),
+        hitRate5: computeHitRateAt5(rg.returnedFiles, q.expectedFiles),
         recall: computeRecall(rg.returnedFiles, q.expectedFiles),
         mrr: computeMrr(rg.returnedFiles, q.expectedFiles),
         ndcg: computeNdcg(rg.returnedFiles, q.expectedFiles),
@@ -227,6 +249,7 @@ async function main() {
     }
 
     const rgAvgP5 = rgResults.reduce((s, r) => s + r.precision5, 0) / rgResults.length;
+    const rgAvgHR5 = rgResults.reduce((s, r) => s + r.hitRate5, 0) / rgResults.length;
     const rgAvgRecall = rgResults.reduce((s, r) => s + r.recall, 0) / rgResults.length;
     const rgAvgMrr = rgResults.reduce((s, r) => s + r.mrr, 0) / rgResults.length;
     const rgAvgNdcg = rgResults.reduce((s, r) => s + r.ndcg, 0) / rgResults.length;
@@ -234,6 +257,7 @@ async function main() {
     ripgrepSummary = {
       configName: "ripgrep-baseline",
       avgPrecision5: rgAvgP5,
+      avgHitRate5: rgAvgHR5,
       avgRecall: rgAvgRecall,
       avgMrr: rgAvgMrr,
       avgNdcg: rgAvgNdcg,
@@ -257,6 +281,7 @@ async function main() {
 
   console.log(`\nResults written to ${outputDir}/`);
   console.log(`  Avg P@5:    ${avgPrecision5.toFixed(3)}`);
+  console.log(`  Avg HR@5:   ${avgHitRate5.toFixed(3)}`);
   console.log(`  Avg Recall: ${avgRecall.toFixed(3)}`);
   console.log(`  Avg MRR:    ${avgMrr.toFixed(3)}`);
   console.log(`  Avg nDCG:   ${avgNdcg.toFixed(3)}`);
