@@ -48,6 +48,31 @@ describe("TypeScript (.ts)", () => {
     expect(hasEntry(entries, "start", "method")).toBeDefined();
   });
 
+  it("extracts Config interface", () => {
+    expect(hasEntry(entries, "Config", "interface")).toBeDefined();
+  });
+
+  it("skeleton text includes interface declaration", () => {
+    expect(text).toContain("interface Config");
+  });
+
+  it("extracts UserId type alias", () => {
+    expect(hasEntry(entries, "UserId", "type")).toBeDefined();
+  });
+
+  it("skeleton text includes type alias", () => {
+    expect(text).toContain("type UserId = string | number");
+  });
+
+  it("extracts LogLevel enum", () => {
+    expect(hasEntry(entries, "LogLevel", "enum")).toBeDefined();
+  });
+
+  it("skeleton text includes enum with members", () => {
+    expect(text).toContain("enum LogLevel");
+    expect(text).toContain("members:");
+  });
+
   it("skeleton text includes imports", () => {
     expect(text).toContain("imports:");
   });

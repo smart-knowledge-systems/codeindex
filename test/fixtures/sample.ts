@@ -22,4 +22,12 @@ export async function loadConfig(path: string): Promise<Config> {
   return JSON.parse(data);
 }
 
+export type UserId = string | number;
+
+export enum LogLevel {
+  Debug = "debug",
+  Info = "info",
+  Error = "error",
+}
+
 export const DEFAULT_PORT = 3000;

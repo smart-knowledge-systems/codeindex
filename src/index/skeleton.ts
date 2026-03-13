@@ -241,6 +241,34 @@ function extractTsClass(node: Node): string[] {
   return lines;
 }
 
+function extractTsInterface(node: Node): string[] {
+  const lines: string[] = [];
+  const name = childText(node, "name");
+  lines.push(`interface ${name}`);
+
+  const body = node.childForFieldName("body");
+  if (!body) return lines;
+
+  for (const member of body.namedChildren) {
+    if (member.type === "method_signature" || member.type === "property_signature") {
+      const mName = childText(member, "name");
+      if (!mName) continue;
+      if (member.type === "method_signature") {
+        const params = member.childForFieldName("parameters");
+        const paramStr = extractTsParams(params);
+        const retStr = extractTsReturnType(member);
+        lines.push(`  + ${mName}(${paramStr})${retStr}`);
+      } else {
+        const typeAnnotation = member.childForFieldName("type");
+        const typeStr = typeAnnotation ? `: ${typeAnnotation.text.replace(/^:\s*/, "")}` : "";
+        lines.push(`  + ${mName}${typeStr}`);
+      }
+    }
+  }
+
+  return lines;
+}
+
 function extractTsFunction(node: Node): string {
   const name =
     childText(node, "name") ||
@@ -263,7 +291,7 @@ function skeletonTypeScript(filename: string, root: Node, lang: SupportedLanguag
 
   lines.push("");
 
-  for (const node of root.namedChildren) {
+  function emitTsDecl(node: Node): void {
     switch (node.type) {
       case "class_declaration":
       case "abstract_class_declaration": {
@@ -279,33 +307,55 @@ function skeletonTypeScript(filename: string, root: Node, lang: SupportedLanguag
         lines.push("");
         break;
       }
-      case "export_statement": {
-        const decl = node.childForFieldName("declaration");
-        if (!decl) break;
-        if (decl.type === "class_declaration" || decl.type === "abstract_class_declaration") {
-          lines.push(...extractTsClass(decl));
-          lines.push("");
-        } else if (decl.type === "function_declaration") {
-          const doc = extractJsDocComment(node);
-          lines.push(extractTsFunction(decl));
-          if (doc) lines.push(`  """${doc}"""`);
-          lines.push("");
-        } else if (decl.type === "lexical_declaration" || decl.type === "variable_declaration") {
-          // export const foo = () => ...
-          for (const declarator of childrenOfType(decl, "variable_declarator")) {
-            const val = declarator.childForFieldName("value");
-            if (val && (val.type === "arrow_function" || val.type === "function")) {
-              const name = childText(declarator, "name");
-              const params = val.childForFieldName("parameters");
-              const paramStr = extractTsParams(params);
-              const retStr = extractTsReturnType(val);
-              lines.push(`function ${name}(${paramStr})${retStr}`);
-              lines.push("");
-            }
+      case "interface_declaration": {
+        lines.push(...extractTsInterface(node));
+        lines.push("");
+        break;
+      }
+      case "type_alias_declaration": {
+        const name = childText(node, "name");
+        const value = node.childForFieldName("value");
+        lines.push(`type ${name} = ${value?.text ?? "unknown"}`);
+        lines.push("");
+        break;
+      }
+      case "enum_declaration": {
+        const name = childText(node, "name");
+        const body = node.childForFieldName("body");
+        const members = body
+          ? childrenOfType(body, "enum_assignment", "property_identifier").map(
+              (m) => childText(m, "name") || m.text.split("=")[0].trim(),
+            )
+          : [];
+        lines.push(`enum ${name}`);
+        if (members.length > 0) lines.push(`  members: ${members.join(", ")}`);
+        lines.push("");
+        break;
+      }
+      case "lexical_declaration":
+      case "variable_declaration": {
+        for (const declarator of childrenOfType(node, "variable_declarator")) {
+          const val = declarator.childForFieldName("value");
+          if (val && (val.type === "arrow_function" || val.type === "function")) {
+            const name = childText(declarator, "name");
+            const params = val.childForFieldName("parameters");
+            const paramStr = extractTsParams(params);
+            const retStr = extractTsReturnType(val);
+            lines.push(`function ${name}(${paramStr})${retStr}`);
+            lines.push("");
           }
         }
         break;
       }
+    }
+  }
+
+  for (const node of root.namedChildren) {
+    if (node.type === "export_statement") {
+      const decl = node.childForFieldName("declaration");
+      if (decl) emitTsDecl(decl);
+    } else {
+      emitTsDecl(node);
     }
   }
 
@@ -1052,6 +1102,13 @@ function collectEntries(root: Node): SkeletonEntry[] {
         entries.push({ name, kind, startLine, endLine });
         const body = node.childForFieldName("body") ?? node.childForFieldName("declaration_list");
         if (body) collectMethodsFromBody(body);
+        return;
+      }
+
+      // TS type alias
+      case "type_alias_declaration": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "type", startLine, endLine });
         return;
       }
 
