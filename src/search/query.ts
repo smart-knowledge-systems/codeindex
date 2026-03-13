@@ -1,7 +1,7 @@
 import path from "path";
 import { loadConfig } from "../config";
 import { embedSingle } from "../index/embedder";
-import { pgUnsafe } from "../db/pg";
+import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
@@ -175,8 +175,28 @@ async function searchPg(
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
 ): Promise<SearchResult[]> {
-  // Ensure HNSW search quality on the connection used for this query
-  await pgUnsafe("SET LOCAL hnsw.ef_search = 40");
+  const pg = await getPg();
+
+  // Wrap all queries in a transaction so SET LOCAL hnsw.ef_search applies
+  // to every query on the same connection
+  await pg.unsafe("BEGIN");
+  try {
+    return await searchPgInTransaction(pg, repoIds, currentRepoId, queryEmbedding, query, options, scoring);
+  } finally {
+    await pg.unsafe("COMMIT");
+  }
+}
+
+async function searchPgInTransaction(
+  pg: InstanceType<typeof import("bun").SQL>,
+  repoIds: number[],
+  currentRepoId: number,
+  queryEmbedding: number[],
+  query: string,
+  options: Required<SearchOptions>,
+  scoring: ScoringConfig,
+): Promise<SearchResult[]> {
+  await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
   const repoIdList = repoIds.join(",");
 
@@ -187,7 +207,7 @@ async function searchPg(
   const sinceDate = options.since ? parseSince(options.since) : null;
 
   // --- Repo info map ---
-  const repoInfoRows = (await pgUnsafe(
+  const repoInfoRows = (await pg.unsafe(
     `SELECT id, root_path, name FROM repos WHERE id IN (${repoIdList})`,
   )) as PgRepoRow[];
   const repoInfoMap = new Map<number, { name: string; rootPath: string }>();
@@ -214,12 +234,12 @@ async function searchPg(
     fileFilterParams.push(sinceDate.toISOString());
   }
 
-  const fileRows = (await pgUnsafe(
+  const fileRows = (await pg.unsafe(
     `SELECT id, repo_id, file_path, skeleton, file_type,
             1 - (embedding <=> ${vecLiteral}) AS similarity
      FROM files
      WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL${fileFilterSql}`,
-    fileFilterParams.length > 0 ? fileFilterParams : undefined,
+    fileFilterParams.length > 0 ? (fileFilterParams as never[]) : undefined,
   )) as PgFileRow[];
 
   // --- Directories ---
@@ -244,7 +264,7 @@ async function searchPg(
     );
   }
 
-  const dirRows = (await pgUnsafe(
+  const dirRows = (await pg.unsafe(
     `SELECT id, repo_id, dir_path, summary,
             1 - (concat_embedding <=> ${vecLiteral}) AS concat_sim,
             CASE WHEN summary_embedding IS NOT NULL
@@ -253,7 +273,7 @@ async function searchPg(
             END AS summary_sim
      FROM directories
      WHERE repo_id IN (${repoIdList}) AND concat_embedding IS NOT NULL${dirFilterSql}`,
-    dirFilterParams.length > 0 ? dirFilterParams : undefined,
+    dirFilterParams.length > 0 ? (dirFilterParams as never[]) : undefined,
   )) as PgDirRow[];
 
   // --- Commits ---
@@ -265,16 +285,16 @@ async function searchPg(
     commitFilterParams.push(sinceDate.toISOString());
   }
 
-  const commitRows = (await pgUnsafe(
+  const commitRows = (await pg.unsafe(
     `SELECT id, repo_id, commit_hash, message,
             1 - (embedding <=> ${vecLiteral}) AS similarity
      FROM commits
      WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL${commitFilterSql}`,
-    commitFilterParams.length > 0 ? commitFilterParams : undefined,
+    commitFilterParams.length > 0 ? (commitFilterParams as never[]) : undefined,
   )) as PgCommitRow[];
 
   // --- File–commit links for boost (limited to commitDepth) ---
-  const linkRows = (await pgUnsafe(
+  const linkRows = (await pg.unsafe(
     `SELECT fc.file_id, fc.commit_id, fc.recency,
             1 - (c.embedding <=> ${vecLiteral}) AS similarity
      FROM file_commits fc
@@ -284,7 +304,7 @@ async function searchPg(
      )
      AND fc.recency <= $1
      AND c.embedding IS NOT NULL`,
-    [scoring.commitDepth],
+    [scoring.commitDepth] as never[],
   )) as PgFileLinkRow[];
 
   // Build dir similarity map: dir_path -> similarity
