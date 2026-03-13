@@ -1,0 +1,4 @@
+node_modules/
+*.db
+.codeindex.db
+dist/
