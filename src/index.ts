@@ -114,7 +114,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   getProvider(config);
 
   const repoId = await ensureRepo(repoRoot);
-  setCurrentRepo(repoId, repoRoot);
+  setCurrentRepo(repoId, repoRoot, config.store);
 
   // Check for embedding provider mismatch
   const currentProvider = config.embedding.provider ?? "openai";
@@ -510,7 +510,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
 async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string) {
   const config = await loadConfig(repoRoot);
   const repoId = await ensureRepo(repoRoot);
-  setCurrentRepo(repoId, repoRoot);
+  setCurrentRepo(repoId, repoRoot, config.store);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   await initParser();

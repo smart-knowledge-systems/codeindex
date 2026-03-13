@@ -19,10 +19,12 @@ export const PRICING: Record<string, { input: number; output?: number }> = {
 
 let currentRepoId: number | null = null;
 let currentRepoRoot: string | null = null;
+let currentStore: "pg" | "sqlite" | null = null;
 
-export function setCurrentRepo(repoId: number, repoRoot: string): void {
+export function setCurrentRepo(repoId: number, repoRoot: string, store?: "pg" | "sqlite"): void {
   currentRepoId = repoId;
   currentRepoRoot = repoRoot;
+  if (store) currentStore = store;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,8 +48,8 @@ export async function recordCost(
     }
   }
 
-  const config = await loadConfig(currentRepoRoot);
-  if (config.store === "pg") {
+  const store = currentStore ?? (await loadConfig(currentRepoRoot)).store;
+  if (store === "pg") {
     await pgUnsafe(
       `INSERT INTO cost_events (repo_id, operation, model, tokens_in, tokens_out, cost_usd)
        VALUES ($1, $2, $3, $4, $5, $6)`,
