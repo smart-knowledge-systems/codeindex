@@ -231,6 +231,7 @@ async function searchPg(
       query,
       options,
       scoring,
+      languageProfiles,
     );
   } finally {
     await pg.unsafe("COMMIT");
@@ -245,6 +246,7 @@ async function searchPgInTransaction(
   query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
+  languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
   await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
