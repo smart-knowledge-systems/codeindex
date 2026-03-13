@@ -170,6 +170,40 @@ function computeCommitBoost(
   return boost;
 }
 
+/** Map file extension to language profile key. */
+const EXT_TO_LANG_KEY: Record<string, string> = {
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".js": "javascript",
+  ".jsx": "javascript",
+  ".py": "python",
+  ".rs": "rust",
+  ".go": "go",
+  ".java": "java",
+  ".kt": "kotlin",
+  ".kts": "kotlin",
+  ".swift": "swift",
+  ".rb": "ruby",
+  ".php": "php",
+  ".c": "c",
+  ".cpp": "cpp",
+  ".cs": "csharp",
+};
+
+/** Resolve per-language scoring overrides for a given file type. */
+function langScoring(
+  fileType: string,
+  base: ScoringConfig,
+  profiles?: Record<string, Partial<ScoringConfig>>,
+): ScoringConfig {
+  if (!profiles) return base;
+  const lang = EXT_TO_LANG_KEY[fileType];
+  if (!lang) return base;
+  const override = profiles[lang];
+  if (!override) return base;
+  return { ...base, ...override };
+}
+
 // ---------------------------------------------------------------------------
 // PostgreSQL implementation
 // ---------------------------------------------------------------------------
@@ -181,6 +215,7 @@ async function searchPg(
   query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
+  languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
   // Ensure HNSW search quality on the connection used for this query
   await pgUnsafe("SET LOCAL hnsw.ef_search = 40");
@@ -355,21 +390,24 @@ async function searchPg(
     const fileId = parseInt(row.id);
     const repoId = parseInt(row.repo_id);
     const fileSim = parseFloat(row.similarity);
+    const fileScoring = langScoring(row.file_type, scoring, languageProfiles);
     const links = linksByFileId.get(fileId) ?? [];
-    const commitBoost = computeCommitBoost(links, scoring);
+    const commitBoost = computeCommitBoost(links, fileScoring);
 
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
+    const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
 
     // Length normalization penalty (token-approximated skeleton length)
     const tokenCount = (row.skeleton?.length ?? 0) / 4;
     const lengthPenalty =
       tokenCount > 0 ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight : 0;
 
-    // Semantic score with length penalty
-    const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
+    // Semantic score with length penalty (using per-language alpha/beta)
+    const fAlpha = fileScoring.alpha;
+    const fBeta = fileScoring.beta;
+    const semanticScore = fileSim + fAlpha * commitBoost + fBeta * parentBoost - lengthPenalty;
 
     // BM25 keyword score
     const rawBM25 = bm25Scores.get(row.id) ?? 0;
@@ -497,6 +535,7 @@ async function searchSqlite(
   query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
+  languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
   const db = await getSqlite(repoRoot);
   const embBuf = serializeEmbedding(queryEmbedding);
@@ -680,13 +719,14 @@ async function searchSqlite(
   // --- File results ---
   for (const row of fileRows) {
     const fileSim = 1 - row.distance;
+    const fileScoring = langScoring(row.file_type, scoring, languageProfiles);
     const links = linksByFileId.get(row.id) ?? [];
-    const commitBoost = computeCommitBoost(links, scoring);
+    const commitBoost = computeCommitBoost(links, fileScoring);
 
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
+    const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
 
     // Length normalization penalty (token-approximated skeleton length)
     const tokenCount = (row.skeleton?.length ?? 0) / 4;
@@ -695,8 +735,10 @@ async function searchSqlite(
         ? Math.max(0, Math.log(tokenCount / avgTokenCountSqlite)) * lengthPenaltyWeight
         : 0;
 
-    // Semantic score with length penalty
-    const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
+    // Semantic score with length penalty (using per-language alpha/beta)
+    const fAlpha = fileScoring.alpha;
+    const fBeta = fileScoring.beta;
+    const semanticScore = fileSim + fAlpha * commitBoost + fBeta * parentBoost - lengthPenalty;
 
     // BM25 keyword score
     const rawBM25 = bm25ScoresSqlite.get(String(row.id)) ?? 0;
@@ -911,6 +953,7 @@ export async function search(
       query,
       resolvedOptions,
       scoring,
+      config.languageProfiles,
     );
   } else {
     results = await searchSqlite(
@@ -921,6 +964,7 @@ export async function search(
       query,
       resolvedOptions,
       scoring,
+      config.languageProfiles,
     );
   }
 

@@ -78,6 +78,7 @@ export interface CodeindexConfig {
     warnAt: number | null;
   };
   readOnly?: boolean;
+  languageProfiles?: Record<string, Partial<ScoringConfig>>;
 }
 
 export interface ScoringConfig {
