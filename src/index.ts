@@ -4,6 +4,7 @@ import path from "path";
 import { parseArgs, flag, hasFlag } from "./cli";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
+import { getCurrentSchemaVersion, getLatestMigrationVersion } from "./db/migrate";
 import { pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
@@ -1146,6 +1147,19 @@ async function cmdDoctor(repoRoot: string) {
       } catch {
         check("Schema created", false, "Run `codeindex init` or `codeindex reindex`.");
       }
+    }
+
+    // Schema version check
+    try {
+      const current = await getCurrentSchemaVersion(config.store, repoRoot);
+      const latest = await getLatestMigrationVersion(config.store);
+      check(
+        `Schema version (${current}/${latest})`,
+        current >= latest,
+        "Run `codeindex init` to apply pending migrations.",
+      );
+    } catch {
+      check("Schema version", false, "Could not determine schema version.");
     }
   }
 
