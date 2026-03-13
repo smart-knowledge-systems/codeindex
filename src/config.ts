@@ -25,7 +25,7 @@ const DEFAULTS: CodeindexConfig = {
     minScore: 0.3,
     parentBoostMultiplier: 0.3,
     hybridWeight: 0.3,
-    lengthPenaltyWeight: 0.05,
+    lengthPenaltyWeight: 0.1,
   },
   formatter: null,
   skeletonFallbackLines: 50,
