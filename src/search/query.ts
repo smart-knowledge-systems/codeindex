@@ -110,6 +110,12 @@ const LANG_ALIASES: Record<string, string[]> = {
   csharp: [".cs"],
   "c#": [".cs"],
   cs: [".cs"],
+  kotlin: [".kt", ".kts"],
+  kt: [".kt", ".kts"],
+  swift: [".swift"],
+  ruby: [".rb"],
+  rb: [".rb"],
+  php: [".php"],
 };
 
 function resolveLangExtensions(langs: string[]): string[] {

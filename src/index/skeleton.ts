@@ -29,7 +29,12 @@ type SupportedLanguage =
   | "java"
   | "c"
   | "cpp"
-  | "c_sharp";
+  | "c_sharp"
+  | "kotlin"
+  | "swift"
+  | "ruby"
+  | "php"
+  | "lua";
 
 const EXT_TO_LANG: Record<string, SupportedLanguage> = {
   ".ts": "typescript",
@@ -48,6 +53,12 @@ const EXT_TO_LANG: Record<string, SupportedLanguage> = {
   ".hxx": "cpp",
   ".h": "c",
   ".cs": "c_sharp",
+  ".kt": "kotlin",
+  ".kts": "kotlin",
+  ".swift": "swift",
+  ".rb": "ruby",
+  ".php": "php",
+  ".lua": "lua",
 };
 
 const LANG_DISPLAY: Record<SupportedLanguage, string> = {
@@ -61,6 +72,11 @@ const LANG_DISPLAY: Record<SupportedLanguage, string> = {
   c: "C",
   cpp: "C++",
   c_sharp: "C#",
+  kotlin: "Kotlin",
+  swift: "Swift",
+  ruby: "Ruby",
+  php: "PHP",
+  lua: "Lua",
 };
 
 const WASM_DIR = path.join(import.meta.dir, "../../node_modules/tree-sitter-wasms/out");
@@ -1136,6 +1152,443 @@ function extractCsParams(params: Node | null): string {
 }
 
 // ---------------------------------------------------------------------------
+// Kotlin extractor
+// ---------------------------------------------------------------------------
+
+/** Kotlin names live in type_identifier or simple_identifier children, not field "name". */
+function ktName(node: Node): string {
+  return (
+    firstChildOfType(node, "type_identifier", "simple_identifier")?.text ??
+    childText(node, "name") ??
+    ""
+  );
+}
+
+/** Detect if a Kotlin class_declaration represents an interface (anonymous "interface" keyword). */
+function isKotlinInterface(node: Node): boolean {
+  for (let i = 0; i < node.childCount; i++) {
+    const c = node.child(i);
+    if (c && !c.isNamed && c.type === "interface") return true;
+  }
+  return false;
+}
+
+/** Get the return type of a Kotlin function (user_type/nullable_type after function_value_parameters). */
+function kotlinReturnType(node: Node): string {
+  let afterParams = false;
+  for (const c of node.namedChildren) {
+    if (c.type === "function_value_parameters") {
+      afterParams = true;
+      continue;
+    }
+    if (afterParams && (c.type === "user_type" || c.type === "nullable_type")) {
+      return c.text;
+    }
+  }
+  return "";
+}
+
+function extractKotlinParams(params: Node | null): string {
+  if (!params) return "";
+  const parts: string[] = [];
+  for (const p of params.namedChildren) {
+    if (p.type === "parameter") {
+      const name = firstChildOfType(p, "simple_identifier");
+      const type_ = firstChildOfType(p, "user_type", "nullable_type");
+      parts.push(type_ ? `${name?.text ?? ""}: ${type_.text}` : (name?.text ?? p.text));
+    }
+  }
+  return parts.join(", ");
+}
+
+function extractKotlinClass(node: Node): string[] {
+  const lines: string[] = [];
+  const name = ktName(node);
+  const isData = node.children.some((c) => c.type === "modifiers" && c.text.includes("data"));
+  const keyword = isKotlinInterface(node)
+    ? "interface"
+    : node.type === "object_declaration"
+      ? "object"
+      : isData
+        ? "data class"
+        : "class";
+  lines.push(`${keyword} ${name}`);
+
+  const body = firstChildOfType(node, "class_body");
+  if (!body) return lines;
+
+  for (const member of body.namedChildren) {
+    if (member.type === "function_declaration") {
+      const mName = ktName(member);
+      const params = firstChildOfType(member, "function_value_parameters");
+      const paramStr = extractKotlinParams(params);
+      const retType = kotlinReturnType(member);
+      const retStr = retType ? ` -> ${retType}` : "";
+      const mods = firstChildOfType(member, "modifiers");
+      const vis = mods?.text.includes("private") ? "-" : "+";
+      lines.push(`  ${vis} ${mName}(${paramStr})${retStr}`);
+    } else if (member.type === "companion_object") {
+      lines.push("  companion object");
+      const companionBody = firstChildOfType(member, "class_body");
+      if (companionBody) {
+        for (const cm of companionBody.namedChildren) {
+          if (cm.type === "function_declaration") {
+            const mName = ktName(cm);
+            const params = firstChildOfType(cm, "function_value_parameters");
+            const paramStr = extractKotlinParams(params);
+            const retType = kotlinReturnType(cm);
+            const retStr = retType ? ` -> ${retType}` : "";
+            lines.push(`    + ${mName}(${paramStr})${retStr}`);
+          }
+        }
+      }
+    } else if (member.type === "property_declaration") {
+      const varDecl = firstChildOfType(member, "variable_declaration");
+      const propName = varDecl
+        ? (firstChildOfType(varDecl, "simple_identifier")?.text ?? "")
+        : ktName(member);
+      if (propName) lines.push(`  + ${propName}`);
+    }
+  }
+
+  return lines;
+}
+
+function skeletonKotlin(filename: string, root: Node): string {
+  const lines: string[] = [`# ${filename} [Kotlin]`];
+
+  const imports: string[] = [];
+  for (const node of root.namedChildren) {
+    if (node.type === "import_list") {
+      for (const h of childrenOfType(node, "import_header")) {
+        const id = firstChildOfType(h, "identifier");
+        if (id) imports.push(id.text);
+      }
+    } else if (node.type === "import_header") {
+      const id = firstChildOfType(node, "identifier");
+      if (id) imports.push(id.text);
+    }
+  }
+  if (imports.length > 0) lines.push(`imports: ${imports.join(", ")}`);
+  lines.push("");
+
+  for (const node of root.namedChildren) {
+    if (node.type === "class_declaration" || node.type === "object_declaration") {
+      lines.push(...extractKotlinClass(node));
+      lines.push("");
+    } else if (node.type === "function_declaration") {
+      const name = ktName(node);
+      const params = firstChildOfType(node, "function_value_parameters");
+      const paramStr = extractKotlinParams(params);
+      const retType = kotlinReturnType(node);
+      const retStr = retType ? ` -> ${retType}` : "";
+      lines.push(`function ${name}(${paramStr})${retStr}`);
+      lines.push("");
+    } else if (node.type === "property_declaration") {
+      const varDecl = firstChildOfType(node, "variable_declaration");
+      const name = varDecl
+        ? (firstChildOfType(varDecl, "simple_identifier")?.text ?? "")
+        : ktName(node);
+      if (name) lines.push(`val ${name}`);
+    }
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+// ---------------------------------------------------------------------------
+// Swift extractor
+// ---------------------------------------------------------------------------
+
+/** Detect Swift declaration keyword from the first (anonymous) child of class_declaration. */
+function swiftDeclKeyword(node: Node): string {
+  const first = node.child(0);
+  if (first) {
+    const t = first.type;
+    if (t === "struct") return "struct";
+    if (t === "enum") return "enum";
+    if (t === "extension") return "extension";
+  }
+  return "class";
+}
+
+function extractSwiftParams(params: Node | null): string {
+  if (!params) return "";
+  const parts: string[] = [];
+  for (const p of params.namedChildren) {
+    if (p.type === "parameter") {
+      const extName = p.childForFieldName("external_name");
+      const intName = p.childForFieldName("name") ?? p.childForFieldName("internal_name");
+      const type_ = p.childForFieldName("type");
+      const label = extName?.text ?? intName?.text ?? "";
+      parts.push(type_ ? `${label}: ${type_.text}` : label);
+    }
+  }
+  return parts.join(", ");
+}
+
+function skeletonSwift(filename: string, root: Node): string {
+  const lines: string[] = [`# ${filename} [Swift]`];
+
+  const imports: string[] = [];
+  for (const node of root.namedChildren) {
+    if (node.type === "import_declaration") {
+      const path_ = firstChildOfType(node, "identifier");
+      if (path_) imports.push(path_.text);
+    }
+  }
+  if (imports.length > 0) lines.push(`imports: ${imports.join(", ")}`);
+  lines.push("");
+
+  function processNode(node: Node, indent = ""): void {
+    switch (node.type) {
+      case "class_declaration": {
+        const keyword = swiftDeclKeyword(node);
+        const name =
+          childText(node, "name") ?? firstChildOfType(node, "type_identifier", "user_type")?.text;
+        lines.push(`${indent}${keyword} ${name ?? "(anonymous)"}`);
+        const body = firstChildOfType(node, "class_body", "enum_class_body");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "protocol_declaration": {
+        const name = childText(node, "name");
+        lines.push(`${indent}protocol ${name}`);
+        const body = firstChildOfType(node, "protocol_body");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "function_declaration": {
+        const name =
+          childText(node, "name") ?? firstChildOfType(node, "simple_identifier")?.text ?? "";
+        const paramStr = extractSwiftParams(
+          node.namedChildren.find((c) => c.type === "parameter") ? node : null,
+        );
+        const retType = firstChildOfType(node, "array_type", "user_type", "tuple_type");
+        const retStr = retType ? ` -> ${retType.text}` : "";
+        const mods = firstChildOfType(node, "modifiers");
+        const vis = mods?.text.includes("private") ? "-" : "+";
+        lines.push(`${indent}${vis} ${name}(${paramStr})${retStr}`);
+        break;
+      }
+      case "property_declaration": {
+        const pattern = firstChildOfType(node, "pattern");
+        const name = pattern?.text ?? childText(node, "name") ?? "";
+        if (name) {
+          const type_ = firstChildOfType(node, "type_annotation");
+          const typeStr = type_ ? type_.text : "";
+          lines.push(`${indent}+ ${name}${typeStr}`);
+        }
+        break;
+      }
+      case "init_declaration": {
+        lines.push(`${indent}+ init()`);
+        break;
+      }
+    }
+  }
+
+  for (const node of root.namedChildren) {
+    processNode(node);
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+// ---------------------------------------------------------------------------
+// Ruby extractor
+// ---------------------------------------------------------------------------
+
+function skeletonRuby(filename: string, root: Node): string {
+  const lines: string[] = [`# ${filename} [Ruby]`];
+
+  // Ruby require/require_relative are `call` nodes at top level
+  const requires: string[] = [];
+  for (const node of descendantsOfType(root, ["call"])) {
+    const method = node.childForFieldName("method");
+    if (method && (method.text === "require" || method.text === "require_relative")) {
+      const args = node.childForFieldName("arguments");
+      if (args) {
+        const str = firstChildOfType(args, "string");
+        if (str) requires.push(str.text.replace(/['"]/g, ""));
+      }
+    }
+  }
+  if (requires.length > 0) lines.push(`imports: ${requires.join(", ")}`);
+  lines.push("");
+
+  function processNode(node: Node, indent = ""): void {
+    switch (node.type) {
+      case "module": {
+        const name = node.childForFieldName("name");
+        lines.push(`${indent}module ${name?.text ?? "(anonymous)"}`);
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const child of body.namedChildren) processNode(child, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "class": {
+        const name = node.childForFieldName("name");
+        const superclass = node.childForFieldName("superclass");
+        const ext = superclass ? ` < ${superclass.text}` : "";
+        lines.push(`${indent}class ${name?.text ?? "(anonymous)"}${ext}`);
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const child of body.namedChildren) processNode(child, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "method": {
+        const name = node.childForFieldName("name");
+        const params = node.childForFieldName("parameters");
+        const paramStr = params
+          ? params.namedChildren
+              .filter((p) => p.type !== "," && p.type !== "(")
+              .map((p) => p.text)
+              .join(", ")
+          : "";
+        lines.push(`${indent}+ ${name?.text ?? "(anonymous)"}(${paramStr})`);
+        break;
+      }
+      case "singleton_method": {
+        const name = node.childForFieldName("name");
+        const params = node.childForFieldName("parameters");
+        const paramStr = params
+          ? params.namedChildren
+              .filter((p) => p.type !== "," && p.type !== "(")
+              .map((p) => p.text)
+              .join(", ")
+          : "";
+        lines.push(`${indent}+ self.${name?.text ?? "(anonymous)"}(${paramStr})`);
+        break;
+      }
+    }
+  }
+
+  for (const node of root.namedChildren) {
+    processNode(node);
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+// ---------------------------------------------------------------------------
+// PHP extractor
+// ---------------------------------------------------------------------------
+
+function extractPhpParams(params: Node | null): string {
+  if (!params) return "";
+  const parts: string[] = [];
+  for (const p of params.namedChildren) {
+    if (
+      p.type === "simple_parameter" ||
+      p.type === "property_promotion_parameter" ||
+      p.type === "variadic_parameter"
+    ) {
+      const type_ = p.childForFieldName("type");
+      const name = p.childForFieldName("name");
+      parts.push(type_ ? `${name?.text ?? ""}: ${type_.text}` : (name?.text ?? p.text));
+    }
+  }
+  return parts.join(", ");
+}
+
+function skeletonPhp(filename: string, root: Node): string {
+  const lines: string[] = [`# ${filename} [PHP]`];
+
+  const imports: string[] = [];
+  for (const node of descendantsOfType(root, ["namespace_use_declaration"])) {
+    for (const clause of childrenOfType(node, "namespace_use_clause")) {
+      const name = clause.childForFieldName("name") ?? firstChildOfType(clause, "qualified_name");
+      if (name) imports.push(name.text);
+    }
+  }
+  if (imports.length > 0) lines.push(`imports: ${imports.join(", ")}`);
+  lines.push("");
+
+  function processNode(node: Node, indent = ""): void {
+    switch (node.type) {
+      case "namespace_definition": {
+        const name = node.childForFieldName("name");
+        lines.push(`${indent}namespace ${name?.text ?? "(anonymous)"}`);
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const child of body.namedChildren) processNode(child, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "class_declaration": {
+        const name = node.childForFieldName("name");
+        lines.push(`${indent}class ${name?.text ?? "(anonymous)"}`);
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "declaration_list");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "interface_declaration": {
+        const name = node.childForFieldName("name");
+        lines.push(`${indent}interface ${name?.text ?? "(anonymous)"}`);
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "declaration_list");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "trait_declaration": {
+        const name = node.childForFieldName("name");
+        lines.push(`${indent}trait ${name?.text ?? "(anonymous)"}`);
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "declaration_list");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "method_declaration": {
+        const name = node.childForFieldName("name");
+        const params = node.childForFieldName("parameters");
+        const paramStr = extractPhpParams(params ?? null);
+        const retType = node.childForFieldName("return_type");
+        const retStr = retType ? ` -> ${retType.text}` : "";
+        const vis = node.text.match(/^\s*(private|protected)/) ? "-" : "+";
+        lines.push(`${indent}${vis} ${name?.text ?? "(anonymous)"}(${paramStr})${retStr}`);
+        break;
+      }
+      case "function_definition": {
+        const name = node.childForFieldName("name");
+        const params = node.childForFieldName("parameters");
+        const paramStr = extractPhpParams(params ?? null);
+        const retType = node.childForFieldName("return_type");
+        const retStr = retType ? ` -> ${retType.text}` : "";
+        lines.push(`${indent}function ${name?.text ?? "(anonymous)"}(${paramStr})${retStr}`);
+        lines.push("");
+        break;
+      }
+    }
+  }
+
+  // PHP wraps code in a "program" node; process its children
+  for (const node of root.namedChildren) {
+    processNode(node);
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+// ---------------------------------------------------------------------------
 // Main exported functions
 // ---------------------------------------------------------------------------
 
@@ -1185,6 +1638,22 @@ function collectEntries(root: Node): SkeletonEntry[] {
             endLine: member.endPosition.row + 1,
           });
         }
+      } else if (member.type === "function_declaration") {
+        // Kotlin: member functions inside class_body
+        const mName =
+          member.childForFieldName("name")?.text ??
+          firstChildOfType(member, "simple_identifier")?.text;
+        if (mName) {
+          entries.push({
+            name: mName,
+            kind: "method",
+            startLine: member.startPosition.row + 1,
+            endLine: member.endPosition.row + 1,
+          });
+        }
+      } else if (member.type === "companion_object") {
+        // Kotlin companion object — recurse into it
+        walk(member);
       }
     }
   }
@@ -1194,10 +1663,13 @@ function collectEntries(root: Node): SkeletonEntry[] {
     const endLine = node.endPosition.row + 1;
 
     switch (node.type) {
-      // Functions: TS/JS/Go function_declaration, TS function
+      // Functions: TS/JS/Go/Kotlin function_declaration, TS function
       case "function_declaration":
       case "function": {
-        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        const name =
+          node.childForFieldName("name")?.text ??
+          firstChildOfType(node, "simple_identifier")?.text ??
+          "(anonymous)";
         entries.push({ name, kind: "function", startLine, endLine });
         return;
       }
@@ -1230,16 +1702,48 @@ function collectEntries(root: Node): SkeletonEntry[] {
         return;
       }
 
-      // Classes: TS/JS/Java/C#
+      // Classes: TS/JS/Java/C#/Kotlin
       case "class_declaration":
       case "abstract_class_declaration":
       case "interface_declaration":
+      case "protocol_declaration":
       case "enum_declaration":
       case "struct_declaration": {
-        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
-        const kind = node.type.replace("_declaration", "").replace("abstract_", "");
+        const name =
+          node.childForFieldName("name")?.text ??
+          firstChildOfType(node, "type_identifier")?.text ??
+          "(anonymous)";
+        // Detect actual kind from keyword child (Kotlin interface, Swift struct/enum)
+        let kind = node.type.replace("_declaration", "").replace("abstract_", "");
+        if (kind === "class") {
+          const firstChild = node.child(0);
+          const kw = firstChild?.type;
+          if (kw === "interface" || isKotlinInterface(node)) kind = "interface";
+          else if (kw === "struct") kind = "struct";
+          else if (kw === "enum") kind = "enum";
+        }
         entries.push({ name, kind, startLine, endLine });
-        const body = node.childForFieldName("body") ?? node.childForFieldName("declaration_list");
+        const body =
+          node.childForFieldName("body") ??
+          node.childForFieldName("declaration_list") ??
+          firstChildOfType(node, "class_body", "enum_class_body", "protocol_body");
+        if (body) collectMethodsFromBody(body);
+        return;
+      }
+
+      // Kotlin object declarations
+      case "object_declaration": {
+        const name = firstChildOfType(node, "type_identifier")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "class", startLine, endLine });
+        const body = firstChildOfType(node, "class_body");
+        if (body) collectMethodsFromBody(body);
+        return;
+      }
+
+      // Kotlin companion object
+      case "companion_object": {
+        entries.push({ name: "Companion", kind: "class", startLine, endLine });
+        const body = firstChildOfType(node, "class_body");
         if (body) collectMethodsFromBody(body);
         return;
       }
@@ -1388,6 +1892,33 @@ function collectEntries(root: Node): SkeletonEntry[] {
         }
         return;
       }
+
+      // Ruby module/class/method
+      case "module":
+      case "class": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "class", startLine, endLine });
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const child of body.namedChildren) walk(child);
+        }
+        return;
+      }
+      case "method":
+      case "singleton_method": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "method", startLine, endLine });
+        return;
+      }
+
+      // PHP trait
+      case "trait_declaration": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "class", startLine, endLine });
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "declaration_list");
+        if (body) collectMethodsFromBody(body);
+        return;
+      }
     }
 
     // Recurse into children for nodes we didn't handle
@@ -1530,6 +2061,18 @@ export async function extractSkeletonWithEntries(
         break;
       case "c_sharp":
         text = skeletonCSharp(filename, root);
+        break;
+      case "kotlin":
+        text = skeletonKotlin(filename, root);
+        break;
+      case "swift":
+        text = skeletonSwift(filename, root);
+        break;
+      case "ruby":
+        text = skeletonRuby(filename, root);
+        break;
+      case "php":
+        text = skeletonPhp(filename, root);
         break;
       default:
         text = firstNLines(content, fallbackLines);

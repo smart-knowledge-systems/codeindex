@@ -447,6 +447,187 @@ describe("C# (.cs)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Kotlin
+// ---------------------------------------------------------------------------
+
+describe("Kotlin (.kt)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.kt");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Kotlin]");
+  });
+
+  it("extracts data class Config", () => {
+    expect(hasEntry(entries, "Config", "class")).toBeDefined();
+  });
+
+  it("extracts Repository interface", () => {
+    expect(hasEntry(entries, "Repository", "interface")).toBeDefined();
+  });
+
+  it("extracts UserRepository class", () => {
+    expect(hasEntry(entries, "UserRepository", "class")).toBeDefined();
+  });
+
+  it("extracts class methods", () => {
+    expect(hasEntry(entries, "findById", "method")).toBeDefined();
+    expect(hasEntry(entries, "save", "method")).toBeDefined();
+  });
+
+  it("extracts object declaration", () => {
+    expect(hasEntry(entries, "AppRegistry", "class")).toBeDefined();
+  });
+
+  it("extracts top-level function", () => {
+    expect(hasEntry(entries, "initializeApp", "function")).toBeDefined();
+  });
+
+  it("skeleton text includes class declarations", () => {
+    expect(text).toContain("class UserRepository");
+    expect(text).toContain("object AppRegistry");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Swift
+// ---------------------------------------------------------------------------
+
+describe("Swift (.swift)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.swift");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Swift]");
+  });
+
+  it("extracts Shape class", () => {
+    expect(hasEntry(entries, "Shape", "class")).toBeDefined();
+  });
+
+  it("extracts Point struct", () => {
+    expect(hasEntry(entries, "Point", "struct")).toBeDefined();
+  });
+
+  it("extracts Drawable protocol", () => {
+    expect(hasEntry(entries, "Drawable", "protocol")).toBeDefined();
+  });
+
+  it("extracts Direction enum", () => {
+    expect(hasEntry(entries, "Direction", "enum")).toBeDefined();
+  });
+
+  it("extracts top-level function", () => {
+    expect(hasEntry(entries, "createShapes", "function")).toBeDefined();
+  });
+
+  it("skeleton text includes class declarations", () => {
+    expect(text).toContain("class Shape");
+    expect(text).toContain("struct Point");
+    expect(text).toContain("protocol Drawable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ruby
+// ---------------------------------------------------------------------------
+
+describe("Ruby (.rb)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.rb");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Ruby]");
+  });
+
+  it("extracts Animal class", () => {
+    expect(hasEntry(entries, "Animal", "class")).toBeDefined();
+  });
+
+  it("extracts Dog class", () => {
+    expect(hasEntry(entries, "Dog", "class")).toBeDefined();
+  });
+
+  it("extracts class methods", () => {
+    expect(hasEntry(entries, "speak", "method")).toBeDefined();
+    expect(hasEntry(entries, "initialize", "method")).toBeDefined();
+  });
+
+  it("extracts Animals module", () => {
+    expect(hasEntry(entries, "Animals", "class")).toBeDefined();
+  });
+
+  it("skeleton text includes class hierarchy", () => {
+    expect(text).toContain("class Dog");
+    expect(text).toContain("module Animals");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHP
+// ---------------------------------------------------------------------------
+
+describe("PHP (.php)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.php");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[PHP]");
+  });
+
+  it("extracts User class", () => {
+    expect(hasEntry(entries, "User", "class")).toBeDefined();
+  });
+
+  it("extracts class methods", () => {
+    expect(hasEntry(entries, "render", "method")).toBeDefined();
+    expect(hasEntry(entries, "getName", "method")).toBeDefined();
+  });
+
+  it("extracts Renderable interface", () => {
+    expect(hasEntry(entries, "Renderable", "interface")).toBeDefined();
+  });
+
+  it("extracts HasTimestamps trait", () => {
+    expect(hasEntry(entries, "HasTimestamps", "class")).toBeDefined();
+  });
+
+  it("skeleton text includes class declarations", () => {
+    expect(text).toContain("class User");
+    expect(text).toContain("interface Renderable");
+    expect(text).toContain("trait HasTimestamps");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fallback for unsupported extension
 // ---------------------------------------------------------------------------
 
