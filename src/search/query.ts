@@ -181,7 +181,15 @@ async function searchPg(
   // to every query on the same connection
   await pg.unsafe("BEGIN");
   try {
-    return await searchPgInTransaction(pg, repoIds, currentRepoId, queryEmbedding, query, options, scoring);
+    return await searchPgInTransaction(
+      pg,
+      repoIds,
+      currentRepoId,
+      queryEmbedding,
+      query,
+      options,
+      scoring,
+    );
   } finally {
     await pg.unsafe("COMMIT");
   }

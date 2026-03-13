@@ -17,29 +17,23 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 
   private async embedBatch(texts: string[], attempt = 0): Promise<number[][]> {
     try {
-      const results: number[][] = [];
-      // Ollama's /api/embed handles one text at a time in older versions,
-      // but newer versions support input as array. We chunk to be safe.
-      for (const text of texts) {
-        const response = await fetch(`${this.baseUrl}/api/embed`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: this.name, input: text }),
-        });
+      const response = await fetch(`${this.baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: this.name, input: texts }),
+      });
 
-        if (!response.ok) {
-          throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
-        }
-
-        const data = (await response.json()) as { embeddings: number[][] };
-        results.push(data.embeddings[0]);
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
       }
+
+      const data = (await response.json()) as { embeddings: number[][] };
 
       // Record approximate cost (local model = 0 cost, but track token usage)
       const approxTokens = texts.reduce((sum, t) => sum + Math.ceil(t.length / 4), 0);
       await recordCost("embed", this.name, approxTokens, 0);
 
-      return results;
+      return data.embeddings;
     } catch (err) {
       if (attempt < MAX_RETRIES) {
         const delay = 1000 * Math.pow(2, attempt);
