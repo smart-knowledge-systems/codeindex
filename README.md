@@ -5,19 +5,23 @@ A local semantic index for codebases. Augments Claude Code's built-in Glob/Grep/
 ## Prerequisites
 
 - [Bun](https://bun.sh) runtime
-- PostgreSQL with [pgvector](https://github.com/pgvector/pgvector) extension (default storage)
 - `OPENAI_API_KEY` environment variable (for `text-embedding-3-small` embeddings)
 - `claude` CLI (optional, for directory summary generation)
+- PostgreSQL with [pgvector](https://github.com/pgvector/pgvector) (optional — SQLite is the default)
 
 ## Setup
 
 ```bash
 bun install
 
-# Create the database and enable pgvector
-createdb codeindex
-psql -d codeindex -c "CREATE EXTENSION IF NOT EXISTS vector"
+# Initialize in any git repo (auto-detects SQLite by default)
+bun src/index.ts init
+
+# Or with PostgreSQL (auto-detected if PGHOST or DATABASE_URL is set)
+PGHOST=localhost bun src/index.ts init
 ```
+
+Run `bun src/index.ts doctor` to verify your environment is configured correctly.
 
 ## Usage
 
@@ -29,6 +33,9 @@ bun src/index.ts reindex
 
 # Index a specific repo
 bun src/index.ts reindex --path /path/to/repo
+
+# Preview what would be indexed without writing
+bun src/index.ts reindex --dry-run
 ```
 
 ### Search
@@ -64,6 +71,7 @@ bun src/index.ts status               # Show index stats
 bun src/index.ts config               # Show current config
 bun src/index.ts config --store sqlite # Set config values
 bun src/index.ts export --out snapshot.db  # Export pg to sqlite
+bun src/index.ts doctor               # Check environment and configuration
 ```
 
 ## How it works
@@ -71,11 +79,14 @@ bun src/index.ts export --out snapshot.db  # Export pg to sqlite
 ### Indexing pipeline
 
 1. **Walk** the repo, respecting `.gitignore` and `.indexignore`
-2. **Format** each file in-memory (auto-detected formatter) and SHA-256 hash — skip if unchanged
-3. **Extract** an AST skeleton via tree-sitter (TS/JS, Python, Rust, Go, Java, C/C++, C#) or first N lines for non-code files
-4. **Embed** skeletons using `text-embedding-3-small` (batched, up to 2048 per call)
-5. **Embed** recent commit messages and link to files with recency ranks
-6. **Summarize** directories bottom-up via `claude --print --model haiku`, then embed both the concatenated skeleton and the generated summary
+2. **Scan** file content for secrets — skip files with potential API keys, tokens, or private keys
+3. **Format** each file in-memory (auto-detected formatter) and SHA-256 hash — skip if unchanged
+4. **Extract** an AST skeleton via tree-sitter (TS/JS, Python, Rust, Go, Java, C/C++, C#) or first N lines for non-code files
+5. **Embed** skeletons using `text-embedding-3-small` (batched, up to 2048 per call)
+6. **Embed** recent commit messages and link to files with recency ranks
+7. **Summarize** directories bottom-up via `claude --print --model haiku`, then embed both the concatenated skeleton and the generated summary
+
+All writes are wrapped in transactions — interrupted indexing does not leave partial state.
 
 ### Search scoring
 
@@ -93,8 +104,24 @@ Results include files, directories, and commits, all filtered by `minScore` (def
 
 | Backend | Use case | Vector search |
 |---------|----------|---------------|
-| **PostgreSQL** (default) | Multi-repo, shared index | pgvector `<=>` operator |
-| **SQLite** (portable) | Single-repo, offline, CI | sqlite-vec `vec_distance_cosine()` |
+| **SQLite** (default) | Single-repo, zero-config, portable | sqlite-vec `vec_distance_cosine()` |
+| **PostgreSQL** | Multi-repo, shared index | pgvector `<=>` operator |
+
+## Ignore patterns
+
+Files are excluded from indexing via three layers (in evaluation order):
+
+1. **Hard-coded** — `.git/` and `.codeindex.db` are always excluded and cannot be overridden
+2. **Soft defaults** — `node_modules/`, `.env`, `*.pem`, lock files, build artifacts, etc.
+3. **`.gitignore`** — standard git ignore rules
+4. **`.indexignore`** — additional patterns, same syntax as `.gitignore`
+
+`.indexignore` patterns override `.gitignore` and soft defaults. Use `!` to un-ignore:
+
+```gitignore
+# .indexignore — index node_modules for dependency debugging
+!node_modules/
+```
 
 ## Configuration
 
@@ -105,11 +132,13 @@ Global config at `~/.config/codeindex/config.json`, per-repo override at `.codei
 ```
 src/
   index.ts                CLI entry point
+  cli.ts                  Argument parsing
   config.ts               Config loading and formatter auto-detection
   db/
     pg.ts                 PostgreSQL connection (pgvector)
     sqlite.ts             SQLite connection (sqlite-vec)
     schema.ts             Table creation for both backends
+    util.ts               Shared embedding serialization
     export.ts             pg → sqlite snapshot
   index/
     walker.ts             File tree walk (.gitignore + .indexignore)
@@ -118,6 +147,7 @@ src/
     embedder.ts           OpenAI text-embedding-3-small
     commits.ts            Git commit history extraction
     directories.ts        Bottom-up directory summary generation
+    secrets.ts            Pre-embedding secret detection
   search/
     query.ts              Scoring engine (pgvector + sqlite-vec)
     types.ts              TypeScript interfaces
