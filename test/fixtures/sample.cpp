@@ -22,4 +22,11 @@ double Circle::area() const {
     return 3.14159 * radius_ * radius_;
 }
 
+template<typename T>
+class Container {
+public:
+    void add(T item);
+    T get(int index) const;
+};
+
 }  // namespace shapes

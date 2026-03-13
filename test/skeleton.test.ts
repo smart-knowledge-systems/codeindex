@@ -350,6 +350,15 @@ describe("C (.c)", () => {
   it("skeleton text includes imports", () => {
     expect(text).toContain("imports:");
   });
+
+  it("extracts typedefs", () => {
+    expect(hasEntry(entries, "Point", "typedef")).toBeDefined();
+    expect(hasEntry(entries, "Rect", "typedef")).toBeDefined();
+  });
+
+  it("skeleton text includes typedef", () => {
+    expect(text).toContain("typedef struct Point");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -381,6 +390,15 @@ describe("C++ (.cpp)", () => {
 
   it("extracts Circle class", () => {
     expect(hasEntry(entries, "Circle", "class")).toBeDefined();
+  });
+
+  it("extracts template class Container", () => {
+    expect(hasEntry(entries, "Container", "class")).toBeDefined();
+  });
+
+  it("skeleton text includes template declaration", () => {
+    expect(text).toContain("template");
+    expect(text).toContain("Container");
   });
 });
 
