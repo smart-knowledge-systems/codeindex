@@ -24,6 +24,7 @@ import { detectDrift } from "./drift";
 import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
 import { parallelReindex } from "./index/parallel";
 import { runHealthCheck } from "./check/runner";
+import { extractImports, resolveImport } from "./index/imports";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import type { SearchOptions } from "./search/types";
 
@@ -100,6 +101,84 @@ async function ensureRepo(repoRoot: string): Promise<number> {
       .get(origin, repoRoot, name, formatter) as { id: number };
     return result.id;
   }
+}
+
+// ---------------------------------------------------------------------------
+// import graph extraction
+// ---------------------------------------------------------------------------
+
+async function extractAndStoreImports(
+  repoRoot: string,
+  repoId: number,
+  allFiles: string[],
+  store: "pg" | "sqlite",
+): Promise<void> {
+  // Build file ID map
+  const fileIdMap = new Map<string, number>();
+
+  if (store === "pg") {
+    const rows = (await pgUnsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
+      repoId,
+    ])) as { id: string; file_path: string }[];
+    for (const r of rows) fileIdMap.set(r.file_path, parseInt(r.id));
+
+    // Clear existing imports for this repo
+    await pgUnsafe(
+      "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1)",
+      [repoId],
+    );
+  } else {
+    const db = await getSqlite(repoRoot);
+    const rows = db.prepare("SELECT id, file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      id: number;
+      file_path: string;
+    }[];
+    for (const r of rows) fileIdMap.set(r.file_path, r.id);
+
+    db.prepare(
+      "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = ?)",
+    ).run(repoId);
+  }
+
+  let importCount = 0;
+
+  for (const relPath of allFiles) {
+    const sourceId = fileIdMap.get(relPath);
+    if (!sourceId) continue;
+
+    const absPath = path.join(repoRoot, relPath);
+    let content: string;
+    try {
+      content = await Bun.file(absPath).text();
+    } catch {
+      continue;
+    }
+
+    const edges = extractImports(relPath, content);
+    if (edges.length === 0) continue;
+
+    for (const edge of edges) {
+      const resolved = resolveImport(edge.importedModule, relPath, edge.language, allFiles);
+      const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
+
+      if (store === "pg") {
+        await pgUnsafe(
+          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+           VALUES ($1, $2, $3, $4)`,
+          [sourceId, edge.importedModule, resolvedId, edge.language],
+        );
+      } else {
+        const db = await getSqlite(repoRoot);
+        db.prepare(
+          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+           VALUES (?, ?, ?, ?)`,
+        ).run(sourceId, edge.importedModule, resolvedId, edge.language);
+      }
+      importCount++;
+    }
+  }
+
+  console.log(`  ${importCount} import edges stored.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +580,11 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   console.log("Building directory index...");
   await buildDirectoryIndex(repoRoot, repoId, allFiles);
   console.log("Directory index complete.");
+
+  // Extract and store import edges
+  console.log("Extracting import graph...");
+  await extractAndStoreImports(repoRoot, repoId, allFiles, config.store);
+  console.log("Import graph complete.");
 
   console.log("Reindex complete.");
 }
