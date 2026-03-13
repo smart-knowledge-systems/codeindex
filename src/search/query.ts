@@ -210,7 +210,7 @@ async function searchPg(
     fileFilterParams.push(...dirFilters.map((d) => `${d.replace(/\/$/, "")}/%`));
   }
   if (sinceDate) {
-    fileFilterSql += ` AND indexed_at >= $${paramIdx++}`;
+    fileFilterSql += ` AND id IN (SELECT fc.file_id FROM file_commits fc JOIN commits c ON c.id = fc.commit_id WHERE c.authored_at >= $${paramIdx++})`;
     fileFilterParams.push(sinceDate.toISOString());
   }
 
@@ -525,7 +525,7 @@ async function searchSqlite(
     fileFilterParams.push(...dirFilters.map((d) => `${d.replace(/\/$/, "")}/%`));
   }
   if (sinceDate) {
-    fileFilterSql += ` AND f.indexed_at >= ?`;
+    fileFilterSql += ` AND f.id IN (SELECT fc.file_id FROM file_commits fc JOIN commits c ON c.id = fc.commit_id WHERE c.authored_at >= ?)`;
     fileFilterParams.push(sinceDate.toISOString());
   }
 
