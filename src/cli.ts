@@ -4,6 +4,34 @@ export interface ParsedArgs {
   flags: Record<string, string | boolean>;
 }
 
+/** Flags that take a value argument. All others are treated as booleans. */
+const VALUE_FLAGS = new Set([
+  "min-score",
+  "top-n",
+  "lang",
+  "dir",
+  "since",
+  "format",
+  "scope",
+  "out",
+  "transport",
+  "port",
+  "workers",
+  "budget",
+  "files",
+  "commit",
+  "threshold",
+  "config-name",
+  "repo",
+  "output",
+  "exclude",
+  "alpha",
+  "beta",
+  "gamma",
+  "decay",
+  "parent-boost-multiplier",
+]);
+
 export function parseArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2);
   const command = args[0] ?? "";
@@ -15,9 +43,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
     const arg = args[i];
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
-      const next = args[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
-        flags[key] = next;
+      if (VALUE_FLAGS.has(key)) {
+        const next = args[i + 1];
+        flags[key] = next !== undefined ? next : "";
         i += 2;
       } else {
         flags[key] = true;
