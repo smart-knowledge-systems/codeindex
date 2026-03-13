@@ -205,9 +205,9 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
            indexed_at = datetime('now')
          RETURNING id`,
       );
+      const deleteEmb = db.prepare(`DELETE FROM file_embeddings WHERE file_id = ?`);
       const insertEmb = db.prepare(
-        `INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)
-         ON CONFLICT (file_id) DO UPDATE SET embedding = excluded.embedding`,
+        `INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)`,
       );
       db.transaction(() => {
         for (let i = 0; i < filesToEmbed.length; i++) {
@@ -216,6 +216,7 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
           const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as {
             id: number;
           };
+          deleteEmb.run(row.id);
           insertEmb.run(row.id, serializeEmbedding(embedding));
           indexed++;
         }
@@ -329,9 +330,9 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
          ON CONFLICT (repo_id, commit_hash) DO UPDATE SET message = excluded.message
          RETURNING id`,
       );
-      const upsertCommitEmb = db.prepare(
-        `INSERT INTO commit_embeddings (commit_id, embedding) VALUES (?, ?)
-         ON CONFLICT (commit_id) DO UPDATE SET embedding = excluded.embedding`,
+      const deleteCommitEmb = db.prepare(`DELETE FROM commit_embeddings WHERE commit_id = ?`);
+      const insertCommitEmb = db.prepare(
+        `INSERT INTO commit_embeddings (commit_id, embedding) VALUES (?, ?)`,
       );
       const selectCommit = db.prepare(
         "SELECT id FROM commits WHERE repo_id = ? AND commit_hash = ?",
@@ -349,7 +350,8 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
           if (cr.embedding) {
             const row = upsertCommit.get(repoId, cr.hash, cr.message, cr.date) as { id: number };
             commitId = row.id;
-            upsertCommitEmb.run(commitId, serializeEmbedding(cr.embedding));
+            deleteCommitEmb.run(commitId);
+            insertCommitEmb.run(commitId, serializeEmbedding(cr.embedding));
             commitCount++;
           } else {
             const rows = selectCommit.all(repoId, cr.hash) as { id: number }[];
@@ -480,9 +482,9 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
            indexed_at = datetime('now')
          RETURNING id`,
       );
+      const deleteEmb2 = db.prepare(`DELETE FROM file_embeddings WHERE file_id = ?`);
       const insertEmb = db.prepare(
-        `INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)
-         ON CONFLICT (file_id) DO UPDATE SET embedding = excluded.embedding`,
+        `INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)`,
       );
       db.transaction(() => {
         for (let i = 0; i < filesToEmbed.length; i++) {
@@ -491,6 +493,7 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as {
             id: number;
           };
+          deleteEmb2.run(row.id);
           insertEmb.run(row.id, serializeEmbedding(embedding));
         }
       })();
@@ -551,10 +554,11 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
             .get(repoId, commitHash, commitMsg) as { id: number } | null;
 
           if (row) {
-            db.prepare(
-              `INSERT INTO commit_embeddings (commit_id, embedding) VALUES (?, ?)
-               ON CONFLICT (commit_id) DO UPDATE SET embedding = excluded.embedding`,
-            ).run(row.id, serializeEmbedding(commitEmbedding));
+            db.prepare(`DELETE FROM commit_embeddings WHERE commit_id = ?`).run(row.id);
+            db.prepare(`INSERT INTO commit_embeddings (commit_id, embedding) VALUES (?, ?)`).run(
+              row.id,
+              serializeEmbedding(commitEmbedding),
+            );
 
             for (const relPath of changedFiles) {
               const fileRows = db

@@ -143,16 +143,18 @@ async function processDirectory(
       )
       .get(repoId, dirPath, concatSkeleton || null, summary) as { id: number };
     if (concatEmbedding) {
-      db.prepare(
-        `INSERT INTO dir_concat_embeddings (dir_id, embedding) VALUES (?, ?)
-         ON CONFLICT (dir_id) DO UPDATE SET embedding = excluded.embedding`,
-      ).run(row.id, serializeEmbedding(concatEmbedding));
+      db.prepare(`DELETE FROM dir_concat_embeddings WHERE dir_id = ?`).run(row.id);
+      db.prepare(`INSERT INTO dir_concat_embeddings (dir_id, embedding) VALUES (?, ?)`).run(
+        row.id,
+        serializeEmbedding(concatEmbedding),
+      );
     }
     if (summaryEmbedding) {
-      db.prepare(
-        `INSERT INTO dir_summary_embeddings (dir_id, embedding) VALUES (?, ?)
-         ON CONFLICT (dir_id) DO UPDATE SET embedding = excluded.embedding`,
-      ).run(row.id, serializeEmbedding(summaryEmbedding));
+      db.prepare(`DELETE FROM dir_summary_embeddings WHERE dir_id = ?`).run(row.id);
+      db.prepare(`INSERT INTO dir_summary_embeddings (dir_id, embedding) VALUES (?, ?)`).run(
+        row.id,
+        serializeEmbedding(summaryEmbedding),
+      );
     }
   }
 }
