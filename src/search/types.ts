@@ -63,6 +63,8 @@ export interface CodeindexConfig {
   embedding: {
     model: string;
     dimensions: number;
+    provider: "openai" | "ollama";
+    ollamaUrl?: string;
   };
   scoring: ScoringConfig;
   formatter: string | null;

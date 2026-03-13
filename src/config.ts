@@ -15,6 +15,7 @@ const DEFAULTS: CodeindexConfig = {
   embedding: {
     model: "text-embedding-3-small",
     dimensions: 1536,
+    provider: "openai",
   },
   scoring: {
     commitDecay: 0.2,
