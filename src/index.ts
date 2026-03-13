@@ -96,12 +96,13 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 // reindex command
 // ---------------------------------------------------------------------------
 
-async function cmdReindex(repoRoot: string) {
+async function cmdReindex(repoRoot: string, dryRun = false) {
   const config = await loadConfig(repoRoot);
   const repoId = await ensureRepo(repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   console.log(`Indexing ${repoRoot} (repo_id=${repoId}, store=${config.store})`);
+  if (dryRun) console.log("(dry run — no changes will be made)");
 
   await initParser();
 
@@ -143,6 +144,14 @@ async function cmdReindex(repoRoot: string) {
 
     const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
     filesToEmbed.push({ filePath: relPath, skeleton, hash, fileType: ext });
+  }
+
+  if (dryRun) {
+    console.log(`Files: ${filesToEmbed.length} would be indexed, ${skipped} unchanged`);
+    for (const f of filesToEmbed) {
+      console.log(`  ${f.filePath} (${f.fileType})`);
+    }
+    return;
   }
 
   // Batch embed all skeletons
@@ -771,7 +780,7 @@ async function main() {
         break;
 
       case "reindex":
-        await cmdReindex(repoRoot);
+        await cmdReindex(repoRoot, args.includes("--dry-run"));
         break;
 
       case "update": {
@@ -839,6 +848,7 @@ async function main() {
 Commands:
   init                 Initialize codeindex in current repo
   reindex              Full reindex of current repo
+    --dry-run          Report what would change without writing
   update               Incremental update (called by hook)
     --files <paths>    Files to re-index
     --commit <hash>    Commit to embed and link
