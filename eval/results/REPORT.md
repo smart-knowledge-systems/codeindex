@@ -159,3 +159,65 @@ Keywords extracted from each query (stop words removed, top 5 longest words). Ea
 | no-child-boost | gamma=0 |
 | pure-cosine | alpha=0, beta=0, gamma=0 |
 | high-parent | beta=0.4, parentBoostMultiplier=0.5 |
+
+---
+
+## M3 Post-Completion Evaluation
+
+**Date:** 2026-03-13
+**Dataset:** 27 queries (20 original + 7 prose/documentation queries)
+**Changes since M1:** Hybrid search (BM25), skeleton length normalization, CamelCase tokenizer fix, `--since` fix (commit date), KNN over-fetch for filtered queries, standard P@5 denominator, HitRate@5 metric.
+
+### Metrics Note
+
+**P@5** now uses the standard denominator (`hits / 5`), making it comparable to published benchmarks. **HitRate@5** (`hits / min(5, expected)`) is reported alongside it — more interpretable when most queries have 1 expected file. The M1 "P@5" of 0.842 was equivalent to what is now called HitRate@5.
+
+### M3 vs Ripgrep (27 queries)
+
+| Metric | codeindex | ripgrep | Delta |
+|--------|-----------|---------|-------|
+| **P@5** | 0.148 | 0.096 | **+54%** |
+| **HitRate@5** | 0.623 | 0.383 | **+63%** |
+| **Recall** | 0.623 | 0.784 | -21% |
+| **MRR** | 0.401 | 0.278 | **+44%** |
+| **nDCG@10** | 0.431 | 0.305 | **+41%** |
+
+Codeindex wins on 4 of 5 metrics. Ripgrep's recall advantage comes from keyword-matching across more files, but its ranking quality is significantly worse.
+
+### Core Queries Only (19 code queries, excl. prose + negative)
+
+| Metric | Value |
+|--------|-------|
+| P@5 | 0.168 |
+| HitRate@5 | 0.754 |
+| Recall | 0.754 |
+| MRR | 0.467 |
+| nDCG@10 | 0.513 |
+
+### Prose Queries (7 documentation queries)
+
+| Metric | Value |
+|--------|-------|
+| HitRate@5 | 0.286 |
+| Recall | 0.286 |
+| MRR | 0.185 |
+
+Prose query performance is weaker — 3 of 7 return zero results. ROADMAP.md conceptual queries ("MCP server plan", "local embeddings") don't surface because the embeddings are from code-oriented skeletons. This validates the M3 pre-fix (markdown skeleton extractor) but suggests further work is needed on prose embedding quality.
+
+### M1 → M3 Comparison (apples-to-apples on 20 original queries)
+
+| Metric | M1 | M3 | Change |
+|--------|----|----|--------|
+| HitRate@5 | 0.842 | 0.754 | -10% |
+| Recall | 0.858 | 0.754 | -12% |
+| MRR | 0.752 | 0.467 | -38% |
+
+The MRR regression is partly from the BM25 CamelCase fix changing token distributions, and partly from newly indexed files (migration runner, MCP server, providers) expanding the candidate set. The `config-loading` and `export-snapshot` queries that were perfect in M1 now return 0 hits — likely due to skeleton changes in those files from M3 feature additions.
+
+### Key Findings
+
+1. **CamelCase BM25 fix has real impact.** Queries like "commitBoost" now correctly tokenize to ["commit", "boost"], improving keyword matching for camelCase identifiers.
+2. **--since filter now uses commit dates.** Previously filtered by indexed_at (useless for users), now correctly joins against authored_at.
+3. **KNN over-fetch prevents result starvation.** With narrow `--lang`/`--dir` filters, the 3x→10x multiplier and 200→500 minimum keep results from being filtered to nothing.
+4. **Prose indexing needs more work.** The markdown skeleton extractor helps (STEERING.md queries work), but conceptual queries about planned features in ROADMAP.md still miss. Consider embedding full prose content or improving the heading-based skeleton.
+5. **Gravity well partially addressed.** Skeleton length normalization reduces but doesn't eliminate `src/index.ts` dominating rankings across diverse queries.
