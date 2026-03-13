@@ -706,7 +706,7 @@ async function cmdExport(repoRoot: string, outPath: string) {
 // status command
 // ---------------------------------------------------------------------------
 
-async function cmdStatus(repoRoot: string) {
+async function cmdStatus(repoRoot: string, showCost = false) {
   const config = await loadConfig(repoRoot);
 
   if (config.store === "pg") {
@@ -770,6 +770,31 @@ async function cmdStatus(repoRoot: string) {
     console.log(`Commits: ${commitCount.cnt}`);
     console.log(`Last indexed: ${lastIndexed.last ?? "never"}`);
     console.log(`Formatter: ${repos[0].formatter_cmd ?? "auto-detect"}`);
+  }
+
+  // Cost tracking output
+  if (showCost) {
+    const { getCostSummary } = await import("./cost");
+    const costRows = await getCostSummary(repoRoot);
+    if (costRows.length === 0) {
+      console.log("\nCost: no cost events recorded");
+    } else {
+      console.log("\nCost breakdown:");
+      console.log("  Operation       Model                  Tokens In   Tokens Out   Cost (USD)");
+      console.log("  " + "-".repeat(75));
+      let totalCost = 0;
+      for (const row of costRows) {
+        const op = row.operation.padEnd(15);
+        const model = row.model.padEnd(22);
+        const tokIn = String(row.totalTokensIn).padStart(10);
+        const tokOut = String(row.totalTokensOut).padStart(12);
+        const cost = `$${row.totalCostUsd.toFixed(4)}`.padStart(11);
+        console.log(`  ${op} ${model} ${tokIn} ${tokOut} ${cost}`);
+        totalCost += row.totalCostUsd;
+      }
+      console.log("  " + "-".repeat(75));
+      console.log(`  Total: $${totalCost.toFixed(4)}`);
+    }
   }
 }
 
@@ -1015,7 +1040,7 @@ async function main() {
         break;
 
       case "status":
-        await cmdStatus(repoRoot);
+        await cmdStatus(repoRoot, hasFlag(parsed, "cost"));
         break;
 
       case "doctor":
