@@ -21,7 +21,8 @@ import { exportToSqlite, type ExportOptions } from "./db/export";
 import { setCurrentRepo, getProjectedCost, checkCostCap } from "./cost";
 import { generateIntent } from "./intent";
 import { detectDrift } from "./drift";
-import { repoAdd, repoRemove, repoList, repoStatus, repoPurge } from "./repo";
+import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
+import { parallelReindex } from "./index/parallel";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
@@ -1234,11 +1235,34 @@ Commands:
   doctor               Check environment and configuration
 
 Options:
-  --path <dir>         Repo root (default: cwd)`;
+  --path <dir>         Repo root (default: cwd)
+  --read-only          Block write operations (init, reindex, update)`;
+
+const WRITE_COMMANDS = new Set(["init", "reindex", "update", "install-hook"]);
 
 async function main() {
   const parsed = parseArgs(process.argv);
   const repoRoot = flag(parsed, "path") ? path.resolve(flag(parsed, "path")!) : process.cwd();
+
+  // Read-only guard: block write operations when --read-only flag or config is set
+  if (WRITE_COMMANDS.has(parsed.command)) {
+    const isReadOnlyFlag = hasFlag(parsed, "read-only");
+    let isReadOnlyConfig = false;
+    try {
+      const cfg = await loadConfig(repoRoot);
+      isReadOnlyConfig = cfg.readOnly === true;
+    } catch {
+      // config may not exist yet (e.g. during init)
+    }
+    if (isReadOnlyFlag || isReadOnlyConfig) {
+      console.error(
+        `Error: write operation "${parsed.command}" is blocked in read-only mode.\n` +
+          "Read-only mode is intended for CI/CD environments where the index should not be modified.\n" +
+          "Remove --read-only flag or set readOnly: false in .codeindex.json to allow writes.",
+      );
+      process.exit(1);
+    }
+  }
 
   try {
     switch (parsed.command) {

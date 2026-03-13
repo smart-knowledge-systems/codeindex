@@ -71,6 +71,7 @@ export interface CodeindexConfig {
     maxCostPerReindex: number | null;
     warnAt: number | null;
   };
+  readOnly?: boolean;
 }
 
 export interface ScoringConfig {
