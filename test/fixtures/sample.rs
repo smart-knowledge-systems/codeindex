@@ -5,6 +5,7 @@ pub trait Storage {
     fn set(&mut self, key: String, value: String);
 }
 
+#[derive(Debug, Clone)]
 pub struct MemoryStore {
     data: HashMap<String, String>,
 }

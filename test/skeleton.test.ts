@@ -229,6 +229,10 @@ describe("Rust (.rs)", () => {
   it("extracts top-level function", () => {
     expect(hasEntry(entries, "create_store", "function")).toBeDefined();
   });
+
+  it("skeleton text includes derive attribute", () => {
+    expect(text).toContain("#[derive(Debug, Clone)]");
+  });
 });
 
 // ---------------------------------------------------------------------------

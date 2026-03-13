@@ -515,6 +515,16 @@ function skeletonPython(filename: string, root: Node): string {
 // Rust extractor
 // ---------------------------------------------------------------------------
 
+function collectRustAttributes(node: Node): string[] {
+  const attrs: string[] = [];
+  let sib = node.previousNamedSibling;
+  while (sib && sib.type === "attribute_item") {
+    attrs.unshift(sib.text.trim());
+    sib = sib.previousNamedSibling;
+  }
+  return attrs;
+}
+
 function skeletonRust(filename: string, root: Node): string {
   const lines: string[] = [`# ${filename} [Rust]`];
 
@@ -532,6 +542,7 @@ function skeletonRust(filename: string, root: Node): string {
     switch (node.type) {
       case "struct_item": {
         const name = childText(node, "name");
+        for (const attr of collectRustAttributes(node)) lines.push(attr);
         lines.push(`struct ${name}`);
         lines.push("");
         break;
@@ -542,6 +553,7 @@ function skeletonRust(filename: string, root: Node): string {
         const variants = body
           ? childrenOfType(body, "enum_variant").map((v) => childText(v, "name"))
           : [];
+        for (const attr of collectRustAttributes(node)) lines.push(attr);
         lines.push(`enum ${name}`);
         if (variants.length > 0) lines.push(`  variants: ${variants.join(", ")}`);
         lines.push("");
@@ -597,6 +609,7 @@ function skeletonRust(filename: string, root: Node): string {
         const paramStr = params ? extractRustParams(params) : "";
         const ret = node.childForFieldName("return_type");
         const retStr = ret ? ` -> ${ret.text}` : "";
+        for (const attr of collectRustAttributes(node)) lines.push(attr);
         lines.push(`function ${fnName}(${paramStr})${retStr}`);
         lines.push("");
         break;
