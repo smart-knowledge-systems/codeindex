@@ -502,10 +502,7 @@ async function searchSqlite(
 
   // Increase KNN over-fetch when scope filters are active to avoid under-returning
   const hasFilters = !!(langExts || dirFilters || sinceDate);
-  const knnLimit = Math.max(
-    (options.topN || 50) * (hasFilters ? 10 : 3),
-    hasFilters ? 500 : 200,
-  );
+  const knnLimit = Math.max((options.topN || 50) * (hasFilters ? 10 : 3), hasFilters ? 500 : 200);
 
   // --- Repo info map ---
   const repoInfoRows = db
