@@ -4,7 +4,7 @@ import { embedSingle } from "../index/embedder";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
-import type { SearchOptions, SearchResult, ScoringConfig } from "./types";
+import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -208,7 +208,7 @@ async function searchPg(
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? 0.3 * dirSim : 0;
+    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
     const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
     if (finalScore >= minScore) {
@@ -390,7 +390,7 @@ async function searchSqlite(
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? 0.3 * dirSim : 0;
+    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
     const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
     if (finalScore >= minScore) {
@@ -519,7 +519,9 @@ export async function search(
   options?: SearchOptions,
 ): Promise<SearchResult[]> {
   const config = await loadConfig(repoRoot);
-  const scoring = config.scoring;
+  const scoring: ScoringConfig = options?.scoringOverrides
+    ? { ...config.scoring, ...options.scoringOverrides }
+    : config.scoring;
 
   const resolvedOptions: Required<SearchOptions> = {
     minScore: options?.minScore ?? scoring.minScore,
@@ -527,6 +529,8 @@ export async function search(
     scope: options?.scope ?? "project",
     includeSkeleton: options?.includeSkeleton ?? false,
     includeSummary: options?.includeSummary ?? false,
+    includeSnippet: options?.includeSnippet ?? false,
+    scoringOverrides: options?.scoringOverrides ?? {},
   };
 
   const queryEmbedding = await embedSingle(query);

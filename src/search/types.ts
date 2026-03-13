@@ -8,6 +8,9 @@ export interface SearchResult {
   commitIds?: string[];
   skeleton?: string;
   summary?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  snippet?: string;
 }
 
 export interface SearchOptions {
@@ -16,6 +19,15 @@ export interface SearchOptions {
   scope?: "project" | "all" | string[];
   includeSkeleton?: boolean;
   includeSummary?: boolean;
+  includeSnippet?: boolean;
+  scoringOverrides?: Partial<ScoringConfig>;
+}
+
+export interface SkeletonEntry {
+  name: string;
+  kind: string;
+  startLine: number;
+  endLine: number;
 }
 
 export interface CodeindexConfig {
@@ -45,6 +57,7 @@ export interface ScoringConfig {
   beta: number;
   gamma: number;
   minScore: number;
+  parentBoostMultiplier: number;
 }
 
 export interface RepoRecord {

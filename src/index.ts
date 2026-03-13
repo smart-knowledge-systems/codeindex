@@ -765,6 +765,11 @@ async function cmdConfig(repoRoot: string, args: string[]) {
       updates.scoring = { ...((updates.scoring as object) ?? {}), gamma: parseFloat(value) };
     else if (key === "min-score")
       updates.scoring = { ...((updates.scoring as object) ?? {}), minScore: parseFloat(value) };
+    else if (key === "parent-boost-multiplier")
+      updates.scoring = {
+        ...((updates.scoring as object) ?? {}),
+        parentBoostMultiplier: parseFloat(value),
+      };
   }
 
   const localConfigPath = path.join(repoRoot, ".codeindex.json");
