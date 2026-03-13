@@ -48,18 +48,13 @@ const STOPWORDS = new Set([
 ]);
 
 export function tokenize(text: string): string[] {
-  // Lowercase, split on non-alphanumeric
-  const raw = text.toLowerCase().split(/[^a-z0-9]+/);
+  // CamelCase split first (before lowercasing), then lowercase + split
+  const camelSplit = text.replace(/([a-z])([A-Z])/g, "$1 $2");
+  const raw = camelSplit.toLowerCase().split(/[^a-z0-9]+/);
   const tokens: string[] = [];
   for (const word of raw) {
-    if (word.length < 2) continue;
-    // CamelCase splitting: "commitBoost" -> ["commit", "boost"]
-    const parts = word.replace(/([a-z])([A-Z])/g, "$1 $2").split(" ");
-    for (const part of parts) {
-      const p = part.toLowerCase();
-      if (p.length >= 2 && !STOPWORDS.has(p)) {
-        tokens.push(p);
-      }
+    if (word.length >= 2 && !STOPWORDS.has(word)) {
+      tokens.push(word);
     }
   }
   return tokens;
