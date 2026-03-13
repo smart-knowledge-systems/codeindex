@@ -3,6 +3,7 @@ import { loadConfig } from "../config";
 import { embedSingle } from "../index/embedder";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
+import { serializeEmbedding } from "../db/util";
 import type { SearchOptions, SearchResult, ScoringConfig } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -88,15 +89,6 @@ interface SqliteRepoRow {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Serialize a Float32Array / number[] to a binary buffer for sqlite-vec. */
-function serializeEmbedding(embedding: number[]): Buffer {
-  const buf = Buffer.allocUnsafe(embedding.length * 4);
-  for (let i = 0; i < embedding.length; i++) {
-    buf.writeFloatLE(embedding[i], i * 4);
-  }
-  return buf;
-}
 
 function computeCommitBoost(
   links: Array<{ recency: number; similarity: number }>,

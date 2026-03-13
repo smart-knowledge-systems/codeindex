@@ -4,7 +4,8 @@ import path from "path";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
 import { pgUnsafe, closePg } from "./db/pg";
-import { closeSqlite } from "./db/sqlite";
+import { getSqlite, closeSqlite } from "./db/sqlite";
+import { serializeEmbedding } from "./db/util";
 import { walkRepo } from "./index/walker";
 import { extractSkeleton, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
@@ -76,8 +77,18 @@ async function ensureRepo(repoRoot: string): Promise<number> {
     return inserted[0].id as number;
   } else {
     await ensureSqliteSchema(repoRoot);
-    // TODO: SQLite repo upsert
-    return 1;
+    const db = await getSqlite(repoRoot);
+    const existing = db.prepare("SELECT id FROM repos WHERE root_path = ?").all(repoRoot) as {
+      id: number;
+    }[];
+    if (existing.length > 0) return existing[0].id;
+
+    const result = db
+      .prepare(
+        "INSERT INTO repos (origin_url, root_path, name, formatter_cmd) VALUES (?, ?, ?, ?) RETURNING id",
+      )
+      .get(origin, repoRoot, name, formatter) as { id: number };
+    return result.id;
   }
 }
 
@@ -119,6 +130,15 @@ async function cmdReindex(repoRoot: string) {
         skipped++;
         continue;
       }
+    } else {
+      const db = await getSqlite(repoRoot);
+      const existing = db
+        .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ? AND content_hash = ?")
+        .all(repoId, relPath, hash) as { id: number }[];
+      if (existing.length > 0) {
+        skipped++;
+        continue;
+      }
     }
 
     const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
@@ -146,6 +166,24 @@ async function cmdReindex(repoRoot: string) {
              indexed_at = now()`,
           [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
         );
+      } else {
+        const db = await getSqlite(repoRoot);
+        const row = db
+          .prepare(
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (repo_id, file_path) DO UPDATE SET
+               content_hash = excluded.content_hash,
+               skeleton = excluded.skeleton,
+               file_type = excluded.file_type,
+               indexed_at = datetime('now')
+             RETURNING id`,
+          )
+          .get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as { id: number };
+        db.prepare(
+          `INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)
+           ON CONFLICT (file_id) DO UPDATE SET embedding = excluded.embedding`,
+        ).run(row.id, serializeEmbedding(embedding));
       }
       indexed++;
     }
@@ -200,6 +238,45 @@ async function cmdReindex(repoRoot: string) {
             [fileId, commitId, rank + 1],
           );
         }
+      } else {
+        const db = await getSqlite(repoRoot);
+        const existing = db
+          .prepare("SELECT id FROM commits WHERE repo_id = ? AND commit_hash = ?")
+          .all(repoId, c.hash) as { id: number }[];
+
+        let commitId: number;
+        if (existing.length > 0) {
+          commitId = existing[0].id;
+        } else {
+          const commitEmbedding = await embedSingle(c.message);
+          const row = db
+            .prepare(
+              `INSERT INTO commits (repo_id, commit_hash, message, authored_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT (repo_id, commit_hash) DO UPDATE SET message = excluded.message
+               RETURNING id`,
+            )
+            .get(repoId, c.hash, c.message, c.date) as { id: number };
+          commitId = row.id;
+          db.prepare(
+            `INSERT INTO commit_embeddings (commit_id, embedding) VALUES (?, ?)
+             ON CONFLICT (commit_id) DO UPDATE SET embedding = excluded.embedding`,
+          ).run(commitId, serializeEmbedding(commitEmbedding));
+          commitCount++;
+        }
+
+        // Link file <-> commit
+        const fileRows = db
+          .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
+          .all(repoId, relPath) as { id: number }[];
+        if (fileRows.length > 0) {
+          const fileId = fileRows[0].id;
+          db.prepare(
+            `INSERT INTO file_commits (file_id, commit_id, recency)
+             VALUES (?, ?, ?)
+             ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = excluded.recency`,
+          ).run(fileId, commitId, rank + 1);
+        }
       }
     }
   }
@@ -239,6 +316,16 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           repoId,
           relPath,
         ]);
+      } else {
+        const db = await getSqlite(repoRoot);
+        const rows = db
+          .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
+          .all(repoId, relPath) as { id: number }[];
+        if (rows.length > 0) {
+          db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(rows[0].id);
+          db.prepare("DELETE FROM file_commits WHERE file_id = ?").run(rows[0].id);
+          db.prepare("DELETE FROM files WHERE id = ?").run(rows[0].id);
+        }
       }
       continue;
     }
@@ -247,11 +334,19 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     const ext = path.extname(relPath).toLowerCase() || ".txt";
     const { hash } = await formatAndHash(content, formatter);
 
-    const existing = await pgUnsafe(
-      "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2 AND content_hash = $3",
-      [repoId, relPath, hash],
-    );
-    if (existing.length > 0) continue;
+    if (config.store === "pg") {
+      const existing = await pgUnsafe(
+        "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2 AND content_hash = $3",
+        [repoId, relPath, hash],
+      );
+      if (existing.length > 0) continue;
+    } else {
+      const db = await getSqlite(repoRoot);
+      const existing = db
+        .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ? AND content_hash = ?")
+        .all(repoId, relPath, hash) as { id: number }[];
+      if (existing.length > 0) continue;
+    }
 
     const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
     filesToEmbed.push({ filePath: relPath, skeleton, hash, fileType: ext });
@@ -262,17 +357,37 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     for (let i = 0; i < filesToEmbed.length; i++) {
       const f = filesToEmbed[i];
       const embedding = embeddings[i];
-      await pgUnsafe(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type, embedding)
-         VALUES ($1, $2, $3, $4, $5, $6::vector)
-         ON CONFLICT (repo_id, file_path) DO UPDATE SET
-           content_hash = EXCLUDED.content_hash,
-           skeleton = EXCLUDED.skeleton,
-           file_type = EXCLUDED.file_type,
-           embedding = EXCLUDED.embedding,
-           indexed_at = now()`,
-        [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
-      );
+      if (config.store === "pg") {
+        await pgUnsafe(
+          `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type, embedding)
+           VALUES ($1, $2, $3, $4, $5, $6::vector)
+           ON CONFLICT (repo_id, file_path) DO UPDATE SET
+             content_hash = EXCLUDED.content_hash,
+             skeleton = EXCLUDED.skeleton,
+             file_type = EXCLUDED.file_type,
+             embedding = EXCLUDED.embedding,
+             indexed_at = now()`,
+          [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
+        );
+      } else {
+        const db = await getSqlite(repoRoot);
+        const row = db
+          .prepare(
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (repo_id, file_path) DO UPDATE SET
+               content_hash = excluded.content_hash,
+               skeleton = excluded.skeleton,
+               file_type = excluded.file_type,
+               indexed_at = datetime('now')
+             RETURNING id`,
+          )
+          .get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as { id: number };
+        db.prepare(
+          `INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)
+           ON CONFLICT (file_id) DO UPDATE SET embedding = excluded.embedding`,
+        ).run(row.id, serializeEmbedding(embedding));
+      }
     }
   }
 
@@ -281,32 +396,66 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     const commitMsg = await getCommitMessage(repoRoot, commitHash);
     if (commitMsg) {
       const commitEmbedding = await embedSingle(commitMsg);
-      const inserted = await pgUnsafe(
-        `INSERT INTO commits (repo_id, commit_hash, message, embedding)
-         VALUES ($1, $2, $3, $4::vector)
-         ON CONFLICT (repo_id, commit_hash) DO NOTHING
-         RETURNING id`,
-        [repoId, commitHash, commitMsg, `[${commitEmbedding.join(",")}]`],
-      );
+      if (config.store === "pg") {
+        const inserted = await pgUnsafe(
+          `INSERT INTO commits (repo_id, commit_hash, message, embedding)
+           VALUES ($1, $2, $3, $4::vector)
+           ON CONFLICT (repo_id, commit_hash) DO NOTHING
+           RETURNING id`,
+          [repoId, commitHash, commitMsg, `[${commitEmbedding.join(",")}]`],
+        );
 
-      if (inserted.length > 0) {
-        const commitId = inserted[0].id as number;
-        for (const relPath of changedFiles) {
-          const fileRows = await pgUnsafe(
-            "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
-            [repoId, relPath],
-          );
-          if (fileRows.length > 0) {
-            // Shift existing recencies
-            await pgUnsafe("UPDATE file_commits SET recency = recency + 1 WHERE file_id = $1", [
-              fileRows[0].id,
-            ]);
-            await pgUnsafe(
-              `INSERT INTO file_commits (file_id, commit_id, recency)
-               VALUES ($1, $2, 1)
-               ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = 1`,
-              [fileRows[0].id, commitId],
+        if (inserted.length > 0) {
+          const commitId = inserted[0].id as number;
+          for (const relPath of changedFiles) {
+            const fileRows = await pgUnsafe(
+              "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
+              [repoId, relPath],
             );
+            if (fileRows.length > 0) {
+              await pgUnsafe("UPDATE file_commits SET recency = recency + 1 WHERE file_id = $1", [
+                fileRows[0].id,
+              ]);
+              await pgUnsafe(
+                `INSERT INTO file_commits (file_id, commit_id, recency)
+                 VALUES ($1, $2, 1)
+                 ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = 1`,
+                [fileRows[0].id, commitId],
+              );
+            }
+          }
+        }
+      } else {
+        const db = await getSqlite(repoRoot);
+        const row = db
+          .prepare(
+            `INSERT INTO commits (repo_id, commit_hash, message)
+             VALUES (?, ?, ?)
+             ON CONFLICT (repo_id, commit_hash) DO NOTHING
+             RETURNING id`,
+          )
+          .get(repoId, commitHash, commitMsg) as { id: number } | null;
+
+        if (row) {
+          db.prepare(
+            `INSERT INTO commit_embeddings (commit_id, embedding) VALUES (?, ?)
+             ON CONFLICT (commit_id) DO UPDATE SET embedding = excluded.embedding`,
+          ).run(row.id, serializeEmbedding(commitEmbedding));
+
+          for (const relPath of changedFiles) {
+            const fileRows = db
+              .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
+              .all(repoId, relPath) as { id: number }[];
+            if (fileRows.length > 0) {
+              db.prepare("UPDATE file_commits SET recency = recency + 1 WHERE file_id = ?").run(
+                fileRows[0].id,
+              );
+              db.prepare(
+                `INSERT INTO file_commits (file_id, commit_id, recency)
+                 VALUES (?, ?, 1)
+                 ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = 1`,
+              ).run(fileRows[0].id, row.id);
+            }
           }
         }
       }
@@ -431,7 +580,38 @@ async function cmdStatus(repoRoot: string) {
     console.log(`Last indexed: ${lastIndexed[0].last ?? "never"}`);
     console.log(`Formatter: ${repos[0].formatter_cmd ?? "auto-detect"}`);
   } else {
-    console.log("SQLite status not yet implemented.");
+    const db = await getSqlite(repoRoot);
+    const repos = db.prepare("SELECT * FROM repos WHERE root_path = ?").all(repoRoot) as {
+      id: number;
+      name: string;
+      root_path: string;
+      formatter_cmd: string | null;
+    }[];
+    if (repos.length === 0) {
+      console.log("Not indexed yet. Run: codeindex reindex");
+      return;
+    }
+    const repoId = repos[0].id;
+    const fileCount = db
+      .prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?")
+      .get(repoId) as { cnt: number };
+    const dirCount = db
+      .prepare("SELECT count(*) as cnt FROM directories WHERE repo_id = ?")
+      .get(repoId) as { cnt: number };
+    const commitCount = db
+      .prepare("SELECT count(*) as cnt FROM commits WHERE repo_id = ?")
+      .get(repoId) as { cnt: number };
+    const lastIndexed = db
+      .prepare("SELECT max(indexed_at) as last FROM files WHERE repo_id = ?")
+      .get(repoId) as { last: string | null };
+
+    console.log(`Repo: ${repos[0].name} (${repos[0].root_path})`);
+    console.log(`Store: SQLite`);
+    console.log(`Files: ${fileCount.cnt}`);
+    console.log(`Directories: ${dirCount.cnt}`);
+    console.log(`Commits: ${commitCount.cnt}`);
+    console.log(`Last indexed: ${lastIndexed.last ?? "never"}`);
+    console.log(`Formatter: ${repos[0].formatter_cmd ?? "auto-detect"}`);
   }
 }
 
