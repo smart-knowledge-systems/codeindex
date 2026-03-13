@@ -24,6 +24,7 @@ import { detectDrift } from "./drift";
 import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
 import { parallelReindex } from "./index/parallel";
 import { runHealthCheck } from "./check/runner";
+import { runQualityCheck } from "./check/quality-runner";
 import { extractImports, resolveImport } from "./index/imports";
 import { discoverCrossRepoEdges } from "./index/cross-repo";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
@@ -1553,6 +1554,27 @@ async function main() {
           console.log(report.passed ? "All checks passed." : "Some checks failed.");
         }
         if (!report.passed) process.exit(1);
+
+        if (hasFlag(parsed, "quality")) {
+          const datasetPath = flag(parsed, "dataset");
+          const baselinePath = flag(parsed, "baseline");
+          const qualityReport = await runQualityCheck(repoRoot, datasetPath, baselinePath);
+          if (hasFlag(parsed, "json")) {
+            console.log(JSON.stringify(qualityReport, null, 2));
+          } else {
+            console.log("\nQuality check:");
+            console.log("─".repeat(50));
+            for (const r of qualityReport.results) {
+              const icon = r.result.passed ? "✓" : "✗";
+              console.log(`  ${icon} ${r.policy}: ${r.result.message}`);
+            }
+            console.log("─".repeat(50));
+            console.log(
+              qualityReport.passed ? "All quality checks passed." : "Quality checks failed.",
+            );
+          }
+          if (!qualityReport.passed) process.exit(1);
+        }
         break;
       }
 
