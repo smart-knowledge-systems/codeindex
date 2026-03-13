@@ -781,6 +781,22 @@ async function cmdSearch(
     // json (default)
     console.log(JSON.stringify(results, null, 2));
   }
+
+  // Zero-result diagnostics
+  if (results.length === 0) {
+    const words = query
+      .split(/\s+/)
+      .filter((w) => w.length > 2)
+      .map((w) => `"${w}"`)
+      .join(" ");
+    console.error("\nNo results found. Suggestions:");
+    console.error("  - Try broader or different search terms");
+    console.error("  - Check index status: codeindex status");
+    console.error("  - Validate environment: codeindex doctor");
+    if (words) {
+      console.error(`  - Try keyword search: rg -i ${words}`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -888,6 +904,109 @@ async function cmdStatus(repoRoot: string, showCost = false) {
       console.log(`  Total: $${totalCost.toFixed(4)}`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// manifest command
+// ---------------------------------------------------------------------------
+
+async function cmdManifest(repoRoot: string) {
+  const config = await loadConfig(repoRoot);
+
+  // --- Indexed data from DB ---
+  const dbStats = await (async () => {
+    if (config.store === "pg") {
+      const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
+      if (repos.length === 0) return null;
+      const repoId = repos[0].id;
+      const fc = await pgUnsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [repoId]);
+      const fp = (await pgUnsafe(
+        "SELECT file_path FROM files WHERE repo_id = $1 ORDER BY file_path",
+        [repoId],
+      )) as { file_path: string }[];
+      const dc = await pgUnsafe("SELECT count(*) as cnt FROM directories WHERE repo_id = $1", [
+        repoId,
+      ]);
+      const cc = await pgUnsafe("SELECT count(*) as cnt FROM commits WHERE repo_id = $1", [repoId]);
+      return {
+        fileCount: parseInt(fc[0].cnt as string),
+        filePaths: fp.map((r) => r.file_path),
+        dirCount: parseInt(dc[0].cnt as string),
+        commitCount: parseInt(cc[0].cnt as string),
+      };
+    } else {
+      const db = await getSqlite(repoRoot);
+      const repos = db.prepare("SELECT id FROM repos WHERE root_path = ?").all(repoRoot) as {
+        id: number;
+      }[];
+      if (repos.length === 0) return null;
+      const repoId = repos[0].id;
+      const fc = db.prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?").get(repoId) as {
+        cnt: number;
+      };
+      const fp = db
+        .prepare("SELECT file_path FROM files WHERE repo_id = ? ORDER BY file_path")
+        .all(repoId) as { file_path: string }[];
+      const dc = db
+        .prepare("SELECT count(*) as cnt FROM directories WHERE repo_id = ?")
+        .get(repoId) as { cnt: number };
+      const cc = db
+        .prepare("SELECT count(*) as cnt FROM commits WHERE repo_id = ?")
+        .get(repoId) as { cnt: number };
+      return {
+        fileCount: fc.cnt,
+        filePaths: fp.map((r) => r.file_path),
+        dirCount: dc.cnt,
+        commitCount: cc.cnt,
+      };
+    }
+  })();
+
+  if (!dbStats) {
+    console.log(JSON.stringify({ error: "Not indexed yet. Run: codeindex reindex" }));
+    return;
+  }
+
+  const { fileCount, filePaths, dirCount, commitCount } = dbStats;
+
+  // --- Walk repo to find skipped files and secret flags ---
+  const indexedSet = new Set(filePaths);
+  const skippedFiles: { path: string; reason: string }[] = [];
+  const secretFlags: { path: string; patterns: string[] }[] = [];
+
+  for await (const relPath of walkRepo(repoRoot)) {
+    if (indexedSet.has(relPath)) continue;
+
+    // Check if skipped due to secrets
+    const absPath = path.join(repoRoot, relPath);
+    try {
+      const content = await Bun.file(absPath).text();
+      const scan = scanForSecrets(content);
+      if (scan.hasSecrets) {
+        skippedFiles.push({ path: relPath, reason: `secrets: ${scan.patterns.join(", ")}` });
+        secretFlags.push({ path: relPath, patterns: scan.patterns });
+        continue;
+      }
+    } catch {
+      // File unreadable
+    }
+
+    skippedFiles.push({ path: relPath, reason: "not indexed (unchanged or new)" });
+  }
+
+  const manifest = {
+    repoRoot,
+    store: config.store,
+    indexed: {
+      files: { count: fileCount, paths: filePaths },
+      directories: dirCount,
+      commits: commitCount,
+    },
+    skipped: skippedFiles,
+    secretFlags,
+  };
+
+  console.log(JSON.stringify(manifest, null, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -1085,6 +1204,7 @@ Commands:
     --out <path>       Output path (default .codeindex.db)
   install-hook         Install post-commit git hook
   config               Show/set configuration
+  manifest             Audit trail: indexed files, skipped files, secret flags
   status               Show index stats
     --cost             Show token usage and cost breakdown
   doctor               Check environment and configuration
@@ -1158,6 +1278,10 @@ async function main() {
 
       case "config":
         await cmdConfig(repoRoot, process.argv.slice(3));
+        break;
+
+      case "manifest":
+        await cmdManifest(repoRoot);
         break;
 
       case "status":
