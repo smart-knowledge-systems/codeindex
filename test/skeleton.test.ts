@@ -404,6 +404,18 @@ describe("C# (.cs)", () => {
   it("extracts ILogger interface", () => {
     expect(hasEntry(entries, "ILogger", "interface")).toBeDefined();
   });
+
+  it("skeleton text includes class attribute", () => {
+    expect(text).toContain("[Serializable]");
+  });
+
+  it("skeleton text includes method attribute", () => {
+    expect(text).toContain("[Obsolete");
+  });
+
+  it("skeleton text includes property", () => {
+    expect(text).toContain("Name");
+  });
 });
 
 // ---------------------------------------------------------------------------

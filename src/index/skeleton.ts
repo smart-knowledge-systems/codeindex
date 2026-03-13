@@ -963,6 +963,21 @@ function extractCParams(params: Node): string {
 // C# extractor
 // ---------------------------------------------------------------------------
 
+function collectCsAttributes(node: Node): string[] {
+  const attrs: string[] = [];
+  // Check child attribute_list nodes (C# grammar embeds attributes as children)
+  for (const child of childrenOfType(node, "attribute_list")) {
+    attrs.push(child.text.trim());
+  }
+  // Also check previous siblings
+  let sib = node.previousNamedSibling;
+  while (sib && sib.type === "attribute_list") {
+    attrs.unshift(sib.text.trim());
+    sib = sib.previousNamedSibling;
+  }
+  return attrs;
+}
+
 function skeletonCSharp(filename: string, root: Node): string {
   const lines: string[] = [`# ${filename} [C#]`];
 
@@ -984,7 +999,9 @@ function skeletonCSharp(filename: string, root: Node): string {
         child.type === "namespace_declaration" ||
         child.type === "file_scoped_namespace_declaration"
       ) {
-        for (const ns_child of child.namedChildren) {
+        const body = child.childForFieldName("body") ?? child.childForFieldName("declaration_list");
+        const members = body ? body.namedChildren : child.namedChildren;
+        for (const ns_child of members) {
           processMember(ns_child);
         }
       } else {
@@ -999,6 +1016,9 @@ function skeletonCSharp(filename: string, root: Node): string {
       node.type === "interface_declaration" ||
       node.type === "struct_declaration"
     ) {
+      // Emit attribute_list nodes that precede the declaration
+      const attrs = collectCsAttributes(node);
+      for (const attr of attrs) lines.push(attr);
       const name = childText(node, "name");
       const keyword =
         node.type === "interface_declaration"
@@ -1007,7 +1027,7 @@ function skeletonCSharp(filename: string, root: Node): string {
             ? "struct"
             : "class";
       lines.push(`${keyword} ${name}`);
-      const body = node.childForFieldName("declaration_list");
+      const body = node.childForFieldName("body") ?? firstChildOfType(node, "declaration_list");
       if (body) {
         for (const member of body.namedChildren) {
           if (member.type === "method_declaration" || member.type === "constructor_declaration") {
@@ -1019,7 +1039,14 @@ function skeletonCSharp(filename: string, root: Node): string {
             const mods = member.childForFieldName("modifier");
             const modText = mods?.text ?? "";
             const vis = modText.includes("private") ? "-" : "+";
+            const memberAttrs = collectCsAttributes(member);
+            for (const attr of memberAttrs) lines.push(`  ${attr}`);
             lines.push(`  ${vis} ${mName}(${paramStr})${retStr}`);
+          } else if (member.type === "property_declaration") {
+            const propName = childText(member, "name");
+            const propType = member.childForFieldName("type");
+            const propTypeStr = propType ? `: ${propType.text}` : "";
+            lines.push(`  + ${propName}${propTypeStr}`);
           }
         }
       }
