@@ -70,7 +70,14 @@ async function applyPgMigrations(): Promise<number[]> {
       const statements = m.sql
         .split(";")
         .map((s) => s.trim())
-        .filter((s) => s.length > 0 && !s.startsWith("--"));
+        .map((s) =>
+          s
+            .split("\n")
+            .filter((line) => !line.trimStart().startsWith("--"))
+            .join("\n")
+            .trim(),
+        )
+        .filter((s) => s.length > 0);
 
       for (const stmt of statements) {
         await pg.unsafe(stmt);
@@ -115,7 +122,14 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
     const statements = m.sql
       .split(";")
       .map((s) => s.trim())
-      .filter((s) => s.length > 0 && !s.startsWith("--"));
+      .map((s) =>
+        s
+          .split("\n")
+          .filter((line) => !line.trimStart().startsWith("--"))
+          .join("\n")
+          .trim(),
+      )
+      .filter((s) => s.length > 0);
 
     for (const stmt of statements) {
       db.exec(stmt);
