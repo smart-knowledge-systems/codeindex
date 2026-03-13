@@ -330,16 +330,16 @@ async function searchPg(
   const bm25Scores = bm25Index ? scoreBM25(bm25Index, query) : new Map<string, number>();
   const maxBM25 = bm25Scores.size > 0 ? Math.max(...bm25Scores.values()) : 1;
 
-  // Average skeleton length for length normalization
-  let totalSkeletonLen = 0;
+  // Average skeleton token count for length normalization (approximate: chars / 4)
+  let totalTokenCount = 0;
   let skeletonCount = 0;
   for (const row of fileRows) {
     if (row.skeleton) {
-      totalSkeletonLen += row.skeleton.length;
+      totalTokenCount += row.skeleton.length / 4;
       skeletonCount++;
     }
   }
-  const avgSkeletonLen = skeletonCount > 0 ? totalSkeletonLen / skeletonCount : 1;
+  const avgTokenCount = skeletonCount > 0 ? totalTokenCount / skeletonCount : 1;
 
   // --- File results ---
   for (const row of fileRows) {
@@ -354,12 +354,10 @@ async function searchPg(
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
     const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
-    // Length normalization penalty
-    const skeletonLen = row.skeleton?.length ?? 0;
+    // Length normalization penalty (token-approximated skeleton length)
+    const tokenCount = (row.skeleton?.length ?? 0) / 4;
     const lengthPenalty =
-      skeletonLen > 0
-        ? Math.max(0, Math.log(skeletonLen / avgSkeletonLen)) * lengthPenaltyWeight
-        : 0;
+      tokenCount > 0 ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight : 0;
 
     // Semantic score with length penalty
     const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
@@ -656,17 +654,17 @@ async function searchSqlite(
     : new Map<string, number>();
   const maxBM25Sqlite = bm25ScoresSqlite.size > 0 ? Math.max(...bm25ScoresSqlite.values()) : 1;
 
-  // Average skeleton length for length normalization
-  let totalSkeletonLenSqlite = 0;
+  // Average skeleton token count for length normalization (approximate: chars / 4)
+  let totalTokenCountSqlite = 0;
   let skeletonCountSqlite = 0;
   for (const row of fileRows) {
     if (row.skeleton) {
-      totalSkeletonLenSqlite += row.skeleton.length;
+      totalTokenCountSqlite += row.skeleton.length / 4;
       skeletonCountSqlite++;
     }
   }
-  const avgSkeletonLenSqlite =
-    skeletonCountSqlite > 0 ? totalSkeletonLenSqlite / skeletonCountSqlite : 1;
+  const avgTokenCountSqlite =
+    skeletonCountSqlite > 0 ? totalTokenCountSqlite / skeletonCountSqlite : 1;
 
   // --- File results ---
   for (const row of fileRows) {
@@ -679,11 +677,11 @@ async function searchSqlite(
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
     const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
-    // Length normalization penalty
-    const skeletonLen = row.skeleton?.length ?? 0;
+    // Length normalization penalty (token-approximated skeleton length)
+    const tokenCount = (row.skeleton?.length ?? 0) / 4;
     const lengthPenalty =
-      skeletonLen > 0
-        ? Math.max(0, Math.log(skeletonLen / avgSkeletonLenSqlite)) * lengthPenaltyWeight
+      tokenCount > 0
+        ? Math.max(0, Math.log(tokenCount / avgTokenCountSqlite)) * lengthPenaltyWeight
         : 0;
 
     // Semantic score with length penalty
