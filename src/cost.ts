@@ -6,10 +6,12 @@ import { loadConfig } from "./config";
 // Pricing constants (USD per 1M tokens)
 // ---------------------------------------------------------------------------
 
-export const PRICING = {
+export const PRICING: Record<string, { input: number; output?: number }> = {
   "text-embedding-3-small": { input: 0.02 },
+  "text-embedding-3-large": { input: 0.13 },
+  "nomic-embed-text": { input: 0 }, // local model, no API cost
   haiku: { input: 0.25, output: 1.25 },
-} as const;
+};
 
 // ---------------------------------------------------------------------------
 // Module-level repo context
@@ -38,8 +40,8 @@ export async function recordCost(
   const pricing = model in PRICING ? PRICING[model as keyof typeof PRICING] : null;
   let costUsd = 0;
   if (pricing) {
-    costUsd = (tokensIn * ("input" in pricing ? pricing.input : 0)) / 1_000_000;
-    if ("output" in pricing) {
+    costUsd = (tokensIn * pricing.input) / 1_000_000;
+    if (pricing.output != null) {
       costUsd += (tokensOut * pricing.output) / 1_000_000;
     }
   }
@@ -125,7 +127,7 @@ export function getProjectedCost(
   const summaryOutputTokens = estimatedDirs * 200;
   const summaryCost =
     (summaryInputTokens * PRICING.haiku.input) / 1_000_000 +
-    (summaryOutputTokens * PRICING.haiku.output) / 1_000_000;
+    (summaryOutputTokens * (PRICING.haiku.output ?? 0)) / 1_000_000;
 
   return {
     embeddingCost,

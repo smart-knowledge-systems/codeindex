@@ -31,6 +31,27 @@ function computeMrr(returnedFiles: string[], expectedFiles: string[]): number {
   return 0;
 }
 
+function computeNdcg(returnedFiles: string[], expectedFiles: string[], k = 10): number {
+  if (expectedFiles.length === 0) return returnedFiles.length === 0 ? 1 : 0;
+
+  // DCG: sum of relevance / log2(rank + 1) for returned results
+  let dcg = 0;
+  const topK = returnedFiles.slice(0, k);
+  for (let i = 0; i < topK.length; i++) {
+    const rel = expectedFiles.includes(topK[i]) ? 1 : 0;
+    dcg += rel / Math.log2(i + 2); // log2(rank+1) where rank is 1-indexed
+  }
+
+  // Ideal DCG: all expected files ranked at the top
+  let idcg = 0;
+  const idealCount = Math.min(expectedFiles.length, k);
+  for (let i = 0; i < idealCount; i++) {
+    idcg += 1 / Math.log2(i + 2);
+  }
+
+  return idcg === 0 ? 0 : dcg / idcg;
+}
+
 // ---------------------------------------------------------------------------
 // Core eval runner (exported for ablation)
 // ---------------------------------------------------------------------------
@@ -59,6 +80,7 @@ export async function runEval(
     const precision5 = computePrecisionAt5(returnedFiles, q.expectedFiles);
     const recall = computeRecall(returnedFiles, q.expectedFiles);
     const mrr = computeMrr(returnedFiles, q.expectedFiles);
+    const ndcg = computeNdcg(returnedFiles, q.expectedFiles);
 
     results.push({
       queryId: q.id,
@@ -66,6 +88,7 @@ export async function runEval(
       precision5,
       recall,
       mrr,
+      ndcg,
       returnedFiles,
       expectedFiles: q.expectedFiles,
       scoringConfig: scoringOverrides ?? {},
@@ -89,6 +112,10 @@ function generateMarkdown(summary: EvalSummary, ripgrepSummary?: EvalSummary): s
   lines.push(`| Avg Precision@5 | ${summary.avgPrecision5.toFixed(3)} |`);
   lines.push(`| Avg Recall | ${summary.avgRecall.toFixed(3)} |`);
   lines.push(`| Avg MRR | ${summary.avgMrr.toFixed(3)} |`);
+  lines.push(`| Avg nDCG@10 | ${summary.avgNdcg.toFixed(3)} |`);
+  if (summary.model) lines.push(`| Model | ${summary.model} |`);
+  if (summary.costPer1kFiles != null)
+    lines.push(`| Cost / 1K files | $${summary.costPer1kFiles.toFixed(4)} |`);
 
   if (ripgrepSummary) {
     lines.push(`\n## Ripgrep Baseline Comparison\n`);
@@ -103,14 +130,17 @@ function generateMarkdown(summary: EvalSummary, ripgrepSummary?: EvalSummary): s
     lines.push(
       `| Avg MRR | ${summary.avgMrr.toFixed(3)} | ${ripgrepSummary.avgMrr.toFixed(3)} |`,
     );
+    lines.push(
+      `| Avg nDCG@10 | ${summary.avgNdcg.toFixed(3)} | ${ripgrepSummary.avgNdcg.toFixed(3)} |`,
+    );
   }
 
   lines.push(`\n## Per-Query Results\n`);
-  lines.push(`| Query | P@5 | Recall | MRR |`);
-  lines.push(`|-------|-----|--------|-----|`);
+  lines.push(`| Query | P@5 | Recall | MRR | nDCG |`);
+  lines.push(`|-------|-----|--------|-----|------|`);
   for (const r of summary.results) {
     lines.push(
-      `| ${r.queryId} | ${r.precision5.toFixed(2)} | ${r.recall.toFixed(2)} | ${r.mrr.toFixed(2)} |`,
+      `| ${r.queryId} | ${r.precision5.toFixed(2)} | ${r.recall.toFixed(2)} | ${r.mrr.toFixed(2)} | ${r.ndcg.toFixed(2)} |`,
     );
   }
 
@@ -156,12 +186,14 @@ async function main() {
   const avgPrecision5 = results.reduce((s, r) => s + r.precision5, 0) / results.length;
   const avgRecall = results.reduce((s, r) => s + r.recall, 0) / results.length;
   const avgMrr = results.reduce((s, r) => s + r.mrr, 0) / results.length;
+  const avgNdcg = results.reduce((s, r) => s + r.ndcg, 0) / results.length;
 
   const summary: EvalSummary = {
     configName,
     avgPrecision5,
     avgRecall,
     avgMrr,
+    avgNdcg,
     results,
     timestamp: new Date().toISOString(),
   };
@@ -180,6 +212,7 @@ async function main() {
         precision5: rg.precision5,
         recall: computeRecall(rg.returnedFiles, q.expectedFiles),
         mrr: computeMrr(rg.returnedFiles, q.expectedFiles),
+        ndcg: computeNdcg(rg.returnedFiles, q.expectedFiles),
         returnedFiles: rg.returnedFiles,
         expectedFiles: q.expectedFiles,
         scoringConfig: {},
@@ -189,12 +222,14 @@ async function main() {
     const rgAvgP5 = rgResults.reduce((s, r) => s + r.precision5, 0) / rgResults.length;
     const rgAvgRecall = rgResults.reduce((s, r) => s + r.recall, 0) / rgResults.length;
     const rgAvgMrr = rgResults.reduce((s, r) => s + r.mrr, 0) / rgResults.length;
+    const rgAvgNdcg = rgResults.reduce((s, r) => s + r.ndcg, 0) / rgResults.length;
 
     ripgrepSummary = {
       configName: "ripgrep-baseline",
       avgPrecision5: rgAvgP5,
       avgRecall: rgAvgRecall,
       avgMrr: rgAvgMrr,
+      avgNdcg: rgAvgNdcg,
       results: rgResults,
       timestamp: new Date().toISOString(),
     };
@@ -217,6 +252,7 @@ async function main() {
   console.log(`  Avg P@5:    ${avgPrecision5.toFixed(3)}`);
   console.log(`  Avg Recall: ${avgRecall.toFixed(3)}`);
   console.log(`  Avg MRR:    ${avgMrr.toFixed(3)}`);
+  console.log(`  Avg nDCG:   ${avgNdcg.toFixed(3)}`);
 }
 
 main().catch((err) => {

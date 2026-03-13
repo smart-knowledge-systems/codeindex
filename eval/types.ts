@@ -23,6 +23,7 @@ export interface EvalResult {
   precision5: number;
   recall: number;
   mrr: number;
+  ndcg: number;
   returnedFiles: string[];
   expectedFiles: string[];
   scoringConfig: Partial<ScoringConfig>;
@@ -30,9 +31,12 @@ export interface EvalResult {
 
 export interface EvalSummary {
   configName: string;
+  model?: string;
   avgPrecision5: number;
   avgRecall: number;
   avgMrr: number;
+  avgNdcg: number;
+  costPer1kFiles?: number;
   results: EvalResult[];
   timestamp: string;
 }
