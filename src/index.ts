@@ -18,6 +18,9 @@ import { search } from "./search/query";
 import { installHook } from "./hooks/post-commit";
 import { exportToSqlite } from "./db/export";
 import { setCurrentRepo } from "./cost";
+import { generateIntent } from "./intent";
+import { detectDrift } from "./drift";
+import { repoAdd, repoRemove, repoList, repoStatus, repoPurge } from "./repo";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
@@ -1018,6 +1021,55 @@ async function main() {
       case "doctor":
         await cmdDoctor(repoRoot);
         break;
+
+      case "intent":
+        await generateIntent(repoRoot, flag(parsed, "out"));
+        break;
+
+      case "drift": {
+        const agentsMdPath = flag(parsed, "agents-md") ?? "AGENTS.md";
+        const thresholdStr = flag(parsed, "threshold");
+        await detectDrift(
+          repoRoot,
+          agentsMdPath,
+          thresholdStr ? parseFloat(thresholdStr) : undefined,
+          flag(parsed, "out"),
+        );
+        break;
+      }
+
+      case "repo": {
+        const subCmd = parsed.positional[0];
+        switch (subCmd) {
+          case "add":
+            await repoAdd(repoRoot, parsed.positional[1] ?? repoRoot);
+            break;
+          case "remove":
+            if (!parsed.positional[1]) {
+              console.error("Usage: codeindex repo remove <name>");
+              process.exit(1);
+            }
+            await repoRemove(repoRoot, parsed.positional[1]);
+            break;
+          case "list":
+            await repoList(repoRoot);
+            break;
+          case "status":
+            await repoStatus(repoRoot, parsed.positional[1]);
+            break;
+          case "purge":
+            if (!parsed.positional[1]) {
+              console.error("Usage: codeindex repo purge <name> [--force]");
+              process.exit(1);
+            }
+            await repoPurge(repoRoot, parsed.positional[1], hasFlag(parsed, "force"));
+            break;
+          default:
+            console.error("Usage: codeindex repo <add|remove|list|status|purge>");
+            process.exit(1);
+        }
+        break;
+      }
 
       case "":
       case "help":
