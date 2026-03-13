@@ -1,10 +1,12 @@
 import path from "path";
 import ignore from "ignore";
 
-const ALWAYS_IGNORED = [
-  ".git/",
+// Hard-coded — cannot be overridden by .gitignore or .indexignore
+const HARD_IGNORED = [".git/", ".codeindex.db"];
+
+// Soft defaults — overridable via `!` patterns in .indexignore
+const DEFAULT_IGNORED = [
   "node_modules/",
-  ".codeindex.db",
   // Secrets / credentials
   ".env",
   ".env.*",
@@ -50,9 +52,12 @@ async function loadIgnoreFile(filePath: string): Promise<string[]> {
 }
 
 export async function* walkRepo(repoRoot: string): AsyncGenerator<string> {
-  const ig = ignore();
+  const hardIg = ignore();
+  hardIg.add(HARD_IGNORED);
 
-  ig.add(ALWAYS_IGNORED);
+  // Soft defaults → .gitignore → .indexignore (later patterns override earlier)
+  const ig = ignore();
+  ig.add(DEFAULT_IGNORED);
 
   const gitignorePatterns = await loadIgnoreFile(path.join(repoRoot, ".gitignore"));
   if (gitignorePatterns.length > 0) {
@@ -67,7 +72,7 @@ export async function* walkRepo(repoRoot: string): AsyncGenerator<string> {
   const glob = new Bun.Glob("**/*");
 
   for await (const entry of glob.scan({ cwd: repoRoot, onlyFiles: true, followSymlinks: false })) {
-    if (!ig.ignores(entry)) {
+    if (!hardIg.ignores(entry) && !ig.ignores(entry)) {
       yield entry;
     }
   }
