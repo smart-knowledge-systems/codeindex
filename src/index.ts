@@ -705,6 +705,9 @@ async function cmdSearch(
     includeSnippet?: boolean;
     json?: boolean;
     pretty?: boolean;
+    lang?: string[];
+    dir?: string[];
+    since?: string;
   },
 ) {
   const searchOpts: SearchOptions = {
@@ -713,6 +716,9 @@ async function cmdSearch(
     includeSkeleton: opts.includeSkeleton,
     includeSummary: opts.includeSummary,
     includeSnippet: opts.includeSnippet,
+    lang: opts.lang,
+    dir: opts.dir,
+    since: opts.since,
   };
 
   if (opts.scope === "all") {
@@ -1032,6 +1038,9 @@ Commands:
     --min-score <f>    Minimum score (default 0.3)
     --top-n <n>        Max results
     --scope <s>        project|all|name1,name2
+    --lang <l>         Filter by language (ts,python,rust,go,java,c,cpp,cs)
+    --dir <d>          Filter by directory prefix (src/api,lib)
+    --since <t>        Filter by time (30d, 2w, 3m, or ISO date)
     --include-skeleton Include skeleton text
     --include-summary  Include directory summaries
     --include-snippet  Include code snippets with line numbers
@@ -1089,6 +1098,8 @@ async function main() {
         }
         const minScoreStr = flag(parsed, "min-score");
         const topNStr = flag(parsed, "top-n");
+        const langRaw = flag(parsed, "lang");
+        const dirRaw = flag(parsed, "dir");
         await cmdSearch(repoRoot, query, {
           minScore: minScoreStr ? parseFloat(minScoreStr) : undefined,
           topN: topNStr ? parseInt(topNStr) : undefined,
@@ -1098,6 +1109,9 @@ async function main() {
           includeSnippet: hasFlag(parsed, "include-snippet"),
           json: !hasFlag(parsed, "pretty"),
           pretty: hasFlag(parsed, "pretty"),
+          lang: langRaw ? langRaw.split(",") : undefined,
+          dir: dirRaw ? dirRaw.split(",") : undefined,
+          since: flag(parsed, "since"),
         });
         break;
       }
