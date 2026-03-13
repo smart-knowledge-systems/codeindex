@@ -639,6 +639,7 @@ async function cmdSearch(
     scope?: string;
     includeSkeleton?: boolean;
     includeSummary?: boolean;
+    includeSnippet?: boolean;
     json?: boolean;
     pretty?: boolean;
   },
@@ -648,6 +649,7 @@ async function cmdSearch(
     topN: opts.topN,
     includeSkeleton: opts.includeSkeleton,
     includeSummary: opts.includeSummary,
+    includeSnippet: opts.includeSnippet,
   };
 
   if (opts.scope === "all") {
@@ -665,10 +667,15 @@ async function cmdSearch(
     }
     for (const r of results) {
       const prefix = r.inProject ? "" : `[${r.repoId}] `;
+      const lineInfo =
+        r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
       console.log(
-        `${prefix}${r.filePath}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
+        `${prefix}${r.filePath}${lineInfo}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
       );
-      if (r.skeleton) {
+      if (r.snippet) {
+        const preview = r.snippet.split("\n").slice(0, 10).join("\n");
+        console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
+      } else if (r.skeleton) {
         const preview = r.skeleton.split("\n").slice(0, 5).join("\n");
         console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
       }
@@ -984,6 +991,7 @@ async function main() {
           scope: flag(parsed, "scope"),
           includeSkeleton: hasFlag(parsed, "include-skeleton"),
           includeSummary: hasFlag(parsed, "include-summary"),
+          includeSnippet: hasFlag(parsed, "include-snippet"),
           json: !hasFlag(parsed, "pretty"),
           pretty: hasFlag(parsed, "pretty"),
         });
