@@ -4,7 +4,7 @@ import { embedSingle } from "../index/embedder";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
-import type { SearchOptions, SearchResult, ScoringConfig } from "./types";
+import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -208,7 +208,7 @@ async function searchPg(
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? 0.3 * dirSim : 0;
+    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
     const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
     if (finalScore >= minScore) {
@@ -390,7 +390,7 @@ async function searchSqlite(
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? 0.3 * dirSim : 0;
+    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
     const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
     if (finalScore >= minScore) {
@@ -519,7 +519,9 @@ export async function search(
   options?: SearchOptions,
 ): Promise<SearchResult[]> {
   const config = await loadConfig(repoRoot);
-  const scoring = config.scoring;
+  const scoring: ScoringConfig = options?.scoringOverrides
+    ? { ...config.scoring, ...options.scoringOverrides }
+    : config.scoring;
 
   const resolvedOptions: Required<SearchOptions> = {
     minScore: options?.minScore ?? scoring.minScore,
@@ -527,6 +529,8 @@ export async function search(
     scope: options?.scope ?? "project",
     includeSkeleton: options?.includeSkeleton ?? false,
     includeSummary: options?.includeSummary ?? false,
+    includeSnippet: options?.includeSnippet ?? false,
+    scoringOverrides: options?.scoringOverrides ?? {},
   };
 
   const queryEmbedding = await embedSingle(query);
@@ -553,10 +557,112 @@ export async function search(
 
   results.sort((a, b) => b.finalScore - a.finalScore);
 
-  if (resolvedOptions.topN > 0) {
-    return results.slice(0, resolvedOptions.topN);
+  const finalResults = resolvedOptions.topN > 0 ? results.slice(0, resolvedOptions.topN) : results;
+
+  // Post-processing: attach snippets if requested
+  if (resolvedOptions.includeSnippet) {
+    await attachSnippets(repoRoot, config, finalResults, query);
   }
-  return results;
+
+  return finalResults;
+}
+
+// ---------------------------------------------------------------------------
+// Snippet post-processing
+// ---------------------------------------------------------------------------
+
+async function attachSnippets(
+  repoRoot: string,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  results: SearchResult[],
+  query: string,
+): Promise<void> {
+  const queryWords = new Set(
+    query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 2),
+  );
+
+  for (const result of results) {
+    if (result.type === "dir" || result.type === "commit") continue;
+
+    // Load skeleton_entries from DB
+    let entriesJson: string | null = null;
+    if (config.store === "pg") {
+      const rows = await pgUnsafe(
+        "SELECT skeleton_entries FROM files WHERE repo_id IN (SELECT id FROM repos WHERE root_path = $1) AND file_path = $2",
+        [repoRoot, result.filePath],
+      );
+      if (rows.length > 0) entriesJson = rows[0].skeleton_entries as string | null;
+    } else {
+      const db = await getSqlite(repoRoot);
+      const rows = db
+        .prepare(
+          `SELECT f.skeleton_entries FROM files f
+           JOIN repos r ON r.id = f.repo_id
+           WHERE r.root_path = ? AND f.file_path = ?`,
+        )
+        .all(repoRoot, result.filePath) as { skeleton_entries: string | null }[];
+      if (rows.length > 0) entriesJson = rows[0].skeleton_entries;
+    }
+
+    if (!entriesJson) continue;
+
+    let entries: SkeletonEntry[];
+    try {
+      entries = JSON.parse(entriesJson);
+    } catch {
+      continue;
+    }
+    if (!entries || entries.length === 0) continue;
+
+    // Find best-matching entry via word-intersection score
+    let bestEntry: SkeletonEntry | null = null;
+    let bestScore = -1;
+    for (const entry of entries) {
+      const nameWords = entry.name
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 2);
+      const kindWords = entry.kind
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 2);
+      const allWords = [...nameWords, ...kindWords];
+      let score = 0;
+      for (const w of allWords) {
+        if (queryWords.has(w)) score++;
+        // Partial match bonus
+        for (const qw of queryWords) {
+          if (w.includes(qw) || qw.includes(w)) score += 0.5;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestEntry = entry;
+      }
+    }
+
+    // Fallback to first entry if no match
+    if (!bestEntry) bestEntry = entries[0];
+
+    result.lineStart = bestEntry.startLine;
+    result.lineEnd = bestEntry.endLine;
+
+    // Read source file and extract lines (cap at 20)
+    try {
+      const absPath = `${repoRoot}/${result.filePath}`;
+      const content = await Bun.file(absPath).text();
+      const lines = content.split("\n");
+      const start = bestEntry.startLine - 1; // 0-indexed
+      const maxLines = 20;
+      const end = Math.min(bestEntry.endLine, start + maxLines);
+      result.snippet = lines.slice(start, end).join("\n");
+    } catch {
+      // File might not exist on disk
+    }
+  }
 }
 
 /**

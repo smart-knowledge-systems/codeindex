@@ -8,7 +8,7 @@ import { pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
 import { walkRepo } from "./index/walker";
-import { extractSkeleton, initParser } from "./index/skeleton";
+import { extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
 import { scanForSecrets } from "./index/secrets";
 import { embed, embedSingle } from "./index/embedder";
@@ -17,6 +17,10 @@ import { buildDirectoryIndex, updateAffectedDirectories } from "./index/director
 import { search } from "./search/query";
 import { installHook } from "./hooks/post-commit";
 import { exportToSqlite } from "./db/export";
+import { setCurrentRepo } from "./cost";
+import { generateIntent } from "./intent";
+import { detectDrift } from "./drift";
+import { repoAdd, repoRemove, repoList, repoStatus, repoPurge } from "./repo";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
@@ -101,6 +105,7 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 async function cmdReindex(repoRoot: string, dryRun = false) {
   const config = await loadConfig(repoRoot);
   const repoId = await ensureRepo(repoRoot);
+  setCurrentRepo(repoId, repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   console.log(`Indexing ${repoRoot} (repo_id=${repoId}, store=${config.store})`);
@@ -113,7 +118,13 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
   let skipped = 0;
 
   // Collect all files first for batch embedding
-  const filesToEmbed: { filePath: string; skeleton: string; hash: string; fileType: string }[] = [];
+  const filesToEmbed: {
+    filePath: string;
+    skeleton: string;
+    skeletonEntries: string | null;
+    hash: string;
+    fileType: string;
+  }[] = [];
 
   for await (const relPath of walkRepo(repoRoot)) {
     allFiles.push(relPath);
@@ -152,8 +163,13 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
       }
     }
 
-    const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
-    filesToEmbed.push({ filePath: relPath, skeleton, hash, fileType: ext });
+    const { text: skeleton, entries } = await extractSkeletonWithEntries(
+      relPath,
+      content,
+      config.skeletonFallbackLines,
+    );
+    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
+    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
   }
 
   if (dryRun) {
@@ -176,15 +192,24 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
           await pgUnsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6::vector)
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
                content_hash = EXCLUDED.content_hash,
                skeleton = EXCLUDED.skeleton,
+               skeleton_entries = EXCLUDED.skeleton_entries,
                file_type = EXCLUDED.file_type,
                embedding = EXCLUDED.embedding,
                indexed_at = now()`,
-            [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
+            [
+              repoId,
+              f.filePath,
+              f.hash,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              `[${embedding.join(",")}]`,
+            ],
           );
           indexed++;
         }
@@ -196,11 +221,12 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
     } else {
       const db = await getSqlite(repoRoot);
       const insertFile = db.prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, file_path) DO UPDATE SET
            content_hash = excluded.content_hash,
            skeleton = excluded.skeleton,
+           skeleton_entries = excluded.skeleton_entries,
            file_type = excluded.file_type,
            indexed_at = datetime('now')
          RETURNING id`,
@@ -213,7 +239,14 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as {
+          const row = insertFile.get(
+            repoId,
+            f.filePath,
+            f.hash,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+          ) as {
             id: number;
           };
           deleteEmb.run(row.id);
@@ -382,6 +415,7 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
 async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string) {
   const config = await loadConfig(repoRoot);
   const repoId = await ensureRepo(repoRoot);
+  setCurrentRepo(repoId, repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   await initParser();
@@ -389,7 +423,13 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
   const changedFiles = files.length > 0 ? files : await getChangedFiles(repoRoot, commitHash);
 
   // Process changed files
-  const filesToEmbed: { filePath: string; skeleton: string; hash: string; fileType: string }[] = [];
+  const filesToEmbed: {
+    filePath: string;
+    skeleton: string;
+    skeletonEntries: string | null;
+    hash: string;
+    fileType: string;
+  }[] = [];
 
   for (const relPath of changedFiles) {
     const absPath = path.join(repoRoot, relPath);
@@ -440,8 +480,13 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
       if (existing.length > 0) continue;
     }
 
-    const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
-    filesToEmbed.push({ filePath: relPath, skeleton, hash, fileType: ext });
+    const { text: skeleton, entries } = await extractSkeletonWithEntries(
+      relPath,
+      content,
+      config.skeletonFallbackLines,
+    );
+    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
+    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
   }
 
   if (filesToEmbed.length > 0) {
@@ -454,15 +499,24 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
           await pgUnsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6::vector)
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
                content_hash = EXCLUDED.content_hash,
                skeleton = EXCLUDED.skeleton,
+               skeleton_entries = EXCLUDED.skeleton_entries,
                file_type = EXCLUDED.file_type,
                embedding = EXCLUDED.embedding,
                indexed_at = now()`,
-            [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
+            [
+              repoId,
+              f.filePath,
+              f.hash,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              `[${embedding.join(",")}]`,
+            ],
           );
         }
         await pgUnsafe("COMMIT");
@@ -473,11 +527,12 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     } else {
       const db = await getSqlite(repoRoot);
       const insertFile = db.prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, file_path) DO UPDATE SET
            content_hash = excluded.content_hash,
            skeleton = excluded.skeleton,
+           skeleton_entries = excluded.skeleton_entries,
            file_type = excluded.file_type,
            indexed_at = datetime('now')
          RETURNING id`,
@@ -490,7 +545,14 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as {
+          const row = insertFile.get(
+            repoId,
+            f.filePath,
+            f.hash,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+          ) as {
             id: number;
           };
           deleteEmb2.run(row.id);
@@ -610,6 +672,7 @@ async function cmdSearch(
     scope?: string;
     includeSkeleton?: boolean;
     includeSummary?: boolean;
+    includeSnippet?: boolean;
     json?: boolean;
     pretty?: boolean;
   },
@@ -619,6 +682,7 @@ async function cmdSearch(
     topN: opts.topN,
     includeSkeleton: opts.includeSkeleton,
     includeSummary: opts.includeSummary,
+    includeSnippet: opts.includeSnippet,
   };
 
   if (opts.scope === "all") {
@@ -636,10 +700,14 @@ async function cmdSearch(
     }
     for (const r of results) {
       const prefix = r.inProject ? "" : `[${r.repoId}] `;
+      const lineInfo = r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
       console.log(
-        `${prefix}${r.filePath}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
+        `${prefix}${r.filePath}${lineInfo}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
       );
-      if (r.skeleton) {
+      if (r.snippet) {
+        const preview = r.snippet.split("\n").slice(0, 10).join("\n");
+        console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
+      } else if (r.skeleton) {
         const preview = r.skeleton.split("\n").slice(0, 5).join("\n");
         console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
       }
@@ -667,7 +735,7 @@ async function cmdExport(repoRoot: string, outPath: string) {
 // status command
 // ---------------------------------------------------------------------------
 
-async function cmdStatus(repoRoot: string) {
+async function cmdStatus(repoRoot: string, showCost = false) {
   const config = await loadConfig(repoRoot);
 
   if (config.store === "pg") {
@@ -732,6 +800,31 @@ async function cmdStatus(repoRoot: string) {
     console.log(`Last indexed: ${lastIndexed.last ?? "never"}`);
     console.log(`Formatter: ${repos[0].formatter_cmd ?? "auto-detect"}`);
   }
+
+  // Cost tracking output
+  if (showCost) {
+    const { getCostSummary } = await import("./cost");
+    const costRows = await getCostSummary(repoRoot);
+    if (costRows.length === 0) {
+      console.log("\nCost: no cost events recorded");
+    } else {
+      console.log("\nCost breakdown:");
+      console.log("  Operation       Model                  Tokens In   Tokens Out   Cost (USD)");
+      console.log("  " + "-".repeat(75));
+      let totalCost = 0;
+      for (const row of costRows) {
+        const op = row.operation.padEnd(15);
+        const model = row.model.padEnd(22);
+        const tokIn = String(row.totalTokensIn).padStart(10);
+        const tokOut = String(row.totalTokensOut).padStart(12);
+        const cost = `$${row.totalCostUsd.toFixed(4)}`.padStart(11);
+        console.log(`  ${op} ${model} ${tokIn} ${tokOut} ${cost}`);
+        totalCost += row.totalCostUsd;
+      }
+      console.log("  " + "-".repeat(75));
+      console.log(`  Total: $${totalCost.toFixed(4)}`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +858,11 @@ async function cmdConfig(repoRoot: string, args: string[]) {
       updates.scoring = { ...((updates.scoring as object) ?? {}), gamma: parseFloat(value) };
     else if (key === "min-score")
       updates.scoring = { ...((updates.scoring as object) ?? {}), minScore: parseFloat(value) };
+    else if (key === "parent-boost-multiplier")
+      updates.scoring = {
+        ...((updates.scoring as object) ?? {}),
+        parentBoostMultiplier: parseFloat(value),
+      };
   }
 
   const localConfigPath = path.join(repoRoot, ".codeindex.json");
@@ -904,12 +1002,21 @@ Commands:
     --scope <s>        project|all|name1,name2
     --include-skeleton Include skeleton text
     --include-summary  Include directory summaries
+    --include-snippet  Include code snippets with line numbers
     --pretty           Human-readable output
+  intent               Generate AGENTS.md from directory summaries
+    --out <path>       Output path (default: stdout)
+  drift                Detect stale Intent Nodes in AGENTS.md
+    --threshold <f>    Drift threshold (default 0.3)
+    --agents-md <path> Path to AGENTS.md (default: AGENTS.md)
+    --out <path>       Output JSON path (default: stdout)
+  repo <sub>           Manage repositories (add|remove|list|status|purge)
   export               Export pg to sqlite
     --out <path>       Output path (default .codeindex.db)
   install-hook         Install post-commit git hook
   config               Show/set configuration
   status               Show index stats
+    --cost             Show token usage and cost breakdown
   doctor               Check environment and configuration
 
 Options:
@@ -950,6 +1057,7 @@ async function main() {
           scope: flag(parsed, "scope"),
           includeSkeleton: hasFlag(parsed, "include-skeleton"),
           includeSummary: hasFlag(parsed, "include-summary"),
+          includeSnippet: hasFlag(parsed, "include-snippet"),
           json: !hasFlag(parsed, "pretty"),
           pretty: hasFlag(parsed, "pretty"),
         });
@@ -970,12 +1078,61 @@ async function main() {
         break;
 
       case "status":
-        await cmdStatus(repoRoot);
+        await cmdStatus(repoRoot, hasFlag(parsed, "cost"));
         break;
 
       case "doctor":
         await cmdDoctor(repoRoot);
         break;
+
+      case "intent":
+        await generateIntent(repoRoot, flag(parsed, "out"));
+        break;
+
+      case "drift": {
+        const agentsMdPath = flag(parsed, "agents-md") ?? "AGENTS.md";
+        const thresholdStr = flag(parsed, "threshold");
+        await detectDrift(
+          repoRoot,
+          agentsMdPath,
+          thresholdStr ? parseFloat(thresholdStr) : undefined,
+          flag(parsed, "out"),
+        );
+        break;
+      }
+
+      case "repo": {
+        const subCmd = parsed.positional[0];
+        switch (subCmd) {
+          case "add":
+            await repoAdd(repoRoot, parsed.positional[1] ?? repoRoot);
+            break;
+          case "remove":
+            if (!parsed.positional[1]) {
+              console.error("Usage: codeindex repo remove <name>");
+              process.exit(1);
+            }
+            await repoRemove(repoRoot, parsed.positional[1]);
+            break;
+          case "list":
+            await repoList(repoRoot);
+            break;
+          case "status":
+            await repoStatus(repoRoot, parsed.positional[1]);
+            break;
+          case "purge":
+            if (!parsed.positional[1]) {
+              console.error("Usage: codeindex repo purge <name> [--force]");
+              process.exit(1);
+            }
+            await repoPurge(repoRoot, parsed.positional[1], hasFlag(parsed, "force"));
+            break;
+          default:
+            console.error("Usage: codeindex repo <add|remove|list|status|purge>");
+            process.exit(1);
+        }
+        break;
+      }
 
       case "":
       case "help":

@@ -18,16 +18,25 @@ export async function ensurePgSchema() {
 
   await pg.unsafe(`
     CREATE TABLE IF NOT EXISTS files (
-      id            serial PRIMARY KEY,
-      repo_id       int NOT NULL REFERENCES repos(id),
-      file_path     text NOT NULL,
-      content_hash  text NOT NULL,
-      skeleton      text,
-      file_type     text NOT NULL,
-      embedding     vector(1536),
-      indexed_at    timestamptz DEFAULT now(),
+      id                serial PRIMARY KEY,
+      repo_id           int NOT NULL REFERENCES repos(id),
+      file_path         text NOT NULL,
+      content_hash      text NOT NULL,
+      skeleton          text,
+      skeleton_entries  jsonb,
+      file_type         text NOT NULL,
+      embedding         vector(1536),
+      indexed_at        timestamptz DEFAULT now(),
       UNIQUE(repo_id, file_path)
     )
+  `);
+
+  // Add skeleton_entries column if missing (for existing databases)
+  await pg.unsafe(`
+    DO $$ BEGIN
+      ALTER TABLE files ADD COLUMN IF NOT EXISTS skeleton_entries jsonb;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
   `);
 
   await pg.unsafe(`
@@ -63,6 +72,19 @@ export async function ensurePgSchema() {
       PRIMARY KEY (file_id, commit_id)
     )
   `);
+
+  await pg.unsafe(`
+    CREATE TABLE IF NOT EXISTS cost_events (
+      id            serial PRIMARY KEY,
+      repo_id       int NOT NULL REFERENCES repos(id),
+      operation     text NOT NULL,
+      model         text NOT NULL,
+      tokens_in     int NOT NULL DEFAULT 0,
+      tokens_out    int NOT NULL DEFAULT 0,
+      cost_usd      double precision NOT NULL DEFAULT 0,
+      created_at    timestamptz DEFAULT now()
+    )
+  `);
 }
 
 export async function ensureSqliteSchema(repoRoot?: string) {
@@ -80,16 +102,24 @@ export async function ensureSqliteSchema(repoRoot?: string) {
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS files (
-      id            integer PRIMARY KEY AUTOINCREMENT,
-      repo_id       int NOT NULL REFERENCES repos(id),
-      file_path     text NOT NULL,
-      content_hash  text NOT NULL,
-      skeleton      text,
-      file_type     text NOT NULL,
-      indexed_at    text DEFAULT (datetime('now')),
+      id                integer PRIMARY KEY AUTOINCREMENT,
+      repo_id           int NOT NULL REFERENCES repos(id),
+      file_path         text NOT NULL,
+      content_hash      text NOT NULL,
+      skeleton          text,
+      skeleton_entries  text,
+      file_type         text NOT NULL,
+      indexed_at        text DEFAULT (datetime('now')),
       UNIQUE(repo_id, file_path)
     )
   `);
+
+  // Add skeleton_entries column if missing (for existing databases)
+  try {
+    db.exec(`ALTER TABLE files ADD COLUMN skeleton_entries text`);
+  } catch {
+    // Column already exists
+  }
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS file_embeddings USING vec0(
@@ -147,6 +177,19 @@ export async function ensureSqliteSchema(repoRoot?: string) {
       commit_id     int NOT NULL REFERENCES commits(id),
       recency       int NOT NULL,
       PRIMARY KEY (file_id, commit_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cost_events (
+      id            integer PRIMARY KEY AUTOINCREMENT,
+      repo_id       int NOT NULL REFERENCES repos(id),
+      operation     text NOT NULL,
+      model         text NOT NULL,
+      tokens_in     int NOT NULL DEFAULT 0,
+      tokens_out    int NOT NULL DEFAULT 0,
+      cost_usd      real NOT NULL DEFAULT 0,
+      created_at    text DEFAULT (datetime('now'))
     )
   `);
 }

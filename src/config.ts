@@ -23,6 +23,7 @@ const DEFAULTS: CodeindexConfig = {
     beta: 0.2,
     gamma: 0.1,
     minScore: 0.3,
+    parentBoostMultiplier: 0.3,
   },
   formatter: null,
   skeletonFallbackLines: 50,

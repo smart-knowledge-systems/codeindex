@@ -34,10 +34,13 @@ codeindex search "authentication middleware" --include-summary
 # Step 3: If you want to see code structure
 codeindex search "authentication middleware" --include-skeleton
 
-# Step 4: Read the actual files using the Read tool (never cat/head/tail)
+# Step 4: If you want code snippets with line numbers
+codeindex search "authentication middleware" --include-snippet
+
+# Step 5: Read the actual files using the Read tool (never cat/head/tail)
 # Example: Read("src/middleware/rateLimiter.ts")
 
-# Step 5: Follow up with Grep tool (never shell grep) for keyword search
+# Step 6: Follow up with Grep tool (never shell grep) for keyword search
 # Example: Grep("rateLimiter", path="src/middleware/")
 ```
 
@@ -48,6 +51,7 @@ codeindex search "authentication middleware" --include-skeleton
 - `--scope <s>` — `project` (default), `all` (every indexed repo), or `repo1,repo2`
 - `--include-skeleton` — Attach AST skeletons (imports, class/function signatures)
 - `--include-summary` — Attach Haiku-generated directory summaries
+- `--include-snippet` — Attach source code snippets with line numbers (best-matching entry, up to 20 lines)
 - `--pretty` — Human-readable ranked output instead of JSON
 
 ### Interpreting results
@@ -59,8 +63,37 @@ Results are JSON by default. Each result has:
 - `type` — file extension (`.ts`, `.py`), `"dir"`, or `"commit"`
 - `inProject` — `true` if from the current repo, `false` if cross-repo
 - `repoId` — which repo (only present for cross-repo results)
+- `lineStart`, `lineEnd` — source line range (when `--include-snippet` is used)
+- `snippet` — source code excerpt (when `--include-snippet` is used)
 
 A `finalScore` above 0.5 is usually a strong match. Between 0.3-0.5 is worth investigating. Below 0.3 is filtered by default.
+
+## Intent Layer
+
+Generate and monitor an AGENTS.md file that maps directory structure to purpose:
+
+```bash
+# Generate AGENTS.md from indexed directory summaries
+codeindex intent --out AGENTS.md
+
+# Detect stale summaries by comparing AGENTS.md against current DB embeddings
+codeindex drift --threshold 0.3
+
+# Drift outputs fresh/stale/missing status per directory
+codeindex drift --out drift-report.json
+```
+
+## Repo management
+
+Manage multiple indexed repositories (requires PostgreSQL for cross-repo search):
+
+```bash
+codeindex repo add /path/to/repo    # Register a repo
+codeindex repo list                  # List all registered repos
+codeindex repo status my-repo        # Show detailed repo stats
+codeindex repo remove my-repo        # Remove repo and all indexed data
+codeindex repo purge my-repo --force # Remove without confirmation prompt
+```
 
 ## Other CLI commands
 
@@ -72,6 +105,7 @@ codeindex install-hook               # Install git post-commit hook
 codeindex config                     # Show current config
 codeindex config --gamma 0.15        # Tune scoring parameters
 codeindex status                     # Index stats (file count, last indexed, etc.)
+codeindex status --cost              # Show token usage and cost breakdown
 ```
 
 ## Custom queries via code
@@ -82,11 +116,14 @@ When the CLI doesn't cover your query, write code against the codeindex database
 
 ```sql
 repos          (id, origin_url, root_path, name, formatter_cmd)
-files          (id, repo_id, file_path, content_hash, skeleton, file_type, embedding, indexed_at)
+files          (id, repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding, indexed_at)
 directories    (id, repo_id, dir_path, concat_skeleton, concat_embedding, summary, summary_embedding)
 commits        (id, repo_id, commit_hash, message, embedding, authored_at)
 file_commits   (file_id, commit_id, recency)   -- recency 1 = most recent
+cost_events    (id, repo_id, operation, model, tokens_in, tokens_out, cost_usd, created_at)
 ```
+
+`skeleton_entries` stores JSON array of `{ name, kind, startLine, endLine }` for AST-extracted code entities.
 
 Embeddings are 1536-dimensional vectors (`text-embedding-3-small`). PostgreSQL uses pgvector; SQLite uses sqlite-vec.
 
@@ -127,6 +164,7 @@ The scoring formula combines embedding similarity with commit-recency and direct
 
 ```
 finalScore = fileSim + alpha * commitBoost + beta * parentBoost
+parentBoost = parentBoostMultiplier * dirSim  (when dirSim > minScore)
 ```
 
 Directory results also get a child-to-parent boost when multiple child files score highly.
@@ -137,3 +175,4 @@ Tune via `codeindex config`:
 - `--gamma <f>` — Child-to-parent boost weight (default 0.1)
 - `--decay <f>` — Commit recency decay (default 0.2)
 - `--min-score <f>` — Global filter threshold (default 0.3)
+- `--parent-boost-multiplier <f>` — Parent boost multiplier (default 0.3)

@@ -1,5 +1,6 @@
 import path from "path";
 import { Parser, Language, type Node } from "web-tree-sitter";
+import type { SkeletonEntry } from "../search/types";
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -954,26 +955,260 @@ export async function extractSkeleton(
   content: string,
   fallbackLines = 50,
 ): Promise<string> {
+  const result = await extractSkeletonWithEntries(filePath, content, fallbackLines);
+  return result.text;
+}
+
+export interface SkeletonResult {
+  text: string;
+  entries: SkeletonEntry[];
+}
+
+/** Extract entries (name, kind, startLine, endLine) from a tree-sitter AST root. */
+function collectEntries(root: Node): SkeletonEntry[] {
+  const entries: SkeletonEntry[] = [];
+
+  function getFuncNameFromDeclarator(n: Node): string {
+    if (n.type === "function_declarator") {
+      return n.childForFieldName("declarator")?.text ?? "(anonymous)";
+    }
+    for (const child of n.namedChildren) {
+      const found = getFuncNameFromDeclarator(child);
+      if (found !== "(anonymous)") return found;
+    }
+    return "(anonymous)";
+  }
+
+  function collectMethodsFromBody(body: Node): void {
+    for (const member of body.namedChildren) {
+      if (
+        member.type === "method_definition" ||
+        member.type === "method_signature" ||
+        member.type === "method_declaration" ||
+        member.type === "constructor_declaration"
+      ) {
+        const mName = member.childForFieldName("name")?.text;
+        if (mName) {
+          entries.push({
+            name: mName,
+            kind: "method",
+            startLine: member.startPosition.row + 1,
+            endLine: member.endPosition.row + 1,
+          });
+        }
+      }
+    }
+  }
+
+  function walk(node: Node): void {
+    const startLine = node.startPosition.row + 1;
+    const endLine = node.endPosition.row + 1;
+
+    switch (node.type) {
+      // Functions: TS/JS/Go function_declaration, TS function
+      case "function_declaration":
+      case "function": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "function", startLine, endLine });
+        return;
+      }
+
+      // Python/C/C++ function_definition
+      case "function_definition": {
+        // C/C++ path: has declarator field
+        const decl = node.childForFieldName("declarator");
+        if (
+          decl &&
+          (decl.type === "function_declarator" ||
+            decl.namedChildren.some((c) => c.type === "function_declarator"))
+        ) {
+          entries.push({
+            name: getFuncNameFromDeclarator(decl),
+            kind: "function",
+            startLine,
+            endLine,
+          });
+        } else {
+          // Python path
+          const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+          const parent = node.parent;
+          const kind =
+            parent?.type === "block" && parent.parent?.type === "class_definition"
+              ? "method"
+              : "function";
+          entries.push({ name, kind, startLine, endLine });
+        }
+        return;
+      }
+
+      // Classes: TS/JS/Java/C#
+      case "class_declaration":
+      case "abstract_class_declaration":
+      case "interface_declaration":
+      case "enum_declaration":
+      case "struct_declaration": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        const kind = node.type.replace("_declaration", "").replace("abstract_", "");
+        entries.push({ name, kind, startLine, endLine });
+        const body = node.childForFieldName("body") ?? node.childForFieldName("declaration_list");
+        if (body) collectMethodsFromBody(body);
+        return;
+      }
+
+      // Python class
+      case "class_definition": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "class", startLine, endLine });
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const child of body.namedChildren) {
+            if (child.type === "function_definition") walk(child);
+          }
+        }
+        return;
+      }
+
+      // Go method
+      case "method_declaration": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "method", startLine, endLine });
+        return;
+      }
+
+      // Go type declarations
+      case "type_declaration": {
+        for (const spec of node.namedChildren) {
+          if (spec.type === "type_spec") {
+            const name = spec.childForFieldName("name")?.text ?? "(anonymous)";
+            const type_ = spec.childForFieldName("type");
+            const kind = type_?.type === "interface_type" ? "interface" : "struct";
+            entries.push({
+              name,
+              kind,
+              startLine: spec.startPosition.row + 1,
+              endLine: spec.endPosition.row + 1,
+            });
+          }
+        }
+        return;
+      }
+
+      // TS/JS export wrapper
+      case "export_statement": {
+        const decl = node.childForFieldName("declaration");
+        if (decl) walk(decl);
+        return;
+      }
+      case "lexical_declaration":
+      case "variable_declaration": {
+        for (const declarator of node.namedChildren) {
+          if (declarator.type === "variable_declarator") {
+            const val = declarator.childForFieldName("value");
+            if (val && (val.type === "arrow_function" || val.type === "function")) {
+              const name = declarator.childForFieldName("name")?.text ?? "(anonymous)";
+              entries.push({ name, kind: "function", startLine, endLine });
+            }
+          }
+        }
+        return;
+      }
+
+      // Rust
+      case "function_item": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "function", startLine, endLine });
+        return;
+      }
+      case "struct_item": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "struct", startLine, endLine });
+        return;
+      }
+      case "enum_item": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "enum", startLine, endLine });
+        return;
+      }
+      case "trait_item": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "trait", startLine, endLine });
+        return;
+      }
+      case "impl_item": {
+        const typeName = node.childForFieldName("type")?.text ?? "(anonymous)";
+        entries.push({ name: typeName, kind: "impl", startLine, endLine });
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const item of body.namedChildren) {
+            if (item.type === "function_item") walk(item);
+          }
+        }
+        return;
+      }
+
+      // C/C++ specifiers
+      case "struct_specifier":
+      case "class_specifier": {
+        const name = node.childForFieldName("name")?.text;
+        if (name) {
+          entries.push({
+            name,
+            kind: node.type === "struct_specifier" ? "struct" : "class",
+            startLine,
+            endLine,
+          });
+        }
+        return;
+      }
+      case "namespace_definition": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "namespace", startLine, endLine });
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const child of body.namedChildren) walk(child);
+        }
+        return;
+      }
+    }
+
+    // Recurse into children for nodes we didn't handle
+    for (const child of node.namedChildren) {
+      walk(child);
+    }
+  }
+
+  // Only walk top-level children, let the walk function recurse where needed
+  for (const child of root.namedChildren) {
+    walk(child);
+  }
+
+  return entries;
+}
+
+export async function extractSkeletonWithEntries(
+  filePath: string,
+  content: string,
+  fallbackLines = 50,
+): Promise<SkeletonResult> {
   const ext = path.extname(filePath).toLowerCase();
   const lang = EXT_TO_LANG[ext];
   const filename = path.basename(filePath);
 
   if (!lang) {
-    return firstNLines(content, fallbackLines);
+    return { text: firstNLines(content, fallbackLines), entries: [] };
   }
 
-  // Ensure parser is initialised
   try {
     await initParser();
   } catch {
-    return firstNLines(content, fallbackLines);
+    return { text: firstNLines(content, fallbackLines), entries: [] };
   }
 
   let language: Language;
   try {
     language = await loadLanguage(lang);
   } catch {
-    return firstNLines(content, fallbackLines);
+    return { text: firstNLines(content, fallbackLines), entries: [] };
   }
 
   let tree: ReturnType<Parser["parse"]>;
@@ -982,37 +1217,48 @@ export async function extractSkeleton(
     parser.setLanguage(language);
     tree = parser.parse(content);
   } catch {
-    return firstNLines(content, fallbackLines);
+    return { text: firstNLines(content, fallbackLines), entries: [] };
   }
 
-  if (!tree) return firstNLines(content, fallbackLines);
+  if (!tree) return { text: firstNLines(content, fallbackLines), entries: [] };
 
   try {
     const root = tree.rootNode;
+    const entries = collectEntries(root);
 
+    let text: string;
     switch (lang) {
       case "typescript":
       case "tsx":
       case "javascript":
-        return skeletonTypeScript(filename, root, lang);
+        text = skeletonTypeScript(filename, root, lang);
+        break;
       case "python":
-        return skeletonPython(filename, root);
+        text = skeletonPython(filename, root);
+        break;
       case "rust":
-        return skeletonRust(filename, root);
+        text = skeletonRust(filename, root);
+        break;
       case "go":
-        return skeletonGo(filename, root);
+        text = skeletonGo(filename, root);
+        break;
       case "java":
-        return skeletonJava(filename, root);
+        text = skeletonJava(filename, root);
+        break;
       case "c":
       case "cpp":
-        return skeletonC(filename, root, lang);
+        text = skeletonC(filename, root, lang);
+        break;
       case "c_sharp":
-        return skeletonCSharp(filename, root);
+        text = skeletonCSharp(filename, root);
+        break;
       default:
-        return firstNLines(content, fallbackLines);
+        text = firstNLines(content, fallbackLines);
     }
+
+    return { text, entries };
   } catch {
-    return firstNLines(content, fallbackLines);
+    return { text: firstNLines(content, fallbackLines), entries: [] };
   } finally {
     tree.delete();
   }
