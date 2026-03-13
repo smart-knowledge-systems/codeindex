@@ -25,6 +25,7 @@ import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from
 import { parallelReindex } from "./index/parallel";
 import { runHealthCheck } from "./check/runner";
 import { extractImports, resolveImport } from "./index/imports";
+import { discoverCrossRepoEdges } from "./index/cross-repo";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import type { SearchOptions } from "./search/types";
 
@@ -1552,6 +1553,26 @@ async function main() {
           console.log(report.passed ? "All checks passed." : "Some checks failed.");
         }
         if (!report.passed) process.exit(1);
+        break;
+      }
+
+      case "cross-repo": {
+        console.log("Discovering cross-repo relationships...");
+        const edges = await discoverCrossRepoEdges(repoRoot);
+        if (edges.length === 0) {
+          console.log("No cross-repo relationships found.");
+        } else {
+          console.log(`Found ${edges.length} cross-repo edge(s).`);
+          if (hasFlag(parsed, "json")) {
+            console.log(JSON.stringify(edges, null, 2));
+          } else {
+            for (const e of edges) {
+              console.log(
+                `  repo:${e.sourceRepoId} → repo:${e.targetRepoId}  ${e.importedModule} [${e.language}]`,
+              );
+            }
+          }
+        }
         break;
       }
 
