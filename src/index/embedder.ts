@@ -15,8 +15,11 @@ function getClient(): OpenAI {
   return client;
 }
 
+const MAX_EMBED_CHARS = 4_000; // ~8000 tokens max; code averages ~2 tokens/char
+
 function sanitize(text: string): string {
-  return text.length === 0 ? " " : text;
+  if (text.length === 0) return " ";
+  return text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
 }
 
 async function embedBatch(texts: string[], attempt = 0): Promise<number[][]> {

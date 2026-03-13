@@ -7,6 +7,7 @@
 - **GitHub account:** Run `gh auth switch --user smart-knowledge-systems` before git operations
 - **Atomic commits**: One commit per logical change
 - **Complex tasks:** Use agent teams for multi-file, cross-layer, or parallelizable work. See `~/.claude/agent-teams.md` for setup and best practices
+- **Dogfood:** Keep .claude/skills/codeindex/SKILL.md in sync with codeindex.skill.md and migrate latest schema changes to .codeindex.db
 
 ## Commands
 
