@@ -494,13 +494,18 @@ async function searchSqlite(
   const db = await getSqlite(repoRoot);
   const embBuf = serializeEmbedding(queryEmbedding);
   const repoIdList = repoIds.join(",");
-  const knnLimit = Math.max((options.topN || 50) * 3, 200);
-
   // Resolve scope filters
   const langExts =
     options.lang && options.lang.length > 0 ? resolveLangExtensions(options.lang) : null;
   const dirFilters = options.dir && options.dir.length > 0 ? options.dir : null;
   const sinceDate = options.since ? parseSince(options.since) : null;
+
+  // Increase KNN over-fetch when scope filters are active to avoid under-returning
+  const hasFilters = !!(langExts || dirFilters || sinceDate);
+  const knnLimit = Math.max(
+    (options.topN || 50) * (hasFilters ? 10 : 3),
+    hasFilters ? 500 : 200,
+  );
 
   // --- Repo info map ---
   const repoInfoRows = db
