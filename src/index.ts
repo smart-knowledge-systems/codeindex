@@ -808,31 +808,31 @@ async function cmdSearch(
   } else if (format === "pretty") {
     if (results.length === 0) {
       console.log("No results found.");
-      return;
-    }
-    const multiRepo = new Set(results.map((r) => r.repoName ?? r.repoId)).size > 1;
-    for (const r of results) {
-      const prefix = multiRepo && r.repoName ? `[${r.repoName}] ` : "";
-      const lineInfo = r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
-      console.log(
-        `${prefix}${r.filePath}${lineInfo}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
-      );
-      if (r.snippet) {
-        const preview = r.snippet.split("\n").slice(0, 10).join("\n");
-        console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
-      } else if (r.skeleton) {
-        const preview = r.skeleton.split("\n").slice(0, 5).join("\n");
-        console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
-      }
-      if (r.summary) {
-        console.log(`  ${r.summary}`);
-      }
-      if (r.explanation) {
-        const e = r.explanation;
-        console.log(`  [explain] ${e.formula}`);
+    } else {
+      const multiRepo = new Set(results.map((r) => r.repoName ?? r.repoId)).size > 1;
+      for (const r of results) {
+        const prefix = multiRepo && r.repoName ? `[${r.repoName}] ` : "";
+        const lineInfo = r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
         console.log(
-          `    cosine=${e.cosineSimilarity.toFixed(3)} commit=${e.commitBoost.toFixed(3)} parent=${e.parentBoost.toFixed(3)}${e.childBoost != null ? ` child=${e.childBoost.toFixed(3)}` : ""}${e.keywordScore != null ? ` bm25=${e.keywordScore.toFixed(3)}` : ""}${e.lengthPenalty != null ? ` lenPen=${e.lengthPenalty.toFixed(3)}` : ""}`,
+          `${prefix}${r.filePath}${lineInfo}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
         );
+        if (r.snippet) {
+          const preview = r.snippet.split("\n").slice(0, 10).join("\n");
+          console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
+        } else if (r.skeleton) {
+          const preview = r.skeleton.split("\n").slice(0, 5).join("\n");
+          console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
+        }
+        if (r.summary) {
+          console.log(`  ${r.summary}`);
+        }
+        if (r.explanation) {
+          const e = r.explanation;
+          console.log(`  [explain] ${e.formula}`);
+          console.log(
+            `    cosine=${e.cosineSimilarity.toFixed(3)} commit=${e.commitBoost.toFixed(3)} parent=${e.parentBoost.toFixed(3)}${e.childBoost != null ? ` child=${e.childBoost.toFixed(3)}` : ""}${e.keywordScore != null ? ` bm25=${e.keywordScore.toFixed(3)}` : ""}${e.lengthPenalty != null ? ` lenPen=${e.lengthPenalty.toFixed(3)}` : ""}`,
+          );
+        }
       }
     }
   } else {
