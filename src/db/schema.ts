@@ -85,6 +85,27 @@ export async function ensurePgSchema() {
       created_at    timestamptz DEFAULT now()
     )
   `);
+
+  // HNSW vector indexes for fast approximate nearest-neighbor search
+  await pg.unsafe(`
+    CREATE INDEX IF NOT EXISTS idx_files_embedding_hnsw
+      ON files USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)
+  `);
+
+  await pg.unsafe(`
+    CREATE INDEX IF NOT EXISTS idx_dirs_concat_embedding_hnsw
+      ON directories USING hnsw (concat_embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)
+  `);
+
+  await pg.unsafe(`
+    CREATE INDEX IF NOT EXISTS idx_dirs_summary_embedding_hnsw
+      ON directories USING hnsw (summary_embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)
+  `);
+
+  await pg.unsafe(`
+    CREATE INDEX IF NOT EXISTS idx_commits_embedding_hnsw
+      ON commits USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)
+  `);
 }
 
 export async function ensureSqliteSchema(repoRoot?: string) {
