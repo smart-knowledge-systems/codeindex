@@ -1185,6 +1185,60 @@ function collectEntries(root: Node): SkeletonEntry[] {
   return entries;
 }
 
+/** Extensions treated as prose/documentation — get a structured extractor instead of firstNLines. */
+const PROSE_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst"]);
+
+/**
+ * Extract a structured skeleton from a markdown/prose file.
+ * Pulls headings, list items, and paragraph openings to create a meaningful
+ * representation that embeds well for conceptual queries.
+ */
+function skeletonProse(content: string): { text: string; entries: SkeletonEntry[] } {
+  const lines = content.split("\n");
+  const parts: string[] = [];
+  const entries: SkeletonEntry[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+
+    // Headings: # Title, ## Section, etc.
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)/);
+    if (headingMatch) {
+      parts.push(line);
+      entries.push({
+        name: headingMatch[2].trim(),
+        kind: `h${headingMatch[1].length}`,
+        startLine: i + 1,
+        endLine: i + 1,
+      });
+      continue;
+    }
+
+    // List items (- item, * item, 1. item)
+    if (/^[-*]\s+/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+      parts.push(line);
+      continue;
+    }
+
+    // Non-empty lines that start a paragraph (first non-blank after blank)
+    if (trimmed.length > 0 && (i === 0 || lines[i - 1].trim() === "")) {
+      parts.push(line);
+      continue;
+    }
+
+    // Code fence labels
+    if (trimmed.startsWith("```")) {
+      parts.push(line);
+      continue;
+    }
+  }
+
+  // If the structured extraction is too sparse, use more of the original content
+  const text = parts.length >= 5 ? parts.join("\n") : content;
+  return { text, entries };
+}
+
 export async function extractSkeletonWithEntries(
   filePath: string,
   content: string,
@@ -1193,6 +1247,12 @@ export async function extractSkeletonWithEntries(
   const ext = path.extname(filePath).toLowerCase();
   const lang = EXT_TO_LANG[ext];
   const filename = path.basename(filePath);
+
+  // Prose/documentation files get a structured extractor
+  if (!lang && PROSE_EXTENSIONS.has(ext)) {
+    const { text, entries } = skeletonProse(content);
+    return { text, entries };
+  }
 
   if (!lang) {
     return { text: firstNLines(content, fallbackLines), entries: [] };
