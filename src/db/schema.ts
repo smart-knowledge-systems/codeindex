@@ -63,6 +63,19 @@ export async function ensurePgSchema() {
       PRIMARY KEY (file_id, commit_id)
     )
   `);
+
+  await pg.unsafe(`
+    CREATE TABLE IF NOT EXISTS cost_events (
+      id            serial PRIMARY KEY,
+      repo_id       int NOT NULL REFERENCES repos(id),
+      operation     text NOT NULL,
+      model         text NOT NULL,
+      tokens_in     int NOT NULL DEFAULT 0,
+      tokens_out    int NOT NULL DEFAULT 0,
+      cost_usd      double precision NOT NULL DEFAULT 0,
+      created_at    timestamptz DEFAULT now()
+    )
+  `);
 }
 
 export async function ensureSqliteSchema(repoRoot?: string) {
@@ -147,6 +160,19 @@ export async function ensureSqliteSchema(repoRoot?: string) {
       commit_id     int NOT NULL REFERENCES commits(id),
       recency       int NOT NULL,
       PRIMARY KEY (file_id, commit_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cost_events (
+      id            integer PRIMARY KEY AUTOINCREMENT,
+      repo_id       int NOT NULL REFERENCES repos(id),
+      operation     text NOT NULL,
+      model         text NOT NULL,
+      tokens_in     int NOT NULL DEFAULT 0,
+      tokens_out    int NOT NULL DEFAULT 0,
+      cost_usd      real NOT NULL DEFAULT 0,
+      created_at    text DEFAULT (datetime('now'))
     )
   `);
 }

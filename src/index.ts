@@ -17,6 +17,7 @@ import { buildDirectoryIndex, updateAffectedDirectories } from "./index/director
 import { search } from "./search/query";
 import { installHook } from "./hooks/post-commit";
 import { exportToSqlite } from "./db/export";
+import { setCurrentRepo } from "./cost";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
@@ -101,6 +102,7 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 async function cmdReindex(repoRoot: string, dryRun = false) {
   const config = await loadConfig(repoRoot);
   const repoId = await ensureRepo(repoRoot);
+  setCurrentRepo(repoId, repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   console.log(`Indexing ${repoRoot} (repo_id=${repoId}, store=${config.store})`);
@@ -382,6 +384,7 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
 async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string) {
   const config = await loadConfig(repoRoot);
   const repoId = await ensureRepo(repoRoot);
+  setCurrentRepo(repoId, repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   await initParser();

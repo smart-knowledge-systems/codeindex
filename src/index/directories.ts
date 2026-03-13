@@ -4,6 +4,7 @@ import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import { loadConfig } from "../config";
+import { recordCost } from "../cost";
 
 export async function buildDirectoryIndex(
   repoRoot: string,
@@ -215,6 +216,13 @@ async function generateSummary(
     const exitCode = await proc.exited;
 
     if (exitCode !== 0) return null;
+
+    // Estimate haiku tokens from char count (~4 chars per token)
+    const promptChars = prompt.length;
+    const outputChars = stdout.length;
+    const estimatedInputTokens = Math.ceil(promptChars / 4);
+    const estimatedOutputTokens = Math.ceil(outputChars / 4);
+    await recordCost("summarize", "haiku", estimatedInputTokens, estimatedOutputTokens);
 
     const parsed = JSON.parse(stdout);
     return parsed.summary ?? null;

@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { recordCost } from "../cost";
 
 const MODEL = "text-embedding-3-small";
 const DIMENSIONS = 1536;
@@ -25,6 +26,10 @@ async function embedBatch(texts: string[], attempt = 0): Promise<number[][]> {
       dimensions: DIMENSIONS,
       input: texts,
     });
+    // Record cost from usage
+    if (response.usage?.total_tokens) {
+      await recordCost("embed", MODEL, response.usage.total_tokens, 0);
+    }
     return response.data.sort((a, b) => a.index - b.index).map((item) => item.embedding);
   } catch (err) {
     const isRateLimit = err instanceof OpenAI.APIError && err.status === 429;
