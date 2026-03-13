@@ -542,9 +542,11 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
           .all(repoId, relPath) as { id: number }[];
         if (rows.length > 0) {
-          db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(rows[0].id);
-          db.prepare("DELETE FROM file_commits WHERE file_id = ?").run(rows[0].id);
-          db.prepare("DELETE FROM files WHERE id = ?").run(rows[0].id);
+          db.transaction(() => {
+            db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(rows[0].id);
+            db.prepare("DELETE FROM file_commits WHERE file_id = ?").run(rows[0].id);
+            db.prepare("DELETE FROM files WHERE id = ?").run(rows[0].id);
+          })();
         }
       }
       continue;
