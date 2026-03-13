@@ -2,6 +2,13 @@ import { Database } from "bun:sqlite";
 import * as sqliteVec from "sqlite-vec";
 import { loadConfig } from "../config";
 import path from "path";
+import { existsSync } from "fs";
+
+// Use Homebrew SQLite on macOS if available (supports dynamic extensions)
+const HOMEBREW_SQLITE = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
+if (process.platform === "darwin" && existsSync(HOMEBREW_SQLITE)) {
+  Database.setCustomSQLite(HOMEBREW_SQLITE);
+}
 
 let _db: Database | null = null;
 

@@ -32,8 +32,8 @@ async function cmdInit(repoRoot: string) {
     return;
   }
 
-  const gitDir = Bun.file(path.join(repoRoot, ".git"));
-  if (!(await gitDir.exists())) {
+  const gitExists = await Bun.file(path.join(repoRoot, ".git", "HEAD")).exists();
+  if (!gitExists) {
     console.error("Error: not a git repository. Run `git init` first.");
     process.exit(1);
   }
