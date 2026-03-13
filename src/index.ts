@@ -8,7 +8,7 @@ import { pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
 import { walkRepo } from "./index/walker";
-import { extractSkeleton, initParser } from "./index/skeleton";
+import { extractSkeleton, extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
 import { scanForSecrets } from "./index/secrets";
 import { embed, embedSingle } from "./index/embedder";
@@ -115,7 +115,13 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
   let skipped = 0;
 
   // Collect all files first for batch embedding
-  const filesToEmbed: { filePath: string; skeleton: string; hash: string; fileType: string }[] = [];
+  const filesToEmbed: {
+    filePath: string;
+    skeleton: string;
+    skeletonEntries: string | null;
+    hash: string;
+    fileType: string;
+  }[] = [];
 
   for await (const relPath of walkRepo(repoRoot)) {
     allFiles.push(relPath);
@@ -154,8 +160,13 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
       }
     }
 
-    const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
-    filesToEmbed.push({ filePath: relPath, skeleton, hash, fileType: ext });
+    const { text: skeleton, entries } = await extractSkeletonWithEntries(
+      relPath,
+      content,
+      config.skeletonFallbackLines,
+    );
+    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
+    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
   }
 
   if (dryRun) {
@@ -178,15 +189,16 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
           await pgUnsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6::vector)
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
                content_hash = EXCLUDED.content_hash,
                skeleton = EXCLUDED.skeleton,
+               skeleton_entries = EXCLUDED.skeleton_entries,
                file_type = EXCLUDED.file_type,
                embedding = EXCLUDED.embedding,
                indexed_at = now()`,
-            [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
+            [repoId, f.filePath, f.hash, f.skeleton, f.skeletonEntries, f.fileType, `[${embedding.join(",")}]`],
           );
           indexed++;
         }
@@ -198,11 +210,12 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
     } else {
       const db = await getSqlite(repoRoot);
       const insertFile = db.prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, file_path) DO UPDATE SET
            content_hash = excluded.content_hash,
            skeleton = excluded.skeleton,
+           skeleton_entries = excluded.skeleton_entries,
            file_type = excluded.file_type,
            indexed_at = datetime('now')
          RETURNING id`,
@@ -215,7 +228,7 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as {
+          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.skeletonEntries, f.fileType) as {
             id: number;
           };
           deleteEmb.run(row.id);
@@ -392,7 +405,13 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
   const changedFiles = files.length > 0 ? files : await getChangedFiles(repoRoot, commitHash);
 
   // Process changed files
-  const filesToEmbed: { filePath: string; skeleton: string; hash: string; fileType: string }[] = [];
+  const filesToEmbed: {
+    filePath: string;
+    skeleton: string;
+    skeletonEntries: string | null;
+    hash: string;
+    fileType: string;
+  }[] = [];
 
   for (const relPath of changedFiles) {
     const absPath = path.join(repoRoot, relPath);
@@ -443,8 +462,13 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
       if (existing.length > 0) continue;
     }
 
-    const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
-    filesToEmbed.push({ filePath: relPath, skeleton, hash, fileType: ext });
+    const { text: skeleton, entries } = await extractSkeletonWithEntries(
+      relPath,
+      content,
+      config.skeletonFallbackLines,
+    );
+    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
+    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
   }
 
   if (filesToEmbed.length > 0) {
@@ -457,15 +481,16 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
           await pgUnsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6::vector)
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
                content_hash = EXCLUDED.content_hash,
                skeleton = EXCLUDED.skeleton,
+               skeleton_entries = EXCLUDED.skeleton_entries,
                file_type = EXCLUDED.file_type,
                embedding = EXCLUDED.embedding,
                indexed_at = now()`,
-            [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
+            [repoId, f.filePath, f.hash, f.skeleton, f.skeletonEntries, f.fileType, `[${embedding.join(",")}]`],
           );
         }
         await pgUnsafe("COMMIT");
@@ -476,11 +501,12 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     } else {
       const db = await getSqlite(repoRoot);
       const insertFile = db.prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, file_path) DO UPDATE SET
            content_hash = excluded.content_hash,
            skeleton = excluded.skeleton,
+           skeleton_entries = excluded.skeleton_entries,
            file_type = excluded.file_type,
            indexed_at = datetime('now')
          RETURNING id`,
@@ -493,7 +519,7 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as {
+          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.skeletonEntries, f.fileType) as {
             id: number;
           };
           deleteEmb2.run(row.id);
