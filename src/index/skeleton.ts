@@ -755,6 +755,12 @@ function extractJavaParams(params: Node | null): string {
   return parts.join(", ");
 }
 
+function extractJavaAnnotations(node: Node): string[] {
+  return childrenOfType(node, "marker_annotation", "annotation").map((a) =>
+    a.text.split("\n")[0].trim(),
+  );
+}
+
 function extractJavaClass(node: Node): string[] {
   const lines: string[] = [];
   const name = childText(node, "name");
@@ -776,7 +782,9 @@ function extractJavaClass(node: Node): string[] {
       const mods = childrenOfType(member, "modifiers");
       const modText = mods.map((m) => m.text).join(" ");
       const vis = modText.includes("private") ? "-" : "+";
+      const annotations = mods.flatMap((m) => extractJavaAnnotations(m));
       const doc = extractJavaDoc(member);
+      for (const ann of annotations) lines.push(`  ${ann}`);
       lines.push(`  ${vis} ${mName}(${paramStr})${retStr}`);
       if (doc) lines.push(`    """${doc}"""`);
     }
@@ -806,6 +814,9 @@ function skeletonJava(filename: string, root: Node): string {
       node.type === "interface_declaration" ||
       node.type === "enum_declaration"
     ) {
+      const mods = childrenOfType(node, "modifiers");
+      const annotations = mods.flatMap((m) => extractJavaAnnotations(m));
+      for (const ann of annotations) lines.push(ann);
       lines.push(...extractJavaClass(node));
       lines.push("");
     }

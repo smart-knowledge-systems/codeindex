@@ -20,4 +20,14 @@ public class UserService {
     public List<String> getUsers() {
         return users;
     }
+
+    @Override
+    public String toString() {
+        return "UserService";
+    }
+
+    @Deprecated
+    public void removeAll() {
+        users.clear();
+    }
 }

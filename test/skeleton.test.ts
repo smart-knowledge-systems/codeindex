@@ -302,6 +302,11 @@ describe("Java (.java)", () => {
   it("extracts Repository interface", () => {
     expect(hasEntry(entries, "Repository", "interface")).toBeDefined();
   });
+
+  it("skeleton text includes method annotations", () => {
+    expect(text).toContain("@Override");
+    expect(text).toContain("@Deprecated");
+  });
 });
 
 // ---------------------------------------------------------------------------
