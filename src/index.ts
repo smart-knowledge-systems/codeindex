@@ -1240,6 +1240,18 @@ async function cmdDoctor(repoRoot: string) {
     check("claude CLI available", false, "Install claude CLI for directory summaries (optional).");
   }
 
+  // 6. Ollama check (if configured)
+  if (config && config.embedding.provider === "ollama") {
+    const { OllamaEmbeddingProvider } = await import("./index/providers/ollama");
+    const ollama = new OllamaEmbeddingProvider(
+      config.embedding.model,
+      config.embedding.dimensions,
+      config.embedding.ollamaUrl,
+    );
+    const { available, error } = await ollama.checkAvailability();
+    check("Ollama server reachable", available, error);
+  }
+
   console.log(ok ? "\nAll checks passed." : "\nSome checks failed — see above.");
 }
 
