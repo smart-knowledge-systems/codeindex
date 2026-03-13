@@ -357,6 +357,15 @@ async function searchPg(
     if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
     const commitIds = commitIdsByFileId.get(fileId);
     if (commitIds && commitIds.length > 0) result.commitIds = commitIds;
+    if (options.explain) {
+      result.explanation = {
+        cosineSimilarity: fileSim,
+        commitBoost,
+        parentBoost,
+        weights: { alpha, beta, gamma },
+        formula: `${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} = ${finalScore.toFixed(3)}`,
+      };
+    }
     results.push(result);
   }
 
@@ -390,6 +399,18 @@ async function searchPg(
     };
     if (repoId !== currentRepoId) result.repoId = row.repo_id;
     if (includeSummary && row.summary) result.summary = row.summary;
+    if (options.explain) {
+      const baseSim = Math.max(concatSim, summarySim);
+      const childBoost = finalScore - baseSim;
+      result.explanation = {
+        cosineSimilarity: baseSim,
+        commitBoost: 0,
+        parentBoost: 0,
+        childBoost,
+        weights: { alpha, beta, gamma },
+        formula: `${baseSim.toFixed(3)} + γ*childAvg = ${finalScore.toFixed(3)}`,
+      };
+    }
     results.push(result);
   }
 
@@ -615,6 +636,15 @@ async function searchSqlite(
     if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
     const commitIds = commitIdsByFileId.get(row.id);
     if (commitIds && commitIds.length > 0) result.commitIds = commitIds;
+    if (options.explain) {
+      result.explanation = {
+        cosineSimilarity: fileSim,
+        commitBoost,
+        parentBoost,
+        weights: { alpha, beta, gamma },
+        formula: `${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} = ${finalScore.toFixed(3)}`,
+      };
+    }
     results.push(result);
   }
 
@@ -647,6 +677,18 @@ async function searchSqlite(
     };
     if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
     if (includeSummary && row.summary) result.summary = row.summary;
+    if (options.explain) {
+      const baseSim = Math.max(concatSim, summarySim);
+      const childBoost = finalScore - baseSim;
+      result.explanation = {
+        cosineSimilarity: baseSim,
+        commitBoost: 0,
+        parentBoost: 0,
+        childBoost,
+        weights: { alpha, beta, gamma },
+        formula: `${baseSim.toFixed(3)} + γ*childAvg = ${finalScore.toFixed(3)}`,
+      };
+    }
     results.push(result);
   }
 
@@ -744,6 +786,7 @@ export async function search(
     lang: options?.lang ?? [],
     dir: options?.dir ?? [],
     since: options?.since ?? "",
+    explain: options?.explain ?? false,
   };
 
   const queryEmbedding = await embedSingle(query);

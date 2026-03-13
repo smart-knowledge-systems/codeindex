@@ -708,6 +708,7 @@ async function cmdSearch(
     lang?: string[];
     dir?: string[];
     since?: string;
+    explain?: boolean;
   },
 ) {
   const searchOpts: SearchOptions = {
@@ -719,6 +720,7 @@ async function cmdSearch(
     lang: opts.lang,
     dir: opts.dir,
     since: opts.since,
+    explain: opts.explain,
   };
 
   if (opts.scope === "all") {
@@ -750,6 +752,13 @@ async function cmdSearch(
       }
       if (r.summary) {
         console.log(`  ${r.summary}`);
+      }
+      if (r.explanation) {
+        const e = r.explanation;
+        console.log(`  [explain] ${e.formula}`);
+        console.log(
+          `    cosine=${e.cosineSimilarity.toFixed(3)} commit=${e.commitBoost.toFixed(3)} parent=${e.parentBoost.toFixed(3)}${e.childBoost != null ? ` child=${e.childBoost.toFixed(3)}` : ""}${e.keywordScore != null ? ` bm25=${e.keywordScore.toFixed(3)}` : ""}${e.lengthPenalty != null ? ` lenPen=${e.lengthPenalty.toFixed(3)}` : ""}`,
+        );
       }
     }
   } else {
@@ -1044,6 +1053,7 @@ Commands:
     --include-skeleton Include skeleton text
     --include-summary  Include directory summaries
     --include-snippet  Include code snippets with line numbers
+    --explain          Show per-result score breakdown
     --pretty           Human-readable output
   intent               Generate AGENTS.md from directory summaries
     --out <path>       Output path (default: stdout)
@@ -1112,6 +1122,7 @@ async function main() {
           lang: langRaw ? langRaw.split(",") : undefined,
           dir: dirRaw ? dirRaw.split(",") : undefined,
           since: flag(parsed, "since"),
+          explain: hasFlag(parsed, "explain"),
         });
         break;
       }

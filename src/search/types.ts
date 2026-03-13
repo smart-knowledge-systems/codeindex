@@ -1,3 +1,14 @@
+export interface ScoreExplanation {
+  cosineSimilarity: number;
+  commitBoost: number;
+  parentBoost: number;
+  childBoost?: number;
+  keywordScore?: number;
+  lengthPenalty?: number;
+  weights: { alpha: number; beta: number; gamma: number };
+  formula: string;
+}
+
 export interface SearchResult {
   filePath: string;
   cosineSimilarity: number;
@@ -13,6 +24,7 @@ export interface SearchResult {
   lineStart?: number;
   lineEnd?: number;
   snippet?: string;
+  explanation?: ScoreExplanation;
 }
 
 export interface SearchOptions {
@@ -26,6 +38,7 @@ export interface SearchOptions {
   lang?: string[];
   dir?: string[];
   since?: string;
+  explain?: boolean;
 }
 
 export interface SkeletonEntry {
