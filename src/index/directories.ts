@@ -1,6 +1,8 @@
 import path from "path";
 import { embedSingle } from "./embedder";
 import { pgUnsafe } from "../db/pg";
+import { getSqlite } from "../db/sqlite";
+import { serializeEmbedding } from "../db/util";
 import { loadConfig } from "../config";
 
 export async function buildDirectoryIndex(
@@ -60,14 +62,25 @@ async function processDirectory(
   }
 
   // Fetch skeletons for immediate child files from db
+  const config = await loadConfig(repoRoot);
   const skeletons: string[] = [];
   for (const fp of childFiles) {
-    const rows = await pgUnsafe(
-      "SELECT skeleton FROM files WHERE repo_id = $1 AND file_path = $2",
-      [repoId, fp],
-    );
-    if (rows.length > 0 && rows[0].skeleton) {
-      skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
+    if (config.store === "pg") {
+      const rows = await pgUnsafe(
+        "SELECT skeleton FROM files WHERE repo_id = $1 AND file_path = $2",
+        [repoId, fp],
+      );
+      if (rows.length > 0 && rows[0].skeleton) {
+        skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
+      }
+    } else {
+      const db = await getSqlite(repoRoot);
+      const rows = db
+        .prepare("SELECT skeleton FROM files WHERE repo_id = ? AND file_path = ?")
+        .all(repoId, fp) as { skeleton: string | null }[];
+      if (rows.length > 0 && rows[0].skeleton) {
+        skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
+      }
     }
   }
 
@@ -99,7 +112,6 @@ async function processDirectory(
   }
 
   // Upsert directory record
-  const config = await loadConfig();
   if (config.store === "pg") {
     await pgUnsafe(
       `INSERT INTO directories (repo_id, dir_path, concat_skeleton, concat_embedding, summary, summary_embedding)
@@ -118,6 +130,32 @@ async function processDirectory(
         summaryEmbedding ? `[${summaryEmbedding.join(",")}]` : null,
       ],
     );
+  } else {
+    const db = await getSqlite(repoRoot);
+    const row = db
+      .prepare(
+        `INSERT INTO directories (repo_id, dir_path, concat_skeleton, summary)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (repo_id, dir_path) DO UPDATE SET
+           concat_skeleton = excluded.concat_skeleton,
+           summary = excluded.summary
+         RETURNING id`,
+      )
+      .get(repoId, dirPath, concatSkeleton || null, summary) as { id: number };
+    if (concatEmbedding) {
+      db.prepare(`DELETE FROM dir_concat_embeddings WHERE dir_id = ?`).run(row.id);
+      db.prepare(`INSERT INTO dir_concat_embeddings (dir_id, embedding) VALUES (?, ?)`).run(
+        row.id,
+        serializeEmbedding(concatEmbedding),
+      );
+    }
+    if (summaryEmbedding) {
+      db.prepare(`DELETE FROM dir_summary_embeddings WHERE dir_id = ?`).run(row.id);
+      db.prepare(`INSERT INTO dir_summary_embeddings (dir_id, embedding) VALUES (?, ?)`).run(
+        row.id,
+        serializeEmbedding(summaryEmbedding),
+      );
+    }
   }
 }
 
@@ -203,8 +241,18 @@ export async function updateAffectedDirectories(
   }
 
   // Get all files for this repo to build the full picture
-  const allFiles = await pgUnsafe("SELECT file_path FROM files WHERE repo_id = $1", [repoId]);
-  const allFilePaths = allFiles.map((r: { file_path: string }) => r.file_path);
+  const config = await loadConfig(repoRoot);
+  let allFilePaths: string[];
+  if (config.store === "pg") {
+    const allFiles = await pgUnsafe("SELECT file_path FROM files WHERE repo_id = $1", [repoId]);
+    allFilePaths = allFiles.map((r: { file_path: string }) => r.file_path);
+  } else {
+    const db = await getSqlite(repoRoot);
+    const allFiles = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
+    allFilePaths = allFiles.map((r) => r.file_path);
+  }
 
   // Re-process only affected directories
   const dirs = [...affectedDirs].sort((a, b) => {
@@ -216,13 +264,25 @@ export async function updateAffectedDirectories(
   const summaryCache = new Map<string, string>();
 
   // Pre-load existing summaries for non-affected directories
-  const existingDirs = await pgUnsafe(
-    "SELECT dir_path, summary FROM directories WHERE repo_id = $1",
-    [repoId],
-  );
-  for (const d of existingDirs) {
-    if (!affectedDirs.has(d.dir_path) && d.summary) {
-      summaryCache.set(d.dir_path, d.summary);
+  if (config.store === "pg") {
+    const existingDirs = await pgUnsafe(
+      "SELECT dir_path, summary FROM directories WHERE repo_id = $1",
+      [repoId],
+    );
+    for (const d of existingDirs) {
+      if (!affectedDirs.has(d.dir_path) && d.summary) {
+        summaryCache.set(d.dir_path, d.summary);
+      }
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    const existingDirs = db
+      .prepare("SELECT dir_path, summary FROM directories WHERE repo_id = ?")
+      .all(repoId) as { dir_path: string; summary: string | null }[];
+    for (const d of existingDirs) {
+      if (!affectedDirs.has(d.dir_path) && d.summary) {
+        summaryCache.set(d.dir_path, d.summary);
+      }
     }
   }
 
