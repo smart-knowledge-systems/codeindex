@@ -1,8 +1,22 @@
+# Dependencies
 node_modules/
+
+# Build
+dist/
+
+# Environment
+.env*
+
+# codeindex database
 *.db
 .codeindex.*
-dist/
-.env*
+
+# Eval results (keep baseline, ablation, report; ignore intermediate)
+eval/results/*.json
+!eval/results/baseline.json
+!eval/results/ablation.json
+
+# Claude Code
 .claude/*
 !.claude/skills/
 .claude/skills/*
