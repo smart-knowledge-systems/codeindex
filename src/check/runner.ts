@@ -1,0 +1,63 @@
+import { loadConfig } from "../config";
+import { pgUnsafe } from "../db/pg";
+import { getSqlite } from "../db/sqlite";
+import type { HealthPolicy, PolicyContext, CheckReport } from "./types";
+import { indexFreshness } from "./policies/index-freshness";
+import { summaryCompleteness } from "./policies/summary-completeness";
+import { skeletonFailures } from "./policies/skeleton-failures";
+import { secretScanCoverage } from "./policies/secret-scan";
+
+const ALL_POLICIES: HealthPolicy[] = [
+  indexFreshness,
+  summaryCompleteness,
+  skeletonFailures,
+  secretScanCoverage,
+];
+
+async function resolveRepoId(
+  repoRoot: string,
+  store: "pg" | "sqlite",
+): Promise<{ repoId: number; repoName: string }> {
+  if (store === "pg") {
+    const rows = (await pgUnsafe("SELECT id, name FROM repos WHERE root_path = $1", [
+      repoRoot,
+    ])) as { id: string; name: string }[];
+    if (rows.length === 0) throw new Error("Repo not indexed. Run: codeindex reindex");
+    return { repoId: parseInt(rows[0].id), repoName: rows[0].name };
+  } else {
+    const db = await getSqlite(repoRoot);
+    const rows = db.prepare("SELECT id, name FROM repos WHERE root_path = ?").all(repoRoot) as {
+      id: number;
+      name: string;
+    }[];
+    if (rows.length === 0) throw new Error("Repo not indexed. Run: codeindex reindex");
+    return { repoId: rows[0].id, repoName: rows[0].name };
+  }
+}
+
+export async function runHealthCheck(repoRoot: string): Promise<CheckReport> {
+  const config = await loadConfig(repoRoot);
+  const store = config.store;
+  const { repoId, repoName } = await resolveRepoId(repoRoot, store);
+
+  const ctx: PolicyContext = { repoRoot, repoId, config, store };
+  const results: CheckReport["results"] = [];
+
+  for (const policy of ALL_POLICIES) {
+    const result = await policy.check(ctx);
+    results.push({
+      policy: policy.name,
+      severity: policy.severity,
+      result,
+    });
+  }
+
+  const hasError = results.some((r) => r.severity === "error" && !r.result.passed);
+
+  return {
+    repo: repoName,
+    passed: !hasError,
+    results,
+    timestamp: new Date().toISOString(),
+  };
+}

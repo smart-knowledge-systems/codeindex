@@ -23,6 +23,7 @@ import { generateIntent } from "./intent";
 import { detectDrift } from "./drift";
 import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
 import { parallelReindex } from "./index/parallel";
+import { runHealthCheck } from "./check/runner";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
@@ -1307,6 +1308,8 @@ Commands:
   serve                Start MCP server for AI agent integration
     --transport <t>    stdio (default) or sse
     --port <n>         Port for SSE transport (default 3100)
+  check                Run health policy checks against the index
+    --json             Output as JSON
   doctor               Check environment and configuration
 
 Options:
@@ -1444,6 +1447,24 @@ async function main() {
       case "manifest":
         await cmdManifest(repoRoot);
         break;
+
+      case "check": {
+        const report = await runHealthCheck(repoRoot);
+        if (hasFlag(parsed, "json")) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`Health check: ${report.repo}`);
+          console.log("─".repeat(50));
+          for (const r of report.results) {
+            const icon = r.result.passed ? "✓" : r.severity === "error" ? "✗" : "⚠";
+            console.log(`  ${icon} [${r.severity}] ${r.policy}: ${r.result.message}`);
+          }
+          console.log("─".repeat(50));
+          console.log(report.passed ? "All checks passed." : "Some checks failed.");
+        }
+        if (!report.passed) process.exit(1);
+        break;
+      }
 
       case "status":
         await cmdStatus(repoRoot, hasFlag(parsed, "cost"));
