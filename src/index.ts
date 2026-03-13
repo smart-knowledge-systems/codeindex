@@ -196,7 +196,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number) {
 
   // Batch embed all skeletons
   if (filesToEmbed.length > 0) {
-    console.log(`Embedding ${filesToEmbed.length} files...`);
+    process.stderr.write(`Indexing: 0/${filesToEmbed.length} files...`);
     const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
 
     if (config.store === "pg") {
@@ -226,6 +226,9 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number) {
             ],
           );
           indexed++;
+          if (indexed % 10 === 0 || indexed === filesToEmbed.length) {
+            process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
+          }
         }
         await pgUnsafe("COMMIT");
       } catch (err) {
@@ -266,9 +269,13 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number) {
           deleteEmb.run(row.id);
           insertEmb.run(row.id, serializeEmbedding(embedding));
           indexed++;
+          if (indexed % 10 === 0 || indexed === filesToEmbed.length) {
+            process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
+          }
         }
       })();
     }
+    process.stderr.write("\n");
   }
 
   console.log(`Files: ${indexed} indexed, ${skipped} skipped (unchanged)`);
@@ -703,6 +710,7 @@ async function cmdSearch(
     includeSkeleton?: boolean;
     includeSummary?: boolean;
     includeSnippet?: boolean;
+    format?: string;
     json?: boolean;
     pretty?: boolean;
     lang?: string[];
@@ -731,7 +739,15 @@ async function cmdSearch(
 
   const results = await search(repoRoot, query, searchOpts);
 
-  if (opts.pretty) {
+  // Resolve output format: --format takes precedence over --pretty/--json
+  const format = opts.format ?? (opts.pretty ? "pretty" : "json");
+
+  if (format === "compact") {
+    for (const r of results) {
+      const line = r.lineStart != null ? `:${r.lineStart}` : "";
+      console.log(`${r.filePath}${line}:${r.finalScore.toFixed(3)}`);
+    }
+  } else if (format === "pretty") {
     if (results.length === 0) {
       console.log("No results found.");
       return;
@@ -762,6 +778,7 @@ async function cmdSearch(
       }
     }
   } else {
+    // json (default)
     console.log(JSON.stringify(results, null, 2));
   }
 }
@@ -1054,7 +1071,9 @@ Commands:
     --include-summary  Include directory summaries
     --include-snippet  Include code snippets with line numbers
     --explain          Show per-result score breakdown
-    --pretty           Human-readable output
+    --format <f>       Output format: json (default), pretty, compact
+    --pretty           Alias for --format pretty
+    --json             Alias for --format json
   intent               Generate AGENTS.md from directory summaries
     --out <path>       Output path (default: stdout)
   drift                Detect stale Intent Nodes in AGENTS.md
@@ -1117,7 +1136,8 @@ async function main() {
           includeSkeleton: hasFlag(parsed, "include-skeleton"),
           includeSummary: hasFlag(parsed, "include-summary"),
           includeSnippet: hasFlag(parsed, "include-snippet"),
-          json: !hasFlag(parsed, "pretty"),
+          format: flag(parsed, "format"),
+          json: hasFlag(parsed, "json"),
           pretty: hasFlag(parsed, "pretty"),
           lang: langRaw ? langRaw.split(",") : undefined,
           dir: dirRaw ? dirRaw.split(",") : undefined,
