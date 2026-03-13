@@ -17,6 +17,44 @@ import { exportToSqlite } from "./db/export";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
+// init command
+// ---------------------------------------------------------------------------
+
+async function cmdInit(repoRoot: string) {
+  const configPath = path.join(repoRoot, ".codeindex.json");
+  const configFile = Bun.file(configPath);
+
+  if (await configFile.exists()) {
+    console.log("Already initialized.");
+    return;
+  }
+
+  const gitDir = Bun.file(path.join(repoRoot, ".git"));
+  if (!(await gitDir.exists())) {
+    console.error("Error: not a git repository. Run `git init` first.");
+    process.exit(1);
+  }
+
+  const store =
+    process.env.PGHOST || process.env.DATABASE_URL ? "pg" : ("sqlite" as "pg" | "sqlite");
+  const formatter = await detectFormatter(repoRoot);
+
+  const config: Record<string, unknown> = { store };
+  if (formatter) config.formatter = formatter;
+
+  await Bun.write(configPath, JSON.stringify(config, null, 2) + "\n");
+
+  if (store === "sqlite") {
+    await ensureSqliteSchema(repoRoot);
+    const dbName = ".codeindex.db";
+    console.log(`Initialized codeindex (store: sqlite, db: ${dbName})`);
+  } else {
+    await ensurePgSchema();
+    console.log(`Initialized codeindex (store: pg)`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -459,6 +497,10 @@ async function main() {
 
   try {
     switch (command) {
+      case "init":
+        await cmdInit(repoRoot);
+        break;
+
       case "reindex":
         await cmdReindex(repoRoot);
         break;
@@ -526,6 +568,7 @@ async function main() {
         console.log(`codeindex — semantic code search
 
 Commands:
+  init                 Initialize codeindex in current repo
   reindex              Full reindex of current repo
   update               Incremental update (called by hook)
     --files <paths>    Files to re-index
