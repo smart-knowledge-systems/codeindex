@@ -183,6 +183,9 @@ async function main() {
   let outputDir = path.join(import.meta.dir, "results");
   let useRipgrep = false;
   let configName = "baseline";
+  let datasetFile = "dataset.json";
+  let filterRepo: string | undefined;
+  let filterLang: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -198,11 +201,30 @@ async function main() {
       case "--config-name":
         configName = args[++i];
         break;
+      case "--dataset":
+        datasetFile = args[++i];
+        break;
+      case "--filter-repo":
+        filterRepo = args[++i];
+        break;
+      case "--filter-lang":
+        filterLang = args[++i];
+        break;
     }
   }
 
-  const datasetPath = path.join(import.meta.dir, "dataset.json");
-  const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+  const datasetPath = path.resolve(
+    datasetFile.startsWith("/") ? datasetFile : path.join(import.meta.dir, datasetFile),
+  );
+  let dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+
+  // Apply repo/language filters
+  if (filterRepo) {
+    dataset = dataset.filter((q) => !q.repo || q.repo === filterRepo);
+  }
+  if (filterLang) {
+    dataset = dataset.filter((q) => !q.language || q.language === filterLang);
+  }
 
   fs.mkdirSync(outputDir, { recursive: true });
 
