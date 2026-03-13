@@ -138,5 +138,54 @@
     "expectedFiles": ["src/index.ts", "src/index/embedder.ts", "src/index/skeleton.ts"],
     "description": "Cross-file query spanning the full indexing pipeline",
     "tags": ["cross-file"]
+  },
+  {
+    "id": "prose-roadmap-milestones",
+    "query": "project roadmap and milestones",
+    "expectedFiles": ["ROADMAP.md"],
+    "description": "Conceptual query that should find the project roadmap document",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-schema-versioning-plan",
+    "query": "schema versioning and migration plan",
+    "expectedFiles": ["ROADMAP.md", "src/db/schema.ts"],
+    "description": "Conceptual query spanning prose documentation and code",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-design-principles",
+    "query": "design principles and steering decisions",
+    "expectedFiles": ["STEERING.md"],
+    "description": "Conceptual query about project design philosophy",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-mcp-server-plan",
+    "query": "MCP server mode for agent integration",
+    "expectedFiles": ["ROADMAP.md"],
+    "description": "Conceptual query about planned MCP server feature",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-cost-tracking",
+    "query": "embedding cost tracking and budget controls",
+    "expectedFiles": ["src/cost.ts", "ROADMAP.md"],
+    "description": "Query spanning cost implementation and planned budget features",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-local-embeddings",
+    "query": "local embedding models and Ollama support",
+    "expectedFiles": ["ROADMAP.md"],
+    "description": "Conceptual query about planned local embedding feature",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-intent-layer",
+    "query": "intent nodes and AGENTS.md generation",
+    "expectedFiles": ["src/intent.ts", "src/drift.ts"],
+    "description": "Query about the intent layer feature",
+    "tags": ["prose"]
   }
 ]
