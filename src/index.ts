@@ -24,6 +24,7 @@ import { detectDrift } from "./drift";
 import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
 import { parallelReindex } from "./index/parallel";
 import { runHealthCheck } from "./check/runner";
+import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
@@ -1310,6 +1311,10 @@ Commands:
     --port <n>         Port for SSE transport (default 3100)
   check                Run health policy checks against the index
     --json             Output as JSON
+  token <sub>           Manage access tokens (create|list|revoke)
+    create --name --repos <id,id> [--expires <ISO>]
+    list               List all tokens
+    revoke --id <N>    Revoke a token
   doctor               Check environment and configuration
 
 Options:
@@ -1463,6 +1468,56 @@ async function main() {
           console.log(report.passed ? "All checks passed." : "Some checks failed.");
         }
         if (!report.passed) process.exit(1);
+        break;
+      }
+
+      case "token": {
+        const sub = parsed.positional[0];
+        switch (sub) {
+          case "create": {
+            const name = flag(parsed, "name");
+            const repos = flag(parsed, "repos");
+            if (!name || !repos) {
+              console.error("Usage: codeindex token create --name <name> --repos <id1,id2,...>");
+              process.exit(1);
+            }
+            const repoIds = repos.split(",").map((s) => parseInt(s.trim()));
+            const expiresAt = flag(parsed, "expires");
+            const plaintext = await createToken(repoRoot, name, repoIds, expiresAt);
+            console.log(`Token created: ${plaintext}`);
+            console.log("Store this token securely — it cannot be retrieved again.");
+            break;
+          }
+          case "list": {
+            const tokens = await listTokens(repoRoot);
+            if (tokens.length === 0) {
+              console.log("No tokens found.");
+            } else {
+              console.log(
+                `${"ID".padEnd(5)}${"Name".padEnd(20)}${"Repos".padEnd(15)}${"Revoked".padEnd(10)}Expires`,
+              );
+              for (const t of tokens) {
+                console.log(
+                  `${String(t.id).padEnd(5)}${t.name.padEnd(20)}${t.repoIds.join(",").padEnd(15)}${String(t.revoked).padEnd(10)}${t.expiresAt ?? "-"}`,
+                );
+              }
+            }
+            break;
+          }
+          case "revoke": {
+            const id = flag(parsed, "id");
+            if (!id) {
+              console.error("Usage: codeindex token revoke --id <token_id>");
+              process.exit(1);
+            }
+            await revokeToken(repoRoot, parseInt(id));
+            console.log(`Token ${id} revoked.`);
+            break;
+          }
+          default:
+            console.error("Usage: codeindex token <create|list|revoke>");
+            process.exit(1);
+        }
         break;
       }
 

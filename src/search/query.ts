@@ -6,6 +6,7 @@ import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
 import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
+import { getScopedRepoIds } from "../auth/tokens";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -885,7 +886,16 @@ export async function search(
   };
 
   const queryEmbedding = await embedSingle(query);
-  const { repoIds, currentRepoId } = await resolveRepoIds(repoRoot, resolvedOptions.scope, config);
+  const resolved = await resolveRepoIds(repoRoot, resolvedOptions.scope, config);
+  let repoIds = resolved.repoIds;
+  const currentRepoId = resolved.currentRepoId;
+
+  // Apply token-based repo scoping if CODEINDEX_TOKEN is set
+  const tokenRepoIds = await getScopedRepoIds(repoRoot);
+  if (tokenRepoIds !== null) {
+    const allowed = new Set(tokenRepoIds);
+    repoIds = repoIds.filter((id) => allowed.has(id));
+  }
 
   if (repoIds.length === 0) {
     return [];
