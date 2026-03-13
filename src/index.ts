@@ -1140,7 +1140,7 @@ async function cmdDoctor(repoRoot: string) {
   };
 
   // 1. Git repo
-  const gitExists = await Bun.file(path.join(repoRoot, ".git")).exists();
+  const gitExists = await Bun.file(path.join(repoRoot, ".git", "HEAD")).exists();
   check("Git repository", gitExists, "Run `git init` to initialize a repository.");
 
   // 2. OPENAI_API_KEY
