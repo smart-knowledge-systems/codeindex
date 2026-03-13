@@ -3,7 +3,7 @@ import { loadConfig } from "../config";
 import { ensurePgSchema } from "../db/schema";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
-import { setCurrentRepo } from "../cost";
+import { withCostContext } from "../cost";
 import { walkRepo } from "./walker";
 import { extractSkeletonWithEntries, initParser } from "./skeleton";
 import { formatAndHash } from "./formatter";
@@ -107,137 +107,141 @@ async function reindexOne(
     }
   }
 
-  setCurrentRepo(repoId, repoRoot);
   await initParser();
 
-  process.stderr.write(`${tag} Scanning files...\n`);
+  await withCostContext({ repoId, repoRoot, store: config.store }, async () => {
+    process.stderr.write(`${tag} Scanning files...\n`);
 
-  const allFiles: string[] = [];
-  let skipped = 0;
-
-  const filesToEmbed: {
-    filePath: string;
-    skeleton: string;
-    skeletonEntries: string | null;
-    hash: string;
-    fileType: string;
-  }[] = [];
-
-  for await (const relPath of walkRepo(repoRoot)) {
-    allFiles.push(relPath);
-    const absPath = path.join(repoRoot, relPath);
-    const content = await Bun.file(absPath).text();
-
-    const scan = scanForSecrets(content);
-    if (scan.hasSecrets) {
-      skipped++;
-      continue;
+    // Bulk-fetch existing file hashes to avoid N sequential DB round-trips
+    const existingHashes = new Map<string, string>();
+    if (config.store === "pg") {
+      const rows = (await pgUnsafe("SELECT file_path, content_hash FROM files WHERE repo_id = $1", [
+        repoId,
+      ])) as { file_path: string; content_hash: string }[];
+      for (const r of rows) existingHashes.set(r.file_path, r.content_hash);
+    } else {
+      const db = await getSqlite(repoRoot);
+      const rows = db
+        .prepare("SELECT file_path, content_hash FROM files WHERE repo_id = ?")
+        .all(repoId) as { file_path: string; content_hash: string }[];
+      for (const r of rows) existingHashes.set(r.file_path, r.content_hash);
     }
 
-    const ext = path.extname(relPath).toLowerCase() || ".txt";
-    const { hash } = await formatAndHash(content, formatter);
+    const allFiles: string[] = [];
+    let skipped = 0;
 
-    if (config.store === "pg") {
-      const existing = await pgUnsafe(
-        "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2 AND content_hash = $3",
-        [repoId, relPath, hash],
-      );
-      if (existing.length > 0) {
+    const filesToEmbed: {
+      filePath: string;
+      skeleton: string;
+      skeletonEntries: string | null;
+      hash: string;
+      fileType: string;
+    }[] = [];
+
+    for await (const relPath of walkRepo(repoRoot)) {
+      allFiles.push(relPath);
+      const absPath = path.join(repoRoot, relPath);
+      const content = await Bun.file(absPath).text();
+
+      const scan = scanForSecrets(content);
+      if (scan.hasSecrets) {
         skipped++;
         continue;
+      }
+
+      const ext = path.extname(relPath).toLowerCase() || ".txt";
+      const { hash } = await formatAndHash(content, formatter);
+
+      if (existingHashes.get(relPath) === hash) {
+        skipped++;
+        continue;
+      }
+
+      const { text: skeleton, entries } = await extractSkeletonWithEntries(
+        relPath,
+        content,
+        config.skeletonFallbackLines,
+      );
+      const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
+      filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
+    }
+
+    if (filesToEmbed.length === 0) {
+      process.stderr.write(`${tag} Nothing to index (${skipped} unchanged)\n`);
+      return;
+    }
+
+    process.stderr.write(`${tag} Embedding ${filesToEmbed.length} files...\n`);
+    const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
+
+    if (config.store === "pg") {
+      await pgUnsafe("BEGIN");
+      try {
+        for (let i = 0; i < filesToEmbed.length; i++) {
+          const f = filesToEmbed[i];
+          const embedding = embeddings[i];
+          await pgUnsafe(
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
+             ON CONFLICT (repo_id, file_path) DO UPDATE SET
+               content_hash = EXCLUDED.content_hash,
+               skeleton = EXCLUDED.skeleton,
+               skeleton_entries = EXCLUDED.skeleton_entries,
+               file_type = EXCLUDED.file_type,
+               embedding = EXCLUDED.embedding,
+               indexed_at = now()`,
+            [
+              repoId,
+              f.filePath,
+              f.hash,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              serializeEmbedding(embedding),
+            ],
+          );
+        }
+        await pgUnsafe("COMMIT");
+      } catch (err) {
+        await pgUnsafe("ROLLBACK");
+        throw err;
       }
     } else {
       const db = await getSqlite(repoRoot);
-      const existing = db
-        .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ? AND content_hash = ?")
-        .all(repoId, relPath, hash) as { id: number }[];
-      if (existing.length > 0) {
-        skipped++;
-        continue;
-      }
-    }
-
-    const { text: skeleton, entries } = await extractSkeletonWithEntries(
-      relPath,
-      content,
-      config.skeletonFallbackLines,
-    );
-    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
-    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
-  }
-
-  if (filesToEmbed.length === 0) {
-    process.stderr.write(`${tag} Nothing to index (${skipped} unchanged)\n`);
-    return;
-  }
-
-  process.stderr.write(`${tag} Embedding ${filesToEmbed.length} files...\n`);
-  const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
-
-  if (config.store === "pg") {
-    await pgUnsafe("BEGIN");
-    try {
-      for (let i = 0; i < filesToEmbed.length; i++) {
-        const f = filesToEmbed[i];
-        const embedding = embeddings[i];
-        await pgUnsafe(
+      const insertAll = db.transaction(() => {
+        const stmt = db.prepare(
           `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (repo_id, file_path) DO UPDATE SET
              content_hash = EXCLUDED.content_hash,
              skeleton = EXCLUDED.skeleton,
              skeleton_entries = EXCLUDED.skeleton_entries,
              file_type = EXCLUDED.file_type,
              embedding = EXCLUDED.embedding,
-             indexed_at = now()`,
-          [
+             indexed_at = datetime('now')`,
+        );
+        for (let i = 0; i < filesToEmbed.length; i++) {
+          const f = filesToEmbed[i];
+          stmt.run(
             repoId,
             f.filePath,
             f.hash,
             f.skeleton,
             f.skeletonEntries,
             f.fileType,
-            serializeEmbedding(embedding),
-          ],
-        );
-      }
-      await pgUnsafe("COMMIT");
-    } catch (err) {
-      await pgUnsafe("ROLLBACK");
-      throw err;
+            serializeEmbedding(embeddings[i]),
+          );
+        }
+      });
+      insertAll();
     }
-  } else {
-    const db = await getSqlite(repoRoot);
-    const stmt = db.prepare(
-      `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (repo_id, file_path) DO UPDATE SET
-         content_hash = EXCLUDED.content_hash,
-         skeleton = EXCLUDED.skeleton,
-         skeleton_entries = EXCLUDED.skeleton_entries,
-         file_type = EXCLUDED.file_type,
-         embedding = EXCLUDED.embedding,
-         indexed_at = datetime('now')`,
-    );
-    for (let i = 0; i < filesToEmbed.length; i++) {
-      const f = filesToEmbed[i];
-      stmt.run(
-        repoId,
-        f.filePath,
-        f.hash,
-        f.skeleton,
-        f.skeletonEntries,
-        f.fileType,
-        serializeEmbedding(embeddings[i]),
-      );
-    }
-  }
 
-  // Build directory index
-  process.stderr.write(`${tag} Building directory index...\n`);
-  await buildDirectoryIndex(repoRoot, repoId, allFiles);
+    // Build directory index
+    process.stderr.write(`${tag} Building directory index...\n`);
+    await buildDirectoryIndex(repoRoot, repoId, allFiles);
 
-  process.stderr.write(`${tag} Done: ${filesToEmbed.length} indexed, ${skipped} unchanged\n`);
+    process.stderr.write(`${tag} Done: ${filesToEmbed.length} indexed, ${skipped} unchanged\n`);
+  });
 }
 
 // ---------------------------------------------------------------------------

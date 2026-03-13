@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pgUnsafe } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
 import { loadConfig } from "./config";
@@ -14,18 +15,36 @@ export const PRICING: Record<string, { input: number; output?: number }> = {
 };
 
 // ---------------------------------------------------------------------------
-// Module-level repo context
+// Async-scoped repo context (safe for concurrent workers)
 // ---------------------------------------------------------------------------
 
-let currentRepoId: number | null = null;
-let currentRepoRoot: string | null = null;
-let currentStore: "pg" | "sqlite" | null = null;
-
-export function setCurrentRepo(repoId: number, repoRoot: string, store?: "pg" | "sqlite"): void {
-  currentRepoId = repoId;
-  currentRepoRoot = repoRoot;
-  if (store) currentStore = store;
+interface CostContext {
+  repoId: number;
+  repoRoot: string;
+  store?: "pg" | "sqlite";
 }
+
+const costStorage = new AsyncLocalStorage<CostContext>();
+
+/**
+ * Run `fn` with a scoped cost context. All `recordCost` calls within `fn`
+ * (including across awaits) will use this context, without racing with
+ * other concurrent workers.
+ */
+export function withCostContext<T>(ctx: CostContext, fn: () => T | Promise<T>): T | Promise<T> {
+  return costStorage.run(ctx, fn);
+}
+
+/** @deprecated Use `withCostContext` instead — kept for single-worker compat. */
+export function setCurrentRepo(repoId: number, repoRoot: string, store?: "pg" | "sqlite"): void {
+  // no-op when running inside withCostContext; falls back to legacy for
+  // callers that haven't migrated yet.
+  if (!costStorage.getStore()) {
+    _legacyCtx = { repoId, repoRoot, store };
+  }
+}
+
+let _legacyCtx: CostContext | null = null;
 
 // ---------------------------------------------------------------------------
 // Record a cost event
@@ -37,7 +56,10 @@ export async function recordCost(
   tokensIn: number,
   tokensOut: number,
 ): Promise<void> {
-  if (currentRepoId == null || currentRepoRoot == null) return;
+  const ctx = costStorage.getStore() ?? _legacyCtx;
+  if (!ctx) return;
+
+  const { repoId, repoRoot, store: ctxStore } = ctx;
 
   const pricing = model in PRICING ? PRICING[model as keyof typeof PRICING] : null;
   let costUsd = 0;
@@ -48,19 +70,19 @@ export async function recordCost(
     }
   }
 
-  const store = currentStore ?? (await loadConfig(currentRepoRoot)).store;
+  const store = ctxStore ?? (await loadConfig(repoRoot)).store;
   if (store === "pg") {
     await pgUnsafe(
       `INSERT INTO cost_events (repo_id, operation, model, tokens_in, tokens_out, cost_usd)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [currentRepoId, operation, model, tokensIn, tokensOut, costUsd],
+      [repoId, operation, model, tokensIn, tokensOut, costUsd],
     );
   } else {
-    const db = await getSqlite(currentRepoRoot);
+    const db = await getSqlite(repoRoot);
     db.prepare(
       `INSERT INTO cost_events (repo_id, operation, model, tokens_in, tokens_out, cost_usd)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(currentRepoId, operation, model, tokensIn, tokensOut, costUsd);
+    ).run(repoId, operation, model, tokensIn, tokensOut, costUsd);
   }
 }
 

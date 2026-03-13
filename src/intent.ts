@@ -112,7 +112,7 @@ async function intentSqlite(repoRoot: string): Promise<{ dirs: DirRow[]; files: 
   return { dirs, files };
 }
 
-export async function generateIntent(repoRoot: string, outPath?: string): Promise<void> {
+export async function generateIntent(repoRoot: string, outPath?: string): Promise<string> {
   const config = await loadConfig(repoRoot);
 
   let dirs: DirRow[];
@@ -166,4 +166,6 @@ export async function generateIntent(repoRoot: string, outPath?: string): Promis
   } else {
     process.stdout.write(output);
   }
+
+  return output;
 }

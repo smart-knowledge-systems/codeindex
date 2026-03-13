@@ -118,7 +118,6 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
   for (const m of migrations) {
     if (m.version <= currentVersion) continue;
 
-    // SQLite doesn't support DDL in transactions fully, but we try
     const statements = m.sql
       .split(";")
       .map((s) => s.trim())
@@ -131,13 +130,18 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
       )
       .filter((s) => s.length > 0);
 
-    for (const stmt of statements) {
-      db.exec(stmt);
+    db.exec("BEGIN");
+    try {
+      for (const stmt of statements) {
+        db.exec(stmt);
+      }
+      db.exec(`PRAGMA user_version = ${m.version}`);
+      db.exec("COMMIT");
+      applied.push(m.version);
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
     }
-
-    // Set PRAGMA user_version
-    db.exec(`PRAGMA user_version = ${m.version}`);
-    applied.push(m.version);
   }
 
   return applied;
