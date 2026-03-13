@@ -249,23 +249,10 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
     },
     async ({ repoPath }) => {
       const repoRoot = repoPath ?? defaultRepoRoot;
-
-      // Capture stdout to return as result
-      const chunks: string[] = [];
-      const origWrite = process.stdout.write;
-      process.stdout.write = (chunk: string | Uint8Array) => {
-        chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
-        return true;
-      };
-
-      try {
-        await generateIntent(repoRoot);
-      } finally {
-        process.stdout.write = origWrite;
-      }
+      const markdown = await generateIntent(repoRoot);
 
       return {
-        content: [{ type: "text" as const, text: chunks.join("") }],
+        content: [{ type: "text" as const, text: markdown }],
       };
     },
   );
