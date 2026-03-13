@@ -925,6 +925,54 @@ function skeletonC(filename: string, root: Node, lang: SupportedLanguage): strin
         }
         break;
       }
+      case "template_declaration": {
+        // C++ template: extract the template parameters, then process the inner declaration
+        const params = node.childForFieldName("parameters");
+        const paramStr = params ? params.text : "";
+        // Find the inner declaration (class, function, struct)
+        for (const child of node.namedChildren) {
+          if (child.type === "function_definition" || child.type === "declaration") {
+            const fnText = extractCFunctionSignature(child);
+            if (fnText) {
+              lines.push(`${indent}template${paramStr}`);
+              lines.push(`${indent}function ${fnText}`);
+              lines.push("");
+            }
+          } else if (child.type === "class_specifier" || child.type === "struct_specifier") {
+            const name = child.childForFieldName("name");
+            if (name) {
+              const kw = child.type === "class_specifier" ? "class" : "struct";
+              lines.push(`${indent}template${paramStr}`);
+              lines.push(`${indent}${kw} ${name.text}`);
+              lines.push("");
+            }
+          }
+        }
+        break;
+      }
+      case "type_definition": {
+        // C typedef
+        const declarator = node.childForFieldName("declarator");
+        const type = node.childForFieldName("type");
+        if (declarator) {
+          const name = declarator.text;
+          // For struct/union typedefs, just emit the kind rather than the full body
+          if (
+            type &&
+            (type.type === "struct_specifier" ||
+              type.type === "union_specifier" ||
+              type.type === "enum_specifier")
+          ) {
+            const kw = type.type.replace("_specifier", "");
+            lines.push(`${indent}typedef ${kw} ${name}`);
+          } else {
+            const typeStr = type ? type.text : "";
+            lines.push(`${indent}typedef ${typeStr} ${name}`);
+          }
+          lines.push("");
+        }
+        break;
+      }
     }
   }
 
@@ -1323,6 +1371,20 @@ function collectEntries(root: Node): SkeletonEntry[] {
         const body = node.childForFieldName("body");
         if (body) {
           for (const child of body.namedChildren) walk(child);
+        }
+        return;
+      }
+      case "template_declaration": {
+        // Walk into the inner declaration
+        for (const child of node.namedChildren) {
+          if (child !== node.childForFieldName("parameters")) walk(child);
+        }
+        return;
+      }
+      case "type_definition": {
+        const declarator = node.childForFieldName("declarator");
+        if (declarator) {
+          entries.push({ name: declarator.text, kind: "typedef", startLine, endLine });
         }
         return;
       }

@@ -12,7 +12,7 @@ import { walkRepo } from "./index/walker";
 import { extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
 import { scanForSecrets } from "./index/secrets";
-import { embed, embedSingle } from "./index/embedder";
+import { embed, embedSingle, getProvider } from "./index/embedder";
 import { getRepoOrigin, getRepoName, getFileCommits, getChangedFiles } from "./index/commits";
 import { buildDirectoryIndex, updateAffectedDirectories } from "./index/directories";
 import { search } from "./search/query";
@@ -104,13 +104,69 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 // reindex command
 // ---------------------------------------------------------------------------
 
-async function cmdReindex(repoRoot: string, dryRun = false, budget?: number) {
+async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, force = false) {
   const config = await loadConfig(repoRoot);
   if (budget != null) {
     config.costCap = { ...config.costCap, maxCostPerReindex: budget };
   }
+
+  // Initialize embedding provider from config
+  getProvider(config);
+
   const repoId = await ensureRepo(repoRoot);
   setCurrentRepo(repoId, repoRoot);
+
+  // Check for embedding provider mismatch
+  const currentProvider = config.embedding.provider ?? "openai";
+  let existingProvider: string | null = null;
+  if (config.store === "pg") {
+    try {
+      const rows = await pgUnsafe("SELECT embedding_provider FROM repos WHERE id = $1", [repoId]);
+      if (rows.length > 0) existingProvider = rows[0].embedding_provider as string | null;
+    } catch {
+      /* column may not exist yet */
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    try {
+      const row = db.prepare("SELECT embedding_provider FROM repos WHERE id = ?").get(repoId) as {
+        embedding_provider: string | null;
+      } | null;
+      if (row) existingProvider = row.embedding_provider;
+    } catch {
+      /* column may not exist yet */
+    }
+  }
+
+  if (existingProvider && existingProvider !== currentProvider && !force) {
+    console.error(
+      `Error: Embedding provider changed from "${existingProvider}" to "${currentProvider}".`,
+    );
+    console.error("All existing embeddings must be regenerated. Use --force to proceed.");
+    process.exit(1);
+  }
+
+  // Update repo with current embedding metadata
+  if (config.store === "pg") {
+    try {
+      await pgUnsafe(
+        "UPDATE repos SET embedding_provider = $1, embedding_dimensions = $2 WHERE id = $3",
+        [currentProvider, config.embedding.dimensions, repoId],
+      );
+    } catch {
+      /* column may not exist yet */
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    try {
+      db.prepare(
+        "UPDATE repos SET embedding_provider = ?, embedding_dimensions = ? WHERE id = ?",
+      ).run(currentProvider, config.embedding.dimensions, repoId);
+    } catch {
+      /* column may not exist yet */
+    }
+  }
+
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   console.log(`Indexing ${repoRoot} (repo_id=${repoId}, store=${config.store})`);
@@ -1311,6 +1367,7 @@ async function main() {
             repoRoot,
             hasFlag(parsed, "dry-run"),
             budgetStr ? parseFloat(budgetStr) : undefined,
+            hasFlag(parsed, "force"),
           );
         }
         break;
