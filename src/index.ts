@@ -1198,6 +1198,8 @@ Commands:
   reindex              Full reindex of current repo
     --dry-run          Report what would change and projected cost
     --budget <usd>     Set cost cap for this reindex (USD)
+    --scope all        Reindex all registered repos in parallel
+    --workers <n>      Number of parallel workers (default 3, with --scope all)
   update               Incremental update (called by hook)
     --files <paths>    Files to re-index
     --commit <hash>    Commit to embed and link
@@ -1232,6 +1234,9 @@ Commands:
   manifest             Audit trail: indexed files, skipped files, secret flags
   status               Show index stats
     --cost             Show token usage and cost breakdown
+  serve                Start MCP server for AI agent integration
+    --transport <t>    stdio (default) or sse
+    --port <n>         Port for SSE transport (default 3100)
   doctor               Check environment and configuration
 
 Options:
@@ -1272,11 +1277,42 @@ async function main() {
 
       case "reindex": {
         const budgetStr = flag(parsed, "budget");
-        await cmdReindex(
-          repoRoot,
-          hasFlag(parsed, "dry-run"),
-          budgetStr ? parseFloat(budgetStr) : undefined,
-        );
+        const scope = flag(parsed, "scope");
+
+        if (scope === "all") {
+          const allRepos = await repoGetAll(repoRoot);
+          if (allRepos.length === 0) {
+            console.error("No repos registered. Use `codeindex repo add <path>` first.");
+            process.exit(1);
+          }
+          const workersStr = flag(parsed, "workers");
+          const workers = workersStr ? parseInt(workersStr) : 3;
+          const budget = budgetStr ? parseFloat(budgetStr) : 0;
+
+          const results = await parallelReindex(
+            allRepos.map((r) => ({ root: r.root_path, name: r.name })),
+            workers,
+            budget,
+          );
+
+          // Print summary
+          console.log("\nReindex Summary:");
+          for (const r of results) {
+            const icon = r.status === "ok" ? "OK" : "FAIL";
+            console.log(`  [${icon}] ${r.repo}${r.error ? `: ${r.error}` : ""}`);
+          }
+          const ok = results.filter((r) => r.status === "ok").length;
+          const fail = results.filter((r) => r.status === "error").length;
+          console.log(`\n${ok} succeeded, ${fail} failed`);
+
+          if (fail > 0) process.exit(1);
+        } else {
+          await cmdReindex(
+            repoRoot,
+            hasFlag(parsed, "dry-run"),
+            budgetStr ? parseFloat(budgetStr) : undefined,
+          );
+        }
         break;
       }
 
@@ -1391,6 +1427,20 @@ async function main() {
           default:
             console.error("Usage: codeindex repo <add|remove|list|status|purge>");
             process.exit(1);
+        }
+        break;
+      }
+
+      case "serve": {
+        const { createMcpServer } = await import("./mcp/server");
+        const { startStdio, startSSE } = await import("./mcp/transport");
+        const mcpServer = createMcpServer(repoRoot);
+        const transport = flag(parsed, "transport") ?? "stdio";
+        if (transport === "sse") {
+          const portStr = flag(parsed, "port");
+          await startSSE(mcpServer, portStr ? parseInt(portStr) : 3100);
+        } else {
+          await startStdio(mcpServer);
         }
         break;
       }

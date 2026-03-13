@@ -148,6 +148,28 @@ export async function repoRemove(repoRoot: string, name: string): Promise<void> 
 }
 
 // ---------------------------------------------------------------------------
+// repoGetAll — return all registered repos as data
+// ---------------------------------------------------------------------------
+
+export async function repoGetAll(repoRoot: string): Promise<{ name: string; root_path: string }[]> {
+  const config = await loadConfig(repoRoot);
+
+  if (config.store === "pg") {
+    const rows = (await pgUnsafe(`SELECT name, root_path FROM repos ORDER BY id`)) as {
+      name: string;
+      root_path: string;
+    }[];
+    return rows;
+  } else {
+    const db = await getSqlite(repoRoot);
+    return db.prepare(`SELECT name, root_path FROM repos ORDER BY id`).all() as {
+      name: string;
+      root_path: string;
+    }[];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // repoList
 // ---------------------------------------------------------------------------
 
