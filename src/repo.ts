@@ -93,6 +93,7 @@ export async function repoRemove(repoRoot: string, name: string): Promise<void> 
     const repoId = parseInt(repos[0].id);
 
     // Delete in order respecting foreign keys
+    await pgUnsafe(`DELETE FROM cost_events WHERE repo_id = $1`, [repoId]);
     await pgUnsafe(
       `DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1)`,
       [repoId],
@@ -135,6 +136,7 @@ export async function repoRemove(repoRoot: string, name: string): Promise<void> 
     for (const id of commitIds) deleteCommitEmb.run(id);
 
     // Delete from regular tables
+    db.prepare(`DELETE FROM cost_events WHERE repo_id = ?`).run(repoId);
     db.prepare(
       `DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = ?)`,
     ).run(repoId);
