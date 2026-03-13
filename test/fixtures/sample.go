@@ -18,6 +18,15 @@ func (r *Router) Handle(path string, h Handler) {
 	r.routes[path] = h
 }
 
+const (
+	MaxRetries = 3
+	Timeout    = 30
+)
+
+var (
+	DefaultRouter *Router
+)
+
 func hello() string {
 	return fmt.Sprintf("hello world")
 }

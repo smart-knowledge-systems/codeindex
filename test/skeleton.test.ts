@@ -273,6 +273,16 @@ describe("Go (.go)", () => {
   it("extracts hello function", () => {
     expect(hasEntry(entries, "hello", "function")).toBeDefined();
   });
+
+  it("skeleton text includes constant group", () => {
+    expect(text).toContain("const (");
+    expect(text).toContain("MaxRetries");
+  });
+
+  it("skeleton text includes var group", () => {
+    expect(text).toContain("var (");
+    expect(text).toContain("DefaultRouter");
+  });
 });
 
 // ---------------------------------------------------------------------------

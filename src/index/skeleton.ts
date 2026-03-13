@@ -703,6 +703,21 @@ function skeletonGo(filename: string, root: Node): string {
         lines.push("");
         break;
       }
+      case "const_declaration":
+      case "var_declaration": {
+        const keyword = node.type === "const_declaration" ? "const" : "var";
+        const specs = childrenOfType(node, "const_spec", "var_spec");
+        if (specs.length > 0) {
+          const names = specs
+            .map((s) => childText(s, "name") || s.namedChildren[0]?.text || "")
+            .filter(Boolean);
+          if (names.length > 0) {
+            lines.push(`${keyword} (${names.join(", ")})`);
+            lines.push("");
+          }
+        }
+        break;
+      }
     }
   }
 
