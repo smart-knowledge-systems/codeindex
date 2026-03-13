@@ -46,6 +46,7 @@ interface PgFileLinkRow {
 interface PgRepoRow {
   id: string;
   root_path: string;
+  name: string;
 }
 
 interface SqliteFileRow {
@@ -84,6 +85,7 @@ interface SqliteFileLinkRow {
 interface SqliteRepoRow {
   id: number;
   root_path: string;
+  name: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +118,15 @@ async function searchPg(
 ): Promise<SearchResult[]> {
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
   const repoIdList = repoIds.join(",");
+
+  // --- Repo info map ---
+  const repoInfoRows = (await pgUnsafe(
+    `SELECT id, root_path, name FROM repos WHERE id IN (${repoIdList})`,
+  )) as PgRepoRow[];
+  const repoInfoMap = new Map<number, { name: string; rootPath: string }>();
+  for (const r of repoInfoRows) {
+    repoInfoMap.set(parseInt(r.id), { name: r.name, rootPath: r.root_path });
+  }
 
   // --- Files ---
   const fileRows = (await pgUnsafe(
@@ -219,12 +230,15 @@ async function searchPg(
     }
     if (finalScore < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(repoId);
     const result: SearchResult = {
       filePath: row.file_path,
       cosineSimilarity: fileSim,
       finalScore,
       type: row.file_type,
       inProject: repoId === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (repoId !== currentRepoId) result.repoId = row.repo_id;
     if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
@@ -251,12 +265,15 @@ async function searchPg(
 
     if (finalScore < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(repoId);
     const result: SearchResult = {
       filePath: row.dir_path,
       cosineSimilarity: Math.max(concatSim, summarySim),
       finalScore,
       type: "dir",
       inProject: repoId === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (repoId !== currentRepoId) result.repoId = row.repo_id;
     if (includeSummary && row.summary) result.summary = row.summary;
@@ -269,12 +286,15 @@ async function searchPg(
     const similarity = parseFloat(row.similarity);
     if (similarity < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(repoId);
     const result: SearchResult = {
       filePath: row.commit_hash,
       cosineSimilarity: similarity,
       finalScore: similarity,
       type: "commit",
       inProject: repoId === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (repoId !== currentRepoId) result.repoId = row.repo_id;
     results.push(result);
@@ -298,46 +318,71 @@ async function searchSqlite(
   const db = await getSqlite(repoRoot);
   const embBuf = serializeEmbedding(queryEmbedding);
   const repoIdList = repoIds.join(",");
+  const knnLimit = Math.max((options.topN || 50) * 3, 200);
 
-  // --- Files ---
+  // --- Repo info map ---
+  const repoInfoRows = db
+    .prepare(`SELECT id, root_path, name FROM repos WHERE id IN (${repoIdList})`)
+    .all() as SqliteRepoRow[];
+  const repoInfoMap = new Map<number, { name: string; rootPath: string }>();
+  for (const r of repoInfoRows) {
+    repoInfoMap.set(r.id, { name: r.name, rootPath: r.root_path });
+  }
+
+  // --- Files (KNN via vec0 MATCH) ---
   const fileRows = db
     .prepare(
       `SELECT f.id, f.repo_id, f.file_path, f.skeleton, f.file_type,
-              vec_distance_cosine(fe.embedding, ?) AS distance
-       FROM files f
-       JOIN file_embeddings fe ON f.id = fe.file_id
-       WHERE f.repo_id IN (${repoIdList})`,
+              fe.distance
+       FROM file_embeddings fe
+       JOIN files f ON f.id = fe.file_id
+       WHERE fe.embedding MATCH ? AND fe.k = ?
+         AND f.repo_id IN (${repoIdList})`,
     )
-    .all(embBuf) as SqliteFileRow[];
+    .all(embBuf, knnLimit) as SqliteFileRow[];
 
-  // --- Directories ---
-  const dirRows = db
+  // --- Directories (KNN via vec0 MATCH for concat, then point lookup for summary) ---
+  const dirConcatRows = db
     .prepare(
       `SELECT d.id, d.repo_id, d.dir_path, d.summary,
-              vec_distance_cosine(dce.embedding, ?) AS concat_distance,
-              CASE WHEN dse.embedding IS NOT NULL
-                   THEN vec_distance_cosine(dse.embedding, ?)
-                   ELSE NULL
-              END AS summary_distance
-       FROM directories d
-       LEFT JOIN dir_concat_embeddings dce ON d.id = dce.dir_id
-       LEFT JOIN dir_summary_embeddings dse ON d.id = dse.dir_id
-       WHERE d.repo_id IN (${repoIdList}) AND dce.embedding IS NOT NULL`,
+              dce.distance AS concat_distance
+       FROM dir_concat_embeddings dce
+       JOIN directories d ON d.id = dce.dir_id
+       WHERE dce.embedding MATCH ? AND dce.k = ?
+         AND d.repo_id IN (${repoIdList})`,
     )
-    .all(embBuf, embBuf) as SqliteDirRow[];
+    .all(embBuf, knnLimit) as (SqliteDirRow & { concat_distance: number })[];
 
-  // --- Commits ---
+  // Enrich with summary distances where available
+  const dirRows: SqliteDirRow[] = dirConcatRows.map((row) => {
+    let summaryDistance: number | null = null;
+    try {
+      const summaryRow = db
+        .prepare(
+          `SELECT vec_distance_cosine(embedding, ?) AS distance
+           FROM dir_summary_embeddings WHERE dir_id = ?`,
+        )
+        .get(embBuf, row.id) as { distance: number } | null;
+      if (summaryRow) summaryDistance = summaryRow.distance;
+    } catch {
+      // No summary embedding for this directory
+    }
+    return { ...row, summary_distance: summaryDistance };
+  });
+
+  // --- Commits (KNN via vec0 MATCH) ---
   const commitRows = db
     .prepare(
       `SELECT c.id, c.repo_id, c.commit_hash, c.message,
-              vec_distance_cosine(ce.embedding, ?) AS distance
-       FROM commits c
-       JOIN commit_embeddings ce ON c.id = ce.commit_id
-       WHERE c.repo_id IN (${repoIdList})`,
+              ce.distance
+       FROM commit_embeddings ce
+       JOIN commits c ON c.id = ce.commit_id
+       WHERE ce.embedding MATCH ? AND ce.k = ?
+         AND c.repo_id IN (${repoIdList})`,
     )
-    .all(embBuf) as SqliteCommitRow[];
+    .all(embBuf, knnLimit) as SqliteCommitRow[];
 
-  // --- File–commit links ---
+  // --- File–commit links (point-to-point distance, not KNN) ---
   const linkRows = db
     .prepare(
       `SELECT fc.file_id, fc.commit_id, fc.recency,
@@ -400,12 +445,15 @@ async function searchSqlite(
     }
     if (finalScore < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(row.repo_id);
     const result: SearchResult = {
       filePath: row.file_path,
       cosineSimilarity: fileSim,
       finalScore,
       type: row.file_type,
       inProject: row.repo_id === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
     if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
@@ -431,12 +479,15 @@ async function searchSqlite(
 
     if (finalScore < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(row.repo_id);
     const result: SearchResult = {
       filePath: row.dir_path,
       cosineSimilarity: Math.max(concatSim, summarySim),
       finalScore,
       type: "dir",
       inProject: row.repo_id === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
     if (includeSummary && row.summary) result.summary = row.summary;
@@ -448,12 +499,15 @@ async function searchSqlite(
     const similarity = 1 - row.distance;
     if (similarity < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(row.repo_id);
     const result: SearchResult = {
       filePath: row.commit_hash,
       cosineSimilarity: similarity,
       finalScore: similarity,
       type: "commit",
       inProject: row.repo_id === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
     results.push(result);

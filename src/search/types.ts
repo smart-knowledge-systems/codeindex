@@ -5,6 +5,8 @@ export interface SearchResult {
   type: string;
   inProject: boolean;
   repoId?: string;
+  repoName?: string;
+  repoPath?: string;
   commitIds?: string[];
   skeleton?: string;
   summary?: string;

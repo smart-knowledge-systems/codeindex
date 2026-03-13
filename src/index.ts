@@ -728,8 +728,9 @@ async function cmdSearch(
       console.log("No results found.");
       return;
     }
+    const multiRepo = new Set(results.map((r) => r.repoName ?? r.repoId)).size > 1;
     for (const r of results) {
-      const prefix = r.inProject ? "" : `[${r.repoId}] `;
+      const prefix = multiRepo && r.repoName ? `[${r.repoName}] ` : "";
       const lineInfo = r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
       console.log(
         `${prefix}${r.filePath}${lineInfo}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
