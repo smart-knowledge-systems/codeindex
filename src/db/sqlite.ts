@@ -19,7 +19,9 @@ export async function getSqlite(repoRoot?: string): Promise<Database> {
 
 export async function sqliteUnsafe(sql: string, params: unknown[] = []) {
   const db = await getSqlite();
-  return db.prepare(sql).all(...params);
+  return db
+    .prepare(sql)
+    .all(...(params as (string | number | bigint | boolean | null | Uint8Array)[]));
 }
 
 export async function closeSqlite() {

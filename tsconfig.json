@@ -8,7 +8,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "esModuleInterop": true,
-    "forceConsistentCasingInImports": true,
+    "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true

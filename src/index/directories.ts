@@ -3,12 +3,6 @@ import { embedSingle } from "./embedder";
 import { pgUnsafe } from "../db/pg";
 import { loadConfig } from "../config";
 
-interface DirEntry {
-  dirPath: string;
-  childFiles: { filePath: string; skeleton: string | null }[];
-  childDirs: string[];
-}
-
 export async function buildDirectoryIndex(
   repoRoot: string,
   repoId: number,
@@ -95,8 +89,7 @@ async function processDirectory(
   }
 
   // Generate summary via claude --print --model haiku
-  let summary: string | null = null;
-  summary = await generateSummary(concatSkeleton, childSummaries);
+  const summary = await generateSummary(concatSkeleton, childSummaries);
 
   // Embed the summary
   let summaryEmbedding: number[] | null = null;

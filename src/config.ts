@@ -47,17 +47,15 @@ async function loadJsonFile(filePath: string): Promise<Partial<CodeindexConfig>>
   return {};
 }
 
-function deepMerge<T extends Record<string, unknown>>(base: T, override: Partial<T>): T {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function deepMerge(base: any, override: any): any {
   const result = { ...base };
-  for (const key of Object.keys(override) as (keyof T)[]) {
+  for (const key of Object.keys(override)) {
     const val = override[key];
     if (val !== undefined && val !== null && typeof val === "object" && !Array.isArray(val)) {
-      result[key] = deepMerge(
-        (result[key] ?? {}) as Record<string, unknown>,
-        val as Record<string, unknown>,
-      ) as T[keyof T];
+      result[key] = deepMerge(result[key] ?? {}, val);
     } else if (val !== undefined) {
-      result[key] = val as T[keyof T];
+      result[key] = val;
     }
   }
   return result;
@@ -67,7 +65,10 @@ export async function loadConfig(repoRoot?: string): Promise<CodeindexConfig> {
   const global = await loadJsonFile(GLOBAL_CONFIG_PATH);
   const localPath = repoRoot ? path.join(repoRoot, LOCAL_CONFIG_FILE) : LOCAL_CONFIG_FILE;
   const local = await loadJsonFile(localPath);
-  return deepMerge(deepMerge(DEFAULTS, global), local);
+  return deepMerge(
+    deepMerge(DEFAULTS, global as Partial<CodeindexConfig>),
+    local as Partial<CodeindexConfig>,
+  );
 }
 
 const FORMATTER_CHECKS: {
