@@ -112,6 +112,22 @@ async function reindexOne(
 
   process.stderr.write(`${tag} Scanning files...\n`);
 
+  // Bulk-fetch existing file hashes to avoid N sequential DB round-trips
+  const existingHashes = new Map<string, string>();
+  if (config.store === "pg") {
+    const rows = (await pgUnsafe(
+      "SELECT file_path, content_hash FROM files WHERE repo_id = $1",
+      [repoId],
+    )) as { file_path: string; content_hash: string }[];
+    for (const r of rows) existingHashes.set(r.file_path, r.content_hash);
+  } else {
+    const db = await getSqlite(repoRoot);
+    const rows = db
+      .prepare("SELECT file_path, content_hash FROM files WHERE repo_id = ?")
+      .all(repoId) as { file_path: string; content_hash: string }[];
+    for (const r of rows) existingHashes.set(r.file_path, r.content_hash);
+  }
+
   const allFiles: string[] = [];
   let skipped = 0;
 
@@ -137,24 +153,9 @@ async function reindexOne(
     const ext = path.extname(relPath).toLowerCase() || ".txt";
     const { hash } = await formatAndHash(content, formatter);
 
-    if (config.store === "pg") {
-      const existing = await pgUnsafe(
-        "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2 AND content_hash = $3",
-        [repoId, relPath, hash],
-      );
-      if (existing.length > 0) {
-        skipped++;
-        continue;
-      }
-    } else {
-      const db = await getSqlite(repoRoot);
-      const existing = db
-        .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ? AND content_hash = ?")
-        .all(repoId, relPath, hash) as { id: number }[];
-      if (existing.length > 0) {
-        skipped++;
-        continue;
-      }
+    if (existingHashes.get(relPath) === hash) {
+      skipped++;
+      continue;
     }
 
     const { text: skeleton, entries } = await extractSkeletonWithEntries(
