@@ -70,7 +70,11 @@ export async function loadConfig(repoRoot?: string): Promise<CodeindexConfig> {
   return deepMerge(deepMerge(DEFAULTS, global), local);
 }
 
-const FORMATTER_CHECKS: { files: string[]; command: string; check?: (f: string) => Promise<boolean> }[] = [
+const FORMATTER_CHECKS: {
+  files: string[];
+  command: string;
+  check?: (f: string) => Promise<boolean>;
+}[] = [
   { files: ["biome.json", "biome.jsonc"], command: "biome format" },
   {
     files: [

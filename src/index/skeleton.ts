@@ -151,7 +151,11 @@ function extractJsDocComment(node: Node): string | null {
           .split("\n")
           .map((l) => l.replace(/^\s*\*+\s?/, "").trim())
           .filter((l) => l && !l.startsWith("@") && l !== "/");
-        if (lines.length > 0) return lines[0].replace(/^\/\*\*\s*/, "").replace(/\*\/$/, "").trim();
+        if (lines.length > 0)
+          return lines[0]
+            .replace(/^\/\*\*\s*/, "")
+            .replace(/\*\/$/, "")
+            .trim();
       }
       break;
     }
@@ -459,7 +463,9 @@ function skeletonRust(filename: string, root: Node): string {
       case "enum_item": {
         const name = childText(node, "name");
         const body = node.childForFieldName("body");
-        const variants = body ? childrenOfType(body, "enum_variant").map((v) => childText(v, "name")) : [];
+        const variants = body
+          ? childrenOfType(body, "enum_variant").map((v) => childText(v, "name"))
+          : [];
         lines.push(`enum ${name}`);
         if (variants.length > 0) lines.push(`  variants: ${variants.join(", ")}`);
         lines.push("");
@@ -487,7 +493,9 @@ function skeletonRust(filename: string, root: Node): string {
       case "impl_item": {
         const type = node.childForFieldName("type");
         const trait = node.childForFieldName("trait");
-        const header = trait ? `impl ${trait.text} for ${type?.text ?? ""}` : `impl ${type?.text ?? ""}`;
+        const header = trait
+          ? `impl ${trait.text} for ${type?.text ?? ""}`
+          : `impl ${type?.text ?? ""}`;
         lines.push(header);
         const body = node.childForFieldName("body");
         if (body) {
@@ -644,7 +652,11 @@ function extractJavaDoc(node: Node): string | null {
           .split("\n")
           .map((l) => l.replace(/^\s*\*+\s?/, "").trim())
           .filter((l) => l && !l.startsWith("@") && l !== "/");
-        if (lines.length > 0) return lines[0].replace(/^\/\*\*\s*/, "").replace(/\*\/$/, "").trim();
+        if (lines.length > 0)
+          return lines[0]
+            .replace(/^\/\*\*\s*/, "")
+            .replace(/\*\/$/, "")
+            .trim();
       }
       break;
     }
@@ -679,7 +691,8 @@ function extractJavaClass(node: Node): string[] {
   for (const member of body.namedChildren) {
     if (member.type === "method_declaration" || member.type === "constructor_declaration") {
       const mName = childText(member, "name");
-      const params = member.childForFieldName("parameters") ?? member.childForFieldName("formal_parameters");
+      const params =
+        member.childForFieldName("parameters") ?? member.childForFieldName("formal_parameters");
       const paramStr = extractJavaParams(params ?? null);
       const retType = member.childForFieldName("type");
       const retStr = retType ? ` -> ${retType.text}` : "";
@@ -702,7 +715,9 @@ function skeletonJava(filename: string, root: Node): string {
   const imports: string[] = [];
   for (const node of root.namedChildren) {
     if (node.type === "import_declaration") {
-      const name = node.namedChildren.find((c) => c.type === "scoped_identifier" || c.type === "identifier");
+      const name = node.namedChildren.find(
+        (c) => c.type === "scoped_identifier" || c.type === "identifier",
+      );
       if (name) imports.push(name.text);
     }
   }
@@ -885,7 +900,12 @@ function skeletonCSharp(filename: string, root: Node): string {
       node.type === "struct_declaration"
     ) {
       const name = childText(node, "name");
-      const keyword = node.type === "interface_declaration" ? "interface" : node.type === "struct_declaration" ? "struct" : "class";
+      const keyword =
+        node.type === "interface_declaration"
+          ? "interface"
+          : node.type === "struct_declaration"
+            ? "struct"
+            : "class";
       lines.push(`${keyword} ${name}`);
       const body = node.childForFieldName("declaration_list");
       if (body) {
