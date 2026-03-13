@@ -965,73 +965,97 @@ export interface SkeletonResult {
 }
 
 /** Extract entries (name, kind, startLine, endLine) from a tree-sitter AST root. */
-function collectEntries(root: Node, lang: SupportedLanguage): SkeletonEntry[] {
+function collectEntries(root: Node): SkeletonEntry[] {
   const entries: SkeletonEntry[] = [];
 
+  function getFuncNameFromDeclarator(n: Node): string {
+    if (n.type === "function_declarator") {
+      return n.childForFieldName("declarator")?.text ?? "(anonymous)";
+    }
+    for (const child of n.namedChildren) {
+      const found = getFuncNameFromDeclarator(child);
+      if (found !== "(anonymous)") return found;
+    }
+    return "(anonymous)";
+  }
+
+  function collectMethodsFromBody(body: Node): void {
+    for (const member of body.namedChildren) {
+      if (
+        member.type === "method_definition" ||
+        member.type === "method_signature" ||
+        member.type === "method_declaration" ||
+        member.type === "constructor_declaration"
+      ) {
+        const mName = member.childForFieldName("name")?.text;
+        if (mName) {
+          entries.push({
+            name: mName,
+            kind: "method",
+            startLine: member.startPosition.row + 1,
+            endLine: member.endPosition.row + 1,
+          });
+        }
+      }
+    }
+  }
+
   function walk(node: Node): void {
-    // 1-indexed line numbers from tree-sitter's 0-indexed row
     const startLine = node.startPosition.row + 1;
     const endLine = node.endPosition.row + 1;
 
     switch (node.type) {
-      // TypeScript / JavaScript
+      // Functions: TS/JS/Go function_declaration, TS function
       case "function_declaration":
       case "function": {
         const name = node.childForFieldName("name")?.text ?? "(anonymous)";
         entries.push({ name, kind: "function", startLine, endLine });
         return;
       }
-      case "class_declaration":
-      case "abstract_class_declaration": {
-        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
-        entries.push({ name, kind: "class", startLine, endLine });
-        // Also collect methods inside the class
-        const body = node.childForFieldName("body");
-        if (body) {
-          for (const member of body.namedChildren) {
-            if (member.type === "method_definition" || member.type === "method_signature") {
-              const mName = member.childForFieldName("name")?.text;
-              if (mName) {
-                entries.push({
-                  name: mName,
-                  kind: "method",
-                  startLine: member.startPosition.row + 1,
-                  endLine: member.endPosition.row + 1,
-                });
-              }
-            }
-          }
-        }
-        return;
-      }
-      case "export_statement": {
-        const decl = node.childForFieldName("declaration");
-        if (decl) walk(decl);
-        return;
-      }
-      case "lexical_declaration":
-      case "variable_declaration": {
-        // Check for arrow function / function expression exports
-        for (const declarator of node.namedChildren) {
-          if (declarator.type === "variable_declarator") {
-            const val = declarator.childForFieldName("value");
-            if (val && (val.type === "arrow_function" || val.type === "function")) {
-              const name = declarator.childForFieldName("name")?.text ?? "(anonymous)";
-              entries.push({ name, kind: "function", startLine, endLine });
-            }
-          }
+
+      // Python/C/C++ function_definition
+      case "function_definition": {
+        // C/C++ path: has declarator field
+        const decl = node.childForFieldName("declarator");
+        if (
+          decl &&
+          (decl.type === "function_declarator" ||
+            decl.namedChildren.some((c) => c.type === "function_declarator"))
+        ) {
+          entries.push({
+            name: getFuncNameFromDeclarator(decl),
+            kind: "function",
+            startLine,
+            endLine,
+          });
+        } else {
+          // Python path
+          const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+          const parent = node.parent;
+          const kind =
+            parent?.type === "block" && parent.parent?.type === "class_definition"
+              ? "method"
+              : "function";
+          entries.push({ name, kind, startLine, endLine });
         }
         return;
       }
 
-      // Python
-      case "function_definition": {
+      // Classes: TS/JS/Java/C#
+      case "class_declaration":
+      case "abstract_class_declaration":
+      case "interface_declaration":
+      case "enum_declaration":
+      case "struct_declaration": {
         const name = node.childForFieldName("name")?.text ?? "(anonymous)";
-        const parent = node.parent;
-        const kind = parent?.type === "block" && parent.parent?.type === "class_definition" ? "method" : "function";
+        const kind = node.type.replace("_declaration", "").replace("abstract_", "");
         entries.push({ name, kind, startLine, endLine });
+        const body = node.childForFieldName("body") ?? node.childForFieldName("declaration_list");
+        if (body) collectMethodsFromBody(body);
         return;
       }
+
+      // Python class
       case "class_definition": {
         const name = node.childForFieldName("name")?.text ?? "(anonymous)";
         entries.push({ name, kind: "class", startLine, endLine });
@@ -1039,6 +1063,51 @@ function collectEntries(root: Node, lang: SupportedLanguage): SkeletonEntry[] {
         if (body) {
           for (const child of body.namedChildren) {
             if (child.type === "function_definition") walk(child);
+          }
+        }
+        return;
+      }
+
+      // Go method
+      case "method_declaration": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "method", startLine, endLine });
+        return;
+      }
+
+      // Go type declarations
+      case "type_declaration": {
+        for (const spec of node.namedChildren) {
+          if (spec.type === "type_spec") {
+            const name = spec.childForFieldName("name")?.text ?? "(anonymous)";
+            const type_ = spec.childForFieldName("type");
+            const kind = type_?.type === "interface_type" ? "interface" : "struct";
+            entries.push({
+              name,
+              kind,
+              startLine: spec.startPosition.row + 1,
+              endLine: spec.endPosition.row + 1,
+            });
+          }
+        }
+        return;
+      }
+
+      // TS/JS export wrapper
+      case "export_statement": {
+        const decl = node.childForFieldName("declaration");
+        if (decl) walk(decl);
+        return;
+      }
+      case "lexical_declaration":
+      case "variable_declaration": {
+        for (const declarator of node.namedChildren) {
+          if (declarator.type === "variable_declarator") {
+            const val = declarator.childForFieldName("value");
+            if (val && (val.type === "arrow_function" || val.type === "function")) {
+              const name = declarator.childForFieldName("name")?.text ?? "(anonymous)";
+              entries.push({ name, kind: "function", startLine, endLine });
+            }
           }
         }
         return;
@@ -1077,84 +1146,7 @@ function collectEntries(root: Node, lang: SupportedLanguage): SkeletonEntry[] {
         return;
       }
 
-      // Go
-      case "function_declaration": {
-        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
-        entries.push({ name, kind: "function", startLine, endLine });
-        return;
-      }
-      case "method_declaration": {
-        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
-        entries.push({ name, kind: "method", startLine, endLine });
-        return;
-      }
-      case "type_declaration": {
-        for (const spec of node.namedChildren) {
-          if (spec.type === "type_spec") {
-            const name = spec.childForFieldName("name")?.text ?? "(anonymous)";
-            const type_ = spec.childForFieldName("type");
-            const kind = type_?.type === "interface_type" ? "interface" : "struct";
-            entries.push({
-              name,
-              kind,
-              startLine: spec.startPosition.row + 1,
-              endLine: spec.endPosition.row + 1,
-            });
-          }
-        }
-        return;
-      }
-
-      // Java / C# class-like
-      case "class_declaration":
-      case "interface_declaration":
-      case "enum_declaration":
-      case "struct_declaration": {
-        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
-        const kind = node.type.replace("_declaration", "");
-        entries.push({ name, kind, startLine, endLine });
-        const body = node.childForFieldName("body") ?? node.childForFieldName("declaration_list");
-        if (body) {
-          for (const member of body.namedChildren) {
-            if (
-              member.type === "method_declaration" ||
-              member.type === "constructor_declaration" ||
-              member.type === "method_definition"
-            ) {
-              const mName = member.childForFieldName("name")?.text;
-              if (mName) {
-                entries.push({
-                  name: mName,
-                  kind: "method",
-                  startLine: member.startPosition.row + 1,
-                  endLine: member.endPosition.row + 1,
-                });
-              }
-            }
-          }
-        }
-        return;
-      }
-
-      // C/C++ function definitions
-      case "function_definition": {
-        const decl = node.childForFieldName("declarator");
-        if (decl) {
-          // Traverse to find the function name
-          function getFuncName(n: Node): string {
-            if (n.type === "function_declarator") {
-              return n.childForFieldName("declarator")?.text ?? "(anonymous)";
-            }
-            for (const child of n.namedChildren) {
-              const found = getFuncName(child);
-              if (found !== "(anonymous)") return found;
-            }
-            return "(anonymous)";
-          }
-          entries.push({ name: getFuncName(decl), kind: "function", startLine, endLine });
-        }
-        return;
-      }
+      // C/C++ specifiers
       case "struct_specifier":
       case "class_specifier": {
         const name = node.childForFieldName("name")?.text;
@@ -1232,7 +1224,7 @@ export async function extractSkeletonWithEntries(
 
   try {
     const root = tree.rootNode;
-    const entries = collectEntries(root, lang);
+    const entries = collectEntries(root);
 
     let text: string;
     switch (lang) {

@@ -577,7 +577,12 @@ async function attachSnippets(
   results: SearchResult[],
   query: string,
 ): Promise<void> {
-  const queryWords = new Set(query.toLowerCase().split(/\s+/).filter((w) => w.length > 2));
+  const queryWords = new Set(
+    query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 2),
+  );
 
   for (const result of results) {
     if (result.type === "dir" || result.type === "commit") continue;
@@ -616,8 +621,14 @@ async function attachSnippets(
     let bestEntry: SkeletonEntry | null = null;
     let bestScore = -1;
     for (const entry of entries) {
-      const nameWords = entry.name.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
-      const kindWords = entry.kind.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+      const nameWords = entry.name
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 2);
+      const kindWords = entry.kind
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 2);
       const allWords = [...nameWords, ...kindWords];
       let score = 0;
       for (const w of allWords) {

@@ -8,7 +8,7 @@ import { pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
 import { walkRepo } from "./index/walker";
-import { extractSkeleton, extractSkeletonWithEntries, initParser } from "./index/skeleton";
+import { extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
 import { scanForSecrets } from "./index/secrets";
 import { embed, embedSingle } from "./index/embedder";
@@ -201,7 +201,15 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
                file_type = EXCLUDED.file_type,
                embedding = EXCLUDED.embedding,
                indexed_at = now()`,
-            [repoId, f.filePath, f.hash, f.skeleton, f.skeletonEntries, f.fileType, `[${embedding.join(",")}]`],
+            [
+              repoId,
+              f.filePath,
+              f.hash,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              `[${embedding.join(",")}]`,
+            ],
           );
           indexed++;
         }
@@ -231,7 +239,14 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.skeletonEntries, f.fileType) as {
+          const row = insertFile.get(
+            repoId,
+            f.filePath,
+            f.hash,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+          ) as {
             id: number;
           };
           deleteEmb.run(row.id);
@@ -493,7 +508,15 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
                file_type = EXCLUDED.file_type,
                embedding = EXCLUDED.embedding,
                indexed_at = now()`,
-            [repoId, f.filePath, f.hash, f.skeleton, f.skeletonEntries, f.fileType, `[${embedding.join(",")}]`],
+            [
+              repoId,
+              f.filePath,
+              f.hash,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              `[${embedding.join(",")}]`,
+            ],
           );
         }
         await pgUnsafe("COMMIT");
@@ -522,7 +545,14 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.skeletonEntries, f.fileType) as {
+          const row = insertFile.get(
+            repoId,
+            f.filePath,
+            f.hash,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+          ) as {
             id: number;
           };
           deleteEmb2.run(row.id);
@@ -670,8 +700,7 @@ async function cmdSearch(
     }
     for (const r of results) {
       const prefix = r.inProject ? "" : `[${r.repoId}] `;
-      const lineInfo =
-        r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
+      const lineInfo = r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
       console.log(
         `${prefix}${r.filePath}${lineInfo}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
       );
@@ -973,12 +1002,21 @@ Commands:
     --scope <s>        project|all|name1,name2
     --include-skeleton Include skeleton text
     --include-summary  Include directory summaries
+    --include-snippet  Include code snippets with line numbers
     --pretty           Human-readable output
+  intent               Generate AGENTS.md from directory summaries
+    --out <path>       Output path (default: stdout)
+  drift                Detect stale Intent Nodes in AGENTS.md
+    --threshold <f>    Drift threshold (default 0.3)
+    --agents-md <path> Path to AGENTS.md (default: AGENTS.md)
+    --out <path>       Output JSON path (default: stdout)
+  repo <sub>           Manage repositories (add|remove|list|status|purge)
   export               Export pg to sqlite
     --out <path>       Output path (default .codeindex.db)
   install-hook         Install post-commit git hook
   config               Show/set configuration
   status               Show index stats
+    --cost             Show token usage and cost breakdown
   doctor               Check environment and configuration
 
 Options:

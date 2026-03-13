@@ -33,8 +33,6 @@ interface AgentsMdSection {
   content: string;
 }
 
-
-
 function parseAgentsMd(content: string): AgentsMdSection[] {
   const sections: AgentsMdSection[] = [];
   const parts = content.split(/^## /m);
@@ -66,15 +64,11 @@ function parseAgentsMd(content: string): AgentsMdSection[] {
   return sections;
 }
 
-async function getRepoId(
-  repoRoot: string,
-  store: string,
-): Promise<number> {
+async function getRepoId(repoRoot: string, store: string): Promise<number> {
   if (store === "pg") {
-    const rows = (await pgUnsafe(
-      `SELECT id FROM repos WHERE root_path = $1`,
-      [repoRoot],
-    )) as PgRepoRow[];
+    const rows = (await pgUnsafe(`SELECT id FROM repos WHERE root_path = $1`, [
+      repoRoot,
+    ])) as PgRepoRow[];
     if (rows.length === 0) throw new Error(`Repo not found for path: ${repoRoot}`);
     return parseInt(rows[0].id);
   } else {
@@ -126,9 +120,7 @@ export async function detectDrift(
   outPath?: string,
 ): Promise<DriftResult[]> {
   if (!existsSync(agentsMdPath)) {
-    throw new Error(
-      "AGENTS.md not found. Generate it with: codeindex intent --out AGENTS.md",
-    );
+    throw new Error("AGENTS.md not found. Generate it with: codeindex intent --out AGENTS.md");
   }
 
   const effectiveThreshold = threshold ?? 0.3;

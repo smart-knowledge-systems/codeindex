@@ -65,10 +65,9 @@ function formatDirPath(dirPath: string): string {
 }
 
 async function intentPg(repoRoot: string): Promise<{ dirs: DirRow[]; files: FileRow[] }> {
-  const repoRows = (await pgUnsafe(
-    `SELECT id FROM repos WHERE root_path = $1`,
-    [repoRoot],
-  )) as PgRepoRow[];
+  const repoRows = (await pgUnsafe(`SELECT id FROM repos WHERE root_path = $1`, [
+    repoRoot,
+  ])) as PgRepoRow[];
 
   if (repoRows.length === 0) {
     throw new Error(`Repo not found for path: ${repoRoot}`);
@@ -89,9 +88,7 @@ async function intentPg(repoRoot: string): Promise<{ dirs: DirRow[]; files: File
   return { dirs, files };
 }
 
-async function intentSqlite(
-  repoRoot: string,
-): Promise<{ dirs: DirRow[]; files: FileRow[] }> {
+async function intentSqlite(repoRoot: string): Promise<{ dirs: DirRow[]; files: FileRow[] }> {
   const db = await getSqlite(repoRoot);
 
   const repoRows = db

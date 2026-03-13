@@ -35,8 +35,7 @@ export async function recordCost(
 ): Promise<void> {
   if (currentRepoId == null || currentRepoRoot == null) return;
 
-  const pricing =
-    model in PRICING ? PRICING[model as keyof typeof PRICING] : null;
+  const pricing = model in PRICING ? PRICING[model as keyof typeof PRICING] : null;
   let costUsd = 0;
   if (pricing) {
     costUsd = (tokensIn * ("input" in pricing ? pricing.input : 0)) / 1_000_000;
