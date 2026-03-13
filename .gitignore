@@ -1,4 +1,10 @@
 node_modules/
 *.db
-.codeindex.db
+.codeindex.*
 dist/
+.env*
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/codeindex/
+!.claude/skills/codeindex/SKILL.md
