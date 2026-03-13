@@ -17,7 +17,7 @@ import { buildDirectoryIndex, updateAffectedDirectories } from "./index/director
 import { search } from "./search/query";
 import { installHook } from "./hooks/post-commit";
 import { exportToSqlite } from "./db/export";
-import { setCurrentRepo } from "./cost";
+import { setCurrentRepo, getProjectedCost, checkCostCap } from "./cost";
 import { generateIntent } from "./intent";
 import { detectDrift } from "./drift";
 import { repoAdd, repoRemove, repoList, repoStatus, repoPurge } from "./repo";
@@ -102,8 +102,11 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 // reindex command
 // ---------------------------------------------------------------------------
 
-async function cmdReindex(repoRoot: string, dryRun = false) {
+async function cmdReindex(repoRoot: string, dryRun = false, budget?: number) {
   const config = await loadConfig(repoRoot);
+  if (budget != null) {
+    config.costCap = { ...config.costCap, maxCostPerReindex: budget };
+  }
   const repoId = await ensureRepo(repoRoot);
   setCurrentRepo(repoId, repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
@@ -176,6 +179,17 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
     console.log(`Files: ${filesToEmbed.length} would be indexed, ${skipped} unchanged`);
     for (const f of filesToEmbed) {
       console.log(`  ${f.filePath} (${f.fileType})`);
+    }
+    const projected = getProjectedCost(filesToEmbed.length, filesToEmbed.length * 3);
+    console.log(`\nProjected cost:`);
+    console.log(`  Embeddings: $${projected.embeddingCost.toFixed(4)}`);
+    console.log(`  Summaries:  $${projected.summaryCost.toFixed(4)}`);
+    console.log(`  Total:      $${projected.totalCost.toFixed(4)}`);
+    if (config.costCap.maxCostPerReindex != null) {
+      console.log(`  Budget:     $${config.costCap.maxCostPerReindex.toFixed(4)}`);
+      if (projected.totalCost > config.costCap.maxCostPerReindex) {
+        console.log(`  WARNING: projected cost exceeds budget`);
+      }
     }
     return;
   }
@@ -258,6 +272,22 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
   }
 
   console.log(`Files: ${indexed} indexed, ${skipped} skipped (unchanged)`);
+
+  // Check cost cap after embedding batch
+  if (config.costCap.maxCostPerReindex != null) {
+    const cap = await checkCostCap(repoRoot, repoId);
+    if (cap.current >= (config.costCap.warnAt ?? Infinity)) {
+      console.warn(
+        `Cost warning: $${cap.current.toFixed(4)} spent (limit: $${cap.limit?.toFixed(4)})`,
+      );
+    }
+    if (cap.exceeded) {
+      console.error(
+        `Cost cap exceeded: $${cap.current.toFixed(4)} >= $${cap.limit?.toFixed(4)}. Aborting reindex.`,
+      );
+      return;
+    }
+  }
 
   // Index commits for each file
   console.log("Indexing commits...");
@@ -992,7 +1022,8 @@ const HELP_TEXT = `codeindex — semantic code search
 Commands:
   init                 Initialize codeindex in current repo
   reindex              Full reindex of current repo
-    --dry-run          Report what would change without writing
+    --dry-run          Report what would change and projected cost
+    --budget <usd>     Set cost cap for this reindex (USD)
   update               Incremental update (called by hook)
     --files <paths>    Files to re-index
     --commit <hash>    Commit to embed and link
@@ -1032,9 +1063,15 @@ async function main() {
         await cmdInit(repoRoot);
         break;
 
-      case "reindex":
-        await cmdReindex(repoRoot, hasFlag(parsed, "dry-run"));
+      case "reindex": {
+        const budgetStr = flag(parsed, "budget");
+        await cmdReindex(
+          repoRoot,
+          hasFlag(parsed, "dry-run"),
+          budgetStr ? parseFloat(budgetStr) : undefined,
+        );
         break;
+      }
 
       case "update": {
         const filesRaw = flag(parsed, "files");

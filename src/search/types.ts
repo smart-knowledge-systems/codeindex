@@ -48,6 +48,10 @@ export interface CodeindexConfig {
   scoring: ScoringConfig;
   formatter: string | null;
   skeletonFallbackLines: number;
+  costCap: {
+    maxCostPerReindex: number | null;
+    warnAt: number | null;
+  };
 }
 
 export interface ScoringConfig {

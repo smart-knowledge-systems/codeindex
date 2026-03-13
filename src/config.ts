@@ -27,6 +27,7 @@ const DEFAULTS: CodeindexConfig = {
   },
   formatter: null,
   skeletonFallbackLines: 50,
+  costCap: { maxCostPerReindex: null, warnAt: null },
 };
 
 const GLOBAL_CONFIG_PATH = path.join(
