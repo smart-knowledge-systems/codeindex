@@ -17,7 +17,7 @@ import { getRepoOrigin, getRepoName, getFileCommits, getChangedFiles } from "./i
 import { buildDirectoryIndex, updateAffectedDirectories } from "./index/directories";
 import { search } from "./search/query";
 import { installHook } from "./hooks/post-commit";
-import { exportToSqlite } from "./db/export";
+import { exportToSqlite, type ExportOptions } from "./db/export";
 import { setCurrentRepo, getProjectedCost, checkCostCap } from "./cost";
 import { generateIntent } from "./intent";
 import { detectDrift } from "./drift";
@@ -804,10 +804,17 @@ async function cmdSearch(
 // export command
 // ---------------------------------------------------------------------------
 
-async function cmdExport(repoRoot: string, outPath: string) {
+async function cmdExport(repoRoot: string, outPath: string, opts: ExportOptions = {}) {
   const repoId = await ensureRepo(repoRoot);
+  const exportOpts: ExportOptions = { ...opts, repoRoot };
+  const redactions: string[] = [];
+  if (exportOpts.redactEmbeddings !== false) redactions.push("embeddings");
+  if (exportOpts.redactCommits) redactions.push("commits");
+  if (exportOpts.excludePatterns?.length)
+    redactions.push(`exclude(${exportOpts.excludePatterns.length} patterns)`);
   console.log(`Exporting repo_id=${repoId} to ${outPath}...`);
-  await exportToSqlite(repoId, outPath);
+  if (redactions.length > 0) console.log(`Redacting: ${redactions.join(", ")}`);
+  await exportToSqlite(repoId, outPath, exportOpts);
   console.log("Export complete.");
 }
 
@@ -1216,6 +1223,9 @@ Commands:
   repo <sub>           Manage repositories (add|remove|list|status|purge)
   export               Export pg to sqlite
     --out <path>       Output path (default .codeindex.db)
+    --include-embeddings  Include embedding vectors (redacted by default)
+    --redact-commits   Exclude commit data from export
+    --exclude <globs>  Comma-separated glob patterns to exclude files
   install-hook         Install post-commit git hook
   config               Show/set configuration
   manifest             Audit trail: indexed files, skipped files, secret flags
@@ -1281,9 +1291,15 @@ async function main() {
         break;
       }
 
-      case "export":
-        await cmdExport(repoRoot, flag(parsed, "out") ?? ".codeindex.db");
+      case "export": {
+        const excludeRaw = flag(parsed, "exclude");
+        await cmdExport(repoRoot, flag(parsed, "out") ?? ".codeindex.db", {
+          redactEmbeddings: !hasFlag(parsed, "include-embeddings"),
+          redactCommits: hasFlag(parsed, "redact-commits"),
+          excludePatterns: excludeRaw ? excludeRaw.split(",") : undefined,
+        });
         break;
+      }
 
       case "install-hook":
         await installHook(repoRoot);
