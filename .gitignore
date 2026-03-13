@@ -10,6 +10,7 @@ dist/
 # codeindex database
 *.db
 .codeindex.*
+.indexignore
 
 # Eval results (keep baseline, ablation, report; ignore intermediate)
 eval/results/*.json

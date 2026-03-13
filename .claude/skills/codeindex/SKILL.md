@@ -49,10 +49,15 @@ codeindex search "authentication middleware" --include-snippet
 - `--min-score <f>` — Filter threshold (default 0.3). Raise to reduce noise, lower to cast a wider net
 - `--top-n <n>` — Cap the number of results
 - `--scope <s>` — `project` (default), `all` (every indexed repo), or `repo1,repo2`
+- `--lang <l>` — Filter by language: `ts`, `python`, `rust`, `go`, `java`, `c`, `cpp`, `cs` (comma-separated)
+- `--dir <d>` — Filter by directory prefix: `src/api,lib` (comma-separated)
+- `--since <t>` — Filter by time: `30d`, `2w`, `3m`, or ISO date
 - `--include-skeleton` — Attach AST skeletons (imports, class/function signatures)
 - `--include-summary` — Attach Haiku-generated directory summaries
 - `--include-snippet` — Attach source code snippets with line numbers (best-matching entry, up to 20 lines)
-- `--pretty` — Human-readable ranked output instead of JSON
+- `--explain` — Show per-result score breakdown (cosine, commit boost, parent boost, BM25 keyword score, length penalty)
+- `--format <f>` — Output format: `json` (default), `pretty` (human-readable), `compact` (filePath:lineStart:score per line)
+- `--pretty` — Alias for `--format pretty`
 
 ### Interpreting results
 
@@ -160,14 +165,17 @@ The built-in search functions (`search`, `searchFiles`, `searchDirectories`, `se
 
 ## Scoring (for tuning)
 
-The scoring formula combines embedding similarity with commit-recency and directory-hierarchy signals:
+The scoring formula uses hybrid semantic+keyword fusion with length normalization:
 
 ```
-finalScore = fileSim + alpha * commitBoost + beta * parentBoost
-parentBoost = parentBoostMultiplier * dirSim  (when dirSim > minScore)
+semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty
+finalScore = (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
 ```
 
-Directory results also get a child-to-parent boost when multiple child files score highly.
+- BM25 keyword scoring operates on skeleton text for keyword-heavy queries
+- Length normalization penalizes oversized skeletons (log-scale, weight 0.05)
+- Directory results get a child-to-parent boost when multiple child files score highly
+- Use `--explain` to see the full score breakdown for each result
 
 Tune via `codeindex config`:
 - `--alpha <f>` — Commit boost weight (default 0.15)
@@ -176,3 +184,12 @@ Tune via `codeindex config`:
 - `--decay <f>` — Commit recency decay (default 0.2)
 - `--min-score <f>` — Global filter threshold (default 0.3)
 - `--parent-boost-multiplier <f>` — Parent boost multiplier (default 0.3)
+
+## Programmatic API
+
+For agent or library use, import from `src/api.ts`:
+
+```typescript
+import { search, searchFiles, loadConfig } from "./src/api";
+const results = await search("/path/to/repo", "authentication middleware", { topN: 5, explain: true });
+```

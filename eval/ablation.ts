@@ -20,6 +20,10 @@ const CONFIG_MATRIX: AblationConfig[] = [
   { name: "no-child-boost", overrides: { gamma: 0 } },
   { name: "pure-cosine", overrides: { alpha: 0, beta: 0, gamma: 0 } },
   { name: "high-parent", overrides: { beta: 0.4, parentBoostMultiplier: 0.5 } },
+  { name: "hybrid-0.3", overrides: { hybridWeight: 0.3 } },
+  { name: "hybrid-0.5", overrides: { hybridWeight: 0.5 } },
+  { name: "semantic-only", overrides: { hybridWeight: 0 } },
+  { name: "length-penalty", overrides: { lengthPenaltyWeight: 0.05 } },
 ];
 
 // ---------------------------------------------------------------------------

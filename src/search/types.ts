@@ -1,3 +1,14 @@
+export interface ScoreExplanation {
+  cosineSimilarity: number;
+  commitBoost: number;
+  parentBoost: number;
+  childBoost?: number;
+  keywordScore?: number;
+  lengthPenalty?: number;
+  weights: { alpha: number; beta: number; gamma: number };
+  formula: string;
+}
+
 export interface SearchResult {
   filePath: string;
   cosineSimilarity: number;
@@ -5,12 +16,16 @@ export interface SearchResult {
   type: string;
   inProject: boolean;
   repoId?: string;
+  repoName?: string;
+  repoPath?: string;
   commitIds?: string[];
   skeleton?: string;
   summary?: string;
+  keywordScore?: number;
   lineStart?: number;
   lineEnd?: number;
   snippet?: string;
+  explanation?: ScoreExplanation;
 }
 
 export interface SearchOptions {
@@ -21,6 +36,10 @@ export interface SearchOptions {
   includeSummary?: boolean;
   includeSnippet?: boolean;
   scoringOverrides?: Partial<ScoringConfig>;
+  lang?: string[];
+  dir?: string[];
+  since?: string;
+  explain?: boolean;
 }
 
 export interface SkeletonEntry {
@@ -48,6 +67,10 @@ export interface CodeindexConfig {
   scoring: ScoringConfig;
   formatter: string | null;
   skeletonFallbackLines: number;
+  costCap: {
+    maxCostPerReindex: number | null;
+    warnAt: number | null;
+  };
 }
 
 export interface ScoringConfig {
@@ -58,6 +81,8 @@ export interface ScoringConfig {
   gamma: number;
   minScore: number;
   parentBoostMultiplier: number;
+  hybridWeight: number;
+  lengthPenaltyWeight: number;
 }
 
 export interface RepoRecord {

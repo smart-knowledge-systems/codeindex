@@ -61,6 +61,80 @@ export async function recordCost(
 }
 
 // ---------------------------------------------------------------------------
+// Cost cap check
+// ---------------------------------------------------------------------------
+
+export async function checkCostCap(
+  repoRoot: string,
+  repoId?: number,
+): Promise<{ exceeded: boolean; current: number; limit: number | null }> {
+  const config = await loadConfig(repoRoot);
+  const limit = config.costCap.maxCostPerReindex;
+
+  // Query total cost for this session (last 60 minutes as session window)
+  const current = await (async () => {
+    if (config.store === "pg") {
+      const whereClause = repoId != null ? "AND repo_id = $1" : "";
+      const params = repoId != null ? [repoId] : [];
+      const rows = await pgUnsafe(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS total
+         FROM cost_events
+         WHERE created_at >= now() - interval '60 minutes' ${whereClause}`,
+        params,
+      );
+      return Number(rows[0].total);
+    } else {
+      const db = await getSqlite(repoRoot);
+      const whereClause = repoId != null ? "AND repo_id = ?" : "";
+      const params = repoId != null ? [repoId] : [];
+      const row = db
+        .prepare(
+          `SELECT COALESCE(SUM(cost_usd), 0) AS total
+           FROM cost_events
+           WHERE created_at >= datetime('now', '-60 minutes') ${whereClause}`,
+        )
+        .get(...params) as { total: number };
+      return row.total;
+    }
+  })();
+
+  return {
+    exceeded: limit != null && current >= limit,
+    current,
+    limit,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Projected cost estimation
+// ---------------------------------------------------------------------------
+
+const AVG_TOKENS_PER_FILE = 500;
+const AVG_TOKENS_PER_DIR = 2000;
+
+export function getProjectedCost(
+  fileCount: number,
+  commitCount: number,
+): { embeddingCost: number; summaryCost: number; totalCost: number } {
+  const embeddingTokens = fileCount * AVG_TOKENS_PER_FILE + commitCount * 50;
+  const embeddingCost = (embeddingTokens * PRICING["text-embedding-3-small"].input) / 1_000_000;
+
+  // Estimate ~1 directory per 5 files, each needing haiku summarization
+  const estimatedDirs = Math.max(1, Math.ceil(fileCount / 5));
+  const summaryInputTokens = estimatedDirs * AVG_TOKENS_PER_DIR;
+  const summaryOutputTokens = estimatedDirs * 200;
+  const summaryCost =
+    (summaryInputTokens * PRICING.haiku.input) / 1_000_000 +
+    (summaryOutputTokens * PRICING.haiku.output) / 1_000_000;
+
+  return {
+    embeddingCost,
+    summaryCost,
+    totalCost: embeddingCost + summaryCost,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Cost summary
 // ---------------------------------------------------------------------------
 

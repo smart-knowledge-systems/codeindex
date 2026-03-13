@@ -99,7 +99,7 @@ async function processDirectory(
   // Embed the concat skeleton
   let concatEmbedding: number[] | null = null;
   if (concatSkeleton.length > 0) {
-    concatEmbedding = await embedSingle(concatSkeleton.slice(0, 8000));
+    concatEmbedding = await embedSingle(concatSkeleton.slice(0, 4000));
   }
 
   // Generate summary via claude --print --model haiku

@@ -17,7 +17,7 @@ import { buildDirectoryIndex, updateAffectedDirectories } from "./index/director
 import { search } from "./search/query";
 import { installHook } from "./hooks/post-commit";
 import { exportToSqlite } from "./db/export";
-import { setCurrentRepo } from "./cost";
+import { setCurrentRepo, getProjectedCost, checkCostCap } from "./cost";
 import { generateIntent } from "./intent";
 import { detectDrift } from "./drift";
 import { repoAdd, repoRemove, repoList, repoStatus, repoPurge } from "./repo";
@@ -102,8 +102,11 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 // reindex command
 // ---------------------------------------------------------------------------
 
-async function cmdReindex(repoRoot: string, dryRun = false) {
+async function cmdReindex(repoRoot: string, dryRun = false, budget?: number) {
   const config = await loadConfig(repoRoot);
+  if (budget != null) {
+    config.costCap = { ...config.costCap, maxCostPerReindex: budget };
+  }
   const repoId = await ensureRepo(repoRoot);
   setCurrentRepo(repoId, repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
@@ -177,12 +180,23 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
     for (const f of filesToEmbed) {
       console.log(`  ${f.filePath} (${f.fileType})`);
     }
+    const projected = getProjectedCost(filesToEmbed.length, filesToEmbed.length * 3);
+    console.log(`\nProjected cost:`);
+    console.log(`  Embeddings: $${projected.embeddingCost.toFixed(4)}`);
+    console.log(`  Summaries:  $${projected.summaryCost.toFixed(4)}`);
+    console.log(`  Total:      $${projected.totalCost.toFixed(4)}`);
+    if (config.costCap.maxCostPerReindex != null) {
+      console.log(`  Budget:     $${config.costCap.maxCostPerReindex.toFixed(4)}`);
+      if (projected.totalCost > config.costCap.maxCostPerReindex) {
+        console.log(`  WARNING: projected cost exceeds budget`);
+      }
+    }
     return;
   }
 
   // Batch embed all skeletons
   if (filesToEmbed.length > 0) {
-    console.log(`Embedding ${filesToEmbed.length} files...`);
+    process.stderr.write(`Indexing: 0/${filesToEmbed.length} files...`);
     const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
 
     if (config.store === "pg") {
@@ -212,6 +226,9 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
             ],
           );
           indexed++;
+          if (indexed % 10 === 0 || indexed === filesToEmbed.length) {
+            process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
+          }
         }
         await pgUnsafe("COMMIT");
       } catch (err) {
@@ -252,12 +269,32 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
           deleteEmb.run(row.id);
           insertEmb.run(row.id, serializeEmbedding(embedding));
           indexed++;
+          if (indexed % 10 === 0 || indexed === filesToEmbed.length) {
+            process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
+          }
         }
       })();
     }
+    process.stderr.write("\n");
   }
 
   console.log(`Files: ${indexed} indexed, ${skipped} skipped (unchanged)`);
+
+  // Check cost cap after embedding batch
+  if (config.costCap.maxCostPerReindex != null) {
+    const cap = await checkCostCap(repoRoot, repoId);
+    if (cap.current >= (config.costCap.warnAt ?? Infinity)) {
+      console.warn(
+        `Cost warning: $${cap.current.toFixed(4)} spent (limit: $${cap.limit?.toFixed(4)})`,
+      );
+    }
+    if (cap.exceeded) {
+      console.error(
+        `Cost cap exceeded: $${cap.current.toFixed(4)} >= $${cap.limit?.toFixed(4)}. Aborting reindex.`,
+      );
+      return;
+    }
+  }
 
   // Index commits for each file
   console.log("Indexing commits...");
@@ -673,8 +710,13 @@ async function cmdSearch(
     includeSkeleton?: boolean;
     includeSummary?: boolean;
     includeSnippet?: boolean;
+    format?: string;
     json?: boolean;
     pretty?: boolean;
+    lang?: string[];
+    dir?: string[];
+    since?: string;
+    explain?: boolean;
   },
 ) {
   const searchOpts: SearchOptions = {
@@ -683,6 +725,10 @@ async function cmdSearch(
     includeSkeleton: opts.includeSkeleton,
     includeSummary: opts.includeSummary,
     includeSnippet: opts.includeSnippet,
+    lang: opts.lang,
+    dir: opts.dir,
+    since: opts.since,
+    explain: opts.explain,
   };
 
   if (opts.scope === "all") {
@@ -693,13 +739,22 @@ async function cmdSearch(
 
   const results = await search(repoRoot, query, searchOpts);
 
-  if (opts.pretty) {
+  // Resolve output format: --format takes precedence over --pretty/--json
+  const format = opts.format ?? (opts.pretty ? "pretty" : "json");
+
+  if (format === "compact") {
+    for (const r of results) {
+      const line = r.lineStart != null ? `:${r.lineStart}` : "";
+      console.log(`${r.filePath}${line}:${r.finalScore.toFixed(3)}`);
+    }
+  } else if (format === "pretty") {
     if (results.length === 0) {
       console.log("No results found.");
       return;
     }
+    const multiRepo = new Set(results.map((r) => r.repoName ?? r.repoId)).size > 1;
     for (const r of results) {
-      const prefix = r.inProject ? "" : `[${r.repoId}] `;
+      const prefix = multiRepo && r.repoName ? `[${r.repoName}] ` : "";
       const lineInfo = r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
       console.log(
         `${prefix}${r.filePath}${lineInfo}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
@@ -714,8 +769,16 @@ async function cmdSearch(
       if (r.summary) {
         console.log(`  ${r.summary}`);
       }
+      if (r.explanation) {
+        const e = r.explanation;
+        console.log(`  [explain] ${e.formula}`);
+        console.log(
+          `    cosine=${e.cosineSimilarity.toFixed(3)} commit=${e.commitBoost.toFixed(3)} parent=${e.parentBoost.toFixed(3)}${e.childBoost != null ? ` child=${e.childBoost.toFixed(3)}` : ""}${e.keywordScore != null ? ` bm25=${e.keywordScore.toFixed(3)}` : ""}${e.lengthPenalty != null ? ` lenPen=${e.lengthPenalty.toFixed(3)}` : ""}`,
+        );
+      }
     }
   } else {
+    // json (default)
     console.log(JSON.stringify(results, null, 2));
   }
 }
@@ -992,7 +1055,8 @@ const HELP_TEXT = `codeindex — semantic code search
 Commands:
   init                 Initialize codeindex in current repo
   reindex              Full reindex of current repo
-    --dry-run          Report what would change without writing
+    --dry-run          Report what would change and projected cost
+    --budget <usd>     Set cost cap for this reindex (USD)
   update               Incremental update (called by hook)
     --files <paths>    Files to re-index
     --commit <hash>    Commit to embed and link
@@ -1000,10 +1064,16 @@ Commands:
     --min-score <f>    Minimum score (default 0.3)
     --top-n <n>        Max results
     --scope <s>        project|all|name1,name2
+    --lang <l>         Filter by language (ts,python,rust,go,java,c,cpp,cs)
+    --dir <d>          Filter by directory prefix (src/api,lib)
+    --since <t>        Filter by time (30d, 2w, 3m, or ISO date)
     --include-skeleton Include skeleton text
     --include-summary  Include directory summaries
     --include-snippet  Include code snippets with line numbers
-    --pretty           Human-readable output
+    --explain          Show per-result score breakdown
+    --format <f>       Output format: json (default), pretty, compact
+    --pretty           Alias for --format pretty
+    --json             Alias for --format json
   intent               Generate AGENTS.md from directory summaries
     --out <path>       Output path (default: stdout)
   drift                Detect stale Intent Nodes in AGENTS.md
@@ -1032,9 +1102,15 @@ async function main() {
         await cmdInit(repoRoot);
         break;
 
-      case "reindex":
-        await cmdReindex(repoRoot, hasFlag(parsed, "dry-run"));
+      case "reindex": {
+        const budgetStr = flag(parsed, "budget");
+        await cmdReindex(
+          repoRoot,
+          hasFlag(parsed, "dry-run"),
+          budgetStr ? parseFloat(budgetStr) : undefined,
+        );
         break;
+      }
 
       case "update": {
         const filesRaw = flag(parsed, "files");
@@ -1051,6 +1127,8 @@ async function main() {
         }
         const minScoreStr = flag(parsed, "min-score");
         const topNStr = flag(parsed, "top-n");
+        const langRaw = flag(parsed, "lang");
+        const dirRaw = flag(parsed, "dir");
         await cmdSearch(repoRoot, query, {
           minScore: minScoreStr ? parseFloat(minScoreStr) : undefined,
           topN: topNStr ? parseInt(topNStr) : undefined,
@@ -1058,8 +1136,13 @@ async function main() {
           includeSkeleton: hasFlag(parsed, "include-skeleton"),
           includeSummary: hasFlag(parsed, "include-summary"),
           includeSnippet: hasFlag(parsed, "include-snippet"),
-          json: !hasFlag(parsed, "pretty"),
+          format: flag(parsed, "format"),
+          json: hasFlag(parsed, "json"),
           pretty: hasFlag(parsed, "pretty"),
+          lang: langRaw ? langRaw.split(",") : undefined,
+          dir: dirRaw ? dirRaw.split(",") : undefined,
+          since: flag(parsed, "since"),
+          explain: hasFlag(parsed, "explain"),
         });
         break;
       }

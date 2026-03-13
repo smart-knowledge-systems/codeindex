@@ -24,9 +24,12 @@ const DEFAULTS: CodeindexConfig = {
     gamma: 0.1,
     minScore: 0.3,
     parentBoostMultiplier: 0.3,
+    hybridWeight: 0.3,
+    lengthPenaltyWeight: 0.05,
   },
   formatter: null,
   skeletonFallbackLines: 50,
+  costCap: { maxCostPerReindex: null, warnAt: null },
 };
 
 const GLOBAL_CONFIG_PATH = path.join(
