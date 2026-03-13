@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import path from "path";
+import { parseArgs, flag, hasFlag } from "./cli";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
 import { pgUnsafe, closePg } from "./db/pg";
@@ -761,89 +762,114 @@ async function cmdConfig(repoRoot: string, args: string[]) {
 }
 
 // ---------------------------------------------------------------------------
+// doctor command
+// ---------------------------------------------------------------------------
+
+async function cmdDoctor(repoRoot: string) {
+  let ok = true;
+  const check = (label: string, pass: boolean, hint?: string) => {
+    const icon = pass ? "[ok]" : "[!!]";
+    console.log(`${icon} ${label}`);
+    if (!pass && hint) console.log(`     ${hint}`);
+    if (!pass) ok = false;
+  };
+
+  // 1. Git repo
+  const gitExists = await Bun.file(path.join(repoRoot, ".git")).exists();
+  check("Git repository", gitExists, "Run `git init` to initialize a repository.");
+
+  // 2. OPENAI_API_KEY
+  check(
+    "OPENAI_API_KEY set",
+    !!process.env.OPENAI_API_KEY,
+    "Set OPENAI_API_KEY in your environment to enable embeddings.",
+  );
+
+  // 3. Config loadable
+  let configOk = false;
+  let config: Awaited<ReturnType<typeof loadConfig>> | null = null;
+  try {
+    config = await loadConfig(repoRoot);
+    configOk = true;
+  } catch {
+    /* empty */
+  }
+  check(
+    "Config loadable",
+    configOk,
+    "Check .codeindex.json for syntax errors. Run `codeindex init` to create one.",
+  );
+
+  // 4. Backend reachable
+  if (config) {
+    if (config.store === "pg") {
+      try {
+        await pgUnsafe("SELECT 1");
+        check("PostgreSQL connection", true);
+      } catch {
+        check(
+          "PostgreSQL connection",
+          false,
+          "Cannot connect to PostgreSQL. Check PGHOST, PGPORT, PGDATABASE env vars or pg config in .codeindex.json.",
+        );
+      }
+    } else {
+      try {
+        await getSqlite(repoRoot);
+        check("SQLite database", true);
+      } catch {
+        check("SQLite database", false, "Cannot open SQLite database file.");
+      }
+    }
+
+    // 6. Schema created
+    if (config.store === "pg") {
+      try {
+        const tables = await pgUnsafe(
+          "SELECT count(*) as cnt FROM information_schema.tables WHERE table_name = 'files'",
+        );
+        check(
+          "Schema created",
+          (tables[0].cnt as number) > 0,
+          "Run `codeindex init` or `codeindex reindex`.",
+        );
+      } catch {
+        check("Schema created", false, "Run `codeindex init` or `codeindex reindex`.");
+      }
+    } else {
+      try {
+        const db = await getSqlite(repoRoot);
+        const tables = db
+          .prepare("SELECT count(*) as cnt FROM sqlite_master WHERE name = 'files'")
+          .get() as { cnt: number };
+        check("Schema created", tables.cnt > 0, "Run `codeindex init` or `codeindex reindex`.");
+      } catch {
+        check("Schema created", false, "Run `codeindex init` or `codeindex reindex`.");
+      }
+    }
+  }
+
+  // 5. claude CLI available
+  try {
+    const proc = Bun.spawn(["which", "claude"], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    check(
+      "claude CLI available",
+      exitCode === 0,
+      "Install claude CLI for directory summaries (optional).",
+    );
+  } catch {
+    check("claude CLI available", false, "Install claude CLI for directory summaries (optional).");
+  }
+
+  console.log(ok ? "\nAll checks passed." : "\nSome checks failed — see above.");
+}
+
+// ---------------------------------------------------------------------------
 // CLI dispatch
 // ---------------------------------------------------------------------------
 
-async function main() {
-  const args = process.argv.slice(2);
-  const command = args[0];
-
-  const repoRoot = (() => {
-    const pathIdx = args.indexOf("--path");
-    return pathIdx !== -1 ? path.resolve(args[pathIdx + 1]) : process.cwd();
-  })();
-
-  try {
-    switch (command) {
-      case "init":
-        await cmdInit(repoRoot);
-        break;
-
-      case "reindex":
-        await cmdReindex(repoRoot, args.includes("--dry-run"));
-        break;
-
-      case "update": {
-        const filesIdx = args.indexOf("--files");
-        const commitIdx = args.indexOf("--commit");
-        const files: string[] = [];
-        if (filesIdx !== -1) {
-          for (let i = filesIdx + 1; i < args.length; i++) {
-            if (args[i].startsWith("--")) break;
-            files.push(args[i]);
-          }
-        }
-        const commitHash = commitIdx !== -1 ? args[commitIdx + 1] : undefined;
-        await cmdUpdate(repoRoot, files, commitHash);
-        break;
-      }
-
-      case "search": {
-        const query = args[1];
-        if (!query) {
-          console.error("Usage: codeindex search <query> [options]");
-          process.exit(1);
-        }
-        const getFlag = (flag: string) => {
-          const idx = args.indexOf(flag);
-          return idx !== -1 ? args[idx + 1] : undefined;
-        };
-        await cmdSearch(repoRoot, query, {
-          minScore: getFlag("--min-score") ? parseFloat(getFlag("--min-score")!) : undefined,
-          topN: getFlag("--top-n") ? parseInt(getFlag("--top-n")!) : undefined,
-          scope: getFlag("--scope"),
-          includeSkeleton: args.includes("--include-skeleton"),
-          includeSummary: args.includes("--include-summary"),
-          json: !args.includes("--pretty"),
-          pretty: args.includes("--pretty"),
-        });
-        break;
-      }
-
-      case "export": {
-        const outPath = (() => {
-          const idx = args.indexOf("--out");
-          return idx !== -1 ? args[idx + 1] : ".codeindex.db";
-        })();
-        await cmdExport(repoRoot, outPath);
-        break;
-      }
-
-      case "install-hook":
-        await installHook(repoRoot);
-        console.log("Post-commit hook installed.");
-        break;
-
-      case "config":
-        await cmdConfig(repoRoot, args.slice(1));
-        break;
-
-      case "status":
-        await cmdStatus(repoRoot);
-        break;
-
-      default:
-        console.log(`codeindex — semantic code search
+const HELP_TEXT = `codeindex — semantic code search
 
 Commands:
   init                 Initialize codeindex in current repo
@@ -864,10 +890,83 @@ Commands:
   install-hook         Install post-commit git hook
   config               Show/set configuration
   status               Show index stats
+  doctor               Check environment and configuration
 
 Options:
-  --path <dir>         Repo root (default: cwd)`);
+  --path <dir>         Repo root (default: cwd)`;
+
+async function main() {
+  const parsed = parseArgs(process.argv);
+  const repoRoot = flag(parsed, "path") ? path.resolve(flag(parsed, "path")!) : process.cwd();
+
+  try {
+    switch (parsed.command) {
+      case "init":
+        await cmdInit(repoRoot);
         break;
+
+      case "reindex":
+        await cmdReindex(repoRoot, hasFlag(parsed, "dry-run"));
+        break;
+
+      case "update": {
+        const filesRaw = flag(parsed, "files");
+        const files = filesRaw ? filesRaw.split(",") : parsed.positional;
+        await cmdUpdate(repoRoot, files, flag(parsed, "commit"));
+        break;
+      }
+
+      case "search": {
+        const query = parsed.positional[0];
+        if (!query) {
+          console.error("Usage: codeindex search <query> [options]");
+          process.exit(1);
+        }
+        const minScoreStr = flag(parsed, "min-score");
+        const topNStr = flag(parsed, "top-n");
+        await cmdSearch(repoRoot, query, {
+          minScore: minScoreStr ? parseFloat(minScoreStr) : undefined,
+          topN: topNStr ? parseInt(topNStr) : undefined,
+          scope: flag(parsed, "scope"),
+          includeSkeleton: hasFlag(parsed, "include-skeleton"),
+          includeSummary: hasFlag(parsed, "include-summary"),
+          json: !hasFlag(parsed, "pretty"),
+          pretty: hasFlag(parsed, "pretty"),
+        });
+        break;
+      }
+
+      case "export":
+        await cmdExport(repoRoot, flag(parsed, "out") ?? ".codeindex.db");
+        break;
+
+      case "install-hook":
+        await installHook(repoRoot);
+        console.log("Post-commit hook installed.");
+        break;
+
+      case "config":
+        await cmdConfig(repoRoot, process.argv.slice(3));
+        break;
+
+      case "status":
+        await cmdStatus(repoRoot);
+        break;
+
+      case "doctor":
+        await cmdDoctor(repoRoot);
+        break;
+
+      case "":
+      case "help":
+      case "--help":
+      case "-h":
+        console.log(HELP_TEXT);
+        break;
+
+      default:
+        console.error(`Unknown command: '${parsed.command}'. Run 'codeindex' for usage.`);
+        process.exit(1);
     }
   } finally {
     await closePg();
