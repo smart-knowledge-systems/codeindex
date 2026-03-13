@@ -18,3 +18,5 @@ export { pgUnsafe } from "./db/pg";
 export { getSqlite } from "./db/sqlite";
 export { loadConfig } from "./config";
 export { getCostSummary } from "./cost";
+export { extractImports, resolveImport } from "./index/imports";
+export type { ImportEdge } from "./index/imports";
