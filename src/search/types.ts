@@ -43,6 +43,7 @@ export interface ScoringConfig {
   commitDepth: number;
   alpha: number;
   beta: number;
+  gamma: number;
   minScore: number;
 }
 

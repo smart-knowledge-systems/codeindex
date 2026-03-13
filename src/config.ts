@@ -21,6 +21,7 @@ const DEFAULTS: CodeindexConfig = {
     commitDepth: 5,
     alpha: 0.15,
     beta: 0.2,
+    gamma: 0.1,
     minScore: 0.3,
   },
   formatter: null,

@@ -424,6 +424,8 @@ async function cmdConfig(repoRoot: string, args: string[]) {
       updates.scoring = { ...((updates.scoring as object) ?? {}), alpha: parseFloat(value) };
     else if (key === "beta")
       updates.scoring = { ...((updates.scoring as object) ?? {}), beta: parseFloat(value) };
+    else if (key === "gamma")
+      updates.scoring = { ...((updates.scoring as object) ?? {}), gamma: parseFloat(value) };
     else if (key === "min-score")
       updates.scoring = { ...((updates.scoring as object) ?? {}), minScore: parseFloat(value) };
   }
