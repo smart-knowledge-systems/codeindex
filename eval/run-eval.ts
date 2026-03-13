@@ -12,7 +12,7 @@ function computePrecisionAt5(returnedFiles: string[], expectedFiles: string[]): 
   if (expectedFiles.length === 0) return returnedFiles.length === 0 ? 1 : 0;
   const top5 = returnedFiles.slice(0, 5);
   const hits = top5.filter((f) => expectedFiles.includes(f)).length;
-  return hits / Math.min(5, expectedFiles.length);
+  return hits / 5;
 }
 
 function computeRecall(returnedFiles: string[], expectedFiles: string[]): number {
@@ -65,11 +65,18 @@ export async function runEval(
   const results: EvalResult[] = [];
 
   for (const q of dataset) {
+    const mergedOverrides: Partial<ScoringConfig> | undefined =
+      scoringOverrides != null || parentBoostMultiplier != null
+        ? {
+            ...scoringOverrides,
+            ...(parentBoostMultiplier != null ? { parentBoostMultiplier } : {}),
+          }
+        : undefined;
+
     const options: SearchOptions = {
       topN: 10,
       minScore: 0.1,
-      scoringOverrides,
-      parentBoostMultiplier,
+      scoringOverrides: mergedOverrides,
     };
 
     const searchResults = await search(repoRoot, q.query, options);
