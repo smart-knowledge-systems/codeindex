@@ -10,6 +10,7 @@ import { serializeEmbedding } from "./db/util";
 import { walkRepo } from "./index/walker";
 import { extractSkeleton, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
+import { scanForSecrets } from "./index/secrets";
 import { embed, embedSingle } from "./index/embedder";
 import { getRepoOrigin, getRepoName, getFileCommits, getChangedFiles } from "./index/commits";
 import { buildDirectoryIndex, updateAffectedDirectories } from "./index/directories";
@@ -118,6 +119,14 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
     allFiles.push(relPath);
     const absPath = path.join(repoRoot, relPath);
     const content = await Bun.file(absPath).text();
+
+    const scan = scanForSecrets(content);
+    if (scan.hasSecrets) {
+      console.warn(`  SKIP ${relPath}: potential secrets (${scan.patterns.join(", ")})`);
+      skipped++;
+      continue;
+    }
+
     const ext = path.extname(relPath).toLowerCase() || ".txt";
 
     const { hash } = await formatAndHash(content, formatter);
@@ -405,6 +414,13 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     }
 
     const content = await file.text();
+
+    const scan = scanForSecrets(content);
+    if (scan.hasSecrets) {
+      console.warn(`  SKIP ${relPath}: potential secrets (${scan.patterns.join(", ")})`);
+      continue;
+    }
+
     const ext = path.extname(relPath).toLowerCase() || ".txt";
     const { hash } = await formatAndHash(content, formatter);
 
