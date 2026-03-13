@@ -1,0 +1,142 @@
+[
+  {
+    "dirPath": "src/",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "Top-level source directory; summary should mention semantic code search tool with indexing, search, and CLI components"
+  },
+  {
+    "dirPath": "src/db/",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "Database layer with PostgreSQL and SQLite backends, schema management, and export"
+  },
+  {
+    "dirPath": "src/index/",
+    "accuracy": 4,
+    "completeness": 5,
+    "navigability": 4,
+    "notes": "Core indexing pipeline: walker, embedder, skeleton, commits, directories, formatter, secrets"
+  },
+  {
+    "dirPath": "src/search/",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "Search query execution with scoring formula, type definitions"
+  },
+  {
+    "dirPath": "src/hooks/",
+    "accuracy": 4,
+    "completeness": 3,
+    "navigability": 3,
+    "notes": "Git hook integration for automatic re-indexing; single file currently"
+  },
+  {
+    "dirPath": "eval/",
+    "accuracy": 3,
+    "completeness": 3,
+    "navigability": 3,
+    "notes": "Evaluation framework for measuring search quality"
+  },
+  {
+    "dirPath": "src/db/pg.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 3,
+    "notes": "PostgreSQL connection and raw query helper using pgvector"
+  },
+  {
+    "dirPath": "src/db/sqlite.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 3,
+    "notes": "SQLite connection with sqlite-vec extension loading"
+  },
+  {
+    "dirPath": "src/db/schema.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "Table creation DDL for both PostgreSQL and SQLite"
+  },
+  {
+    "dirPath": "src/db/export.ts",
+    "accuracy": 3,
+    "completeness": 3,
+    "navigability": 3,
+    "notes": "Database snapshot export functionality"
+  },
+  {
+    "dirPath": "src/db/util.ts",
+    "accuracy": 4,
+    "completeness": 3,
+    "navigability": 3,
+    "notes": "Shared DB utilities like embedding serialization"
+  },
+  {
+    "dirPath": "src/index/walker.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "File system walker with gitignore and indexignore support"
+  },
+  {
+    "dirPath": "src/index/embedder.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "OpenAI embedding generation for text chunks"
+  },
+  {
+    "dirPath": "src/index/skeleton.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "Tree-sitter based AST skeleton extraction"
+  },
+  {
+    "dirPath": "src/index/commits.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "Git commit history indexing with recency tracking"
+  },
+  {
+    "dirPath": "src/index/directories.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "Directory-level summary generation using LLM"
+  },
+  {
+    "dirPath": "src/index/formatter.ts",
+    "accuracy": 4,
+    "completeness": 3,
+    "navigability": 3,
+    "notes": "Content formatting and hash computation for change detection"
+  },
+  {
+    "dirPath": "src/index/secrets.ts",
+    "accuracy": 4,
+    "completeness": 3,
+    "navigability": 3,
+    "notes": "Secret/credential detection to exclude sensitive files"
+  },
+  {
+    "dirPath": "src/hooks/post-commit.ts",
+    "accuracy": 4,
+    "completeness": 3,
+    "navigability": 3,
+    "notes": "Git post-commit hook for incremental re-indexing"
+  },
+  {
+    "dirPath": "src/config.ts",
+    "accuracy": 4,
+    "completeness": 4,
+    "navigability": 4,
+    "notes": "Configuration discovery, loading, and defaults"
+  }
+]
