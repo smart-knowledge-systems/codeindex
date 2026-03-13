@@ -1,0 +1,32 @@
+# Additional patterns to exclude from codeindex (same syntax as .gitignore)
+# node_modules and .git are always excluded
+
+# Large generated files
+*.min.js
+*.min.css
+*.bundle.js
+
+# Build output
+dist/
+build/
+out/
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Binary files
+*.png
+*.jpg
+*.gif
+*.ico
+*.woff
+*.woff2
+*.ttf
+*.eot
+
+audit/
+eval/
+dialogue/
+codeindex-skill-workspace/
