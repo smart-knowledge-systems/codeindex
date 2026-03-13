@@ -408,6 +408,10 @@ function extractPyReturnAnnotation(node: Node): string {
   return ` -> ${ret.text}`;
 }
 
+function extractPyDecorators(node: Node): string[] {
+  return childrenOfType(node, "decorator").map((d) => d.text.split("\n")[0].trim());
+}
+
 function extractPyClass(node: Node): string[] {
   const lines: string[] = [];
   const name = childText(node, "name");
@@ -420,13 +424,20 @@ function extractPyClass(node: Node): string[] {
   if (!body) return lines;
 
   for (const child of body.namedChildren) {
-    if (child.type === "function_definition") {
-      const mName = childText(child, "name");
-      const params = child.childForFieldName("parameters");
+    let funcNode = child;
+    let decorators: string[] = [];
+    if (child.type === "decorated_definition") {
+      decorators = extractPyDecorators(child);
+      funcNode = child.namedChildren.find((c) => c.type === "function_definition") ?? child;
+    }
+    if (funcNode.type === "function_definition") {
+      const mName = childText(funcNode, "name");
+      const params = funcNode.childForFieldName("parameters");
       const paramStr = extractPyParams(params);
-      const retStr = extractPyReturnAnnotation(child);
+      const retStr = extractPyReturnAnnotation(funcNode);
       const vis = mName.startsWith("_") && !mName.startsWith("__") ? "-" : "+";
-      const mDoc = extractPyDocstring(child);
+      const mDoc = extractPyDocstring(funcNode);
+      for (const dec of decorators) lines.push(`  ${dec}`);
       lines.push(`  ${vis} ${mName}(${paramStr})${retStr}`);
       if (mDoc) lines.push(`    """${mDoc}"""`);
     }
@@ -467,8 +478,9 @@ function skeletonPython(filename: string, root: Node): string {
     }
   }
 
-  for (const node of root.namedChildren) {
+  function emitPyDecl(node: Node, decorators: string[] = []): void {
     if (node.type === "class_definition") {
+      for (const dec of decorators) lines.push(dec);
       lines.push(...extractPyClass(node));
       lines.push("");
     } else if (node.type === "function_definition") {
@@ -476,10 +488,23 @@ function skeletonPython(filename: string, root: Node): string {
       const params = node.childForFieldName("parameters");
       const paramStr = extractPyParams(params);
       const retStr = extractPyReturnAnnotation(node);
+      for (const dec of decorators) lines.push(dec);
       lines.push(`function ${name}(${paramStr})${retStr}`);
       const doc = extractPyDocstring(node);
       if (doc) lines.push(`  """${doc}"""`);
       lines.push("");
+    }
+  }
+
+  for (const node of root.namedChildren) {
+    if (node.type === "decorated_definition") {
+      const decorators = extractPyDecorators(node);
+      const definition = node.namedChildren.find(
+        (c) => c.type === "class_definition" || c.type === "function_definition",
+      );
+      if (definition) emitPyDecl(definition, decorators);
+    } else {
+      emitPyDecl(node);
     }
   }
 
@@ -1109,6 +1134,15 @@ function collectEntries(root: Node): SkeletonEntry[] {
       case "type_alias_declaration": {
         const name = node.childForFieldName("name")?.text ?? "(anonymous)";
         entries.push({ name, kind: "type", startLine, endLine });
+        return;
+      }
+
+      // Python decorated definition
+      case "decorated_definition": {
+        const definition = node.namedChildren.find(
+          (c) => c.type === "class_definition" || c.type === "function_definition",
+        );
+        if (definition) walk(definition);
         return;
       }
 

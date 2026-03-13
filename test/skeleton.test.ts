@@ -174,6 +174,20 @@ describe("Python (.py)", () => {
   it("skeleton text includes docstrings", () => {
     expect(text).toContain("Manages database connections");
   });
+
+  it("extracts decorated class", () => {
+    expect(hasEntry(entries, "Config", "class")).toBeDefined();
+  });
+
+  it("skeleton text includes class decorator", () => {
+    expect(text).toContain("@dataclass");
+    expect(text).toContain("class Config");
+  });
+
+  it("skeleton text includes method decorator", () => {
+    expect(text).toContain("@property");
+    expect(text).toContain("is_connected");
+  });
 });
 
 // ---------------------------------------------------------------------------

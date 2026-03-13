@@ -1,4 +1,12 @@
 from typing import List, Optional
+from dataclasses import dataclass
+
+
+@dataclass
+class Config:
+    """Application configuration."""
+    host: str = "localhost"
+    port: int = 8080
 
 
 class Database:
@@ -15,6 +23,11 @@ class Database:
     def query(self, sql: str, params: Optional[List] = None) -> List[dict]:
         """Execute a query and return rows."""
         return []
+
+    @property
+    def is_connected(self) -> bool:
+        """Check connection status."""
+        return self._conn is not None
 
 
 def create_pool(url: str, size: int = 5) -> Database:
