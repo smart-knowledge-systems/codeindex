@@ -1,4 +1,5 @@
 import path from "path";
+import { createHash } from "crypto";
 import { embedSingle } from "./embedder";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
@@ -62,66 +63,113 @@ async function processDirectory(
     }
   }
 
-  // Fetch skeletons for immediate child files from db
+  // Fetch skeletons and content hashes for immediate child files from db
   const config = await loadConfig(repoRoot);
   const skeletons: string[] = [];
+  const hashParts: string[] = [];
   for (const fp of childFiles) {
     if (config.store === "pg") {
       const rows = await pgUnsafe(
-        "SELECT skeleton FROM files WHERE repo_id = $1 AND file_path = $2",
+        "SELECT skeleton, content_hash FROM files WHERE repo_id = $1 AND file_path = $2",
         [repoId, fp],
       );
-      if (rows.length > 0 && rows[0].skeleton) {
-        skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
+      if (rows.length > 0) {
+        if (rows[0].skeleton) skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
+        hashParts.push(`${fp}:${rows[0].content_hash}`);
       }
     } else {
       const db = await getSqlite(repoRoot);
       const rows = db
-        .prepare("SELECT skeleton FROM files WHERE repo_id = ? AND file_path = ?")
-        .all(repoId, fp) as { skeleton: string | null }[];
-      if (rows.length > 0 && rows[0].skeleton) {
-        skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
+        .prepare("SELECT skeleton, content_hash FROM files WHERE repo_id = ? AND file_path = ?")
+        .all(repoId, fp) as { skeleton: string | null; content_hash: string }[];
+      if (rows.length > 0) {
+        if (rows[0].skeleton) skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
+        hashParts.push(`${fp}:${rows[0].content_hash}`);
       }
     }
   }
 
   const concatSkeleton = skeletons.join("\n\n");
 
-  // Gather child directory summaries (already processed, bottom-up)
+  // Gather child directory summaries and their hashes (already processed, bottom-up)
   const childSummaries: string[] = [];
   for (const cd of childDirSet) {
     const cached = summaryCache.get(cd);
     if (cached) {
       childSummaries.push(`[${cd}]: ${cached}`);
+      hashParts.push(`dir:${cd}:${createHash("sha256").update(cached).digest("hex").slice(0, 16)}`);
     }
   }
 
+  // Compute children_hash from all child content hashes + child dir summary hashes
+  const childrenHash =
+    hashParts.length > 0
+      ? createHash("sha256").update(hashParts.sort().join("\n")).digest("hex")
+      : null;
+
+  // Check if existing directory has the same children_hash — skip re-summarization if so
+  let existingSummary: string | null = null;
+  let existingHash: string | null = null;
+  if (config.store === "pg") {
+    const existing = await pgUnsafe(
+      "SELECT summary, children_hash FROM directories WHERE repo_id = $1 AND dir_path = $2",
+      [repoId, dirPath],
+    );
+    if (existing.length > 0) {
+      existingSummary = existing[0].summary as string | null;
+      existingHash = existing[0].children_hash as string | null;
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    const existing = db
+      .prepare("SELECT summary, children_hash FROM directories WHERE repo_id = ? AND dir_path = ?")
+      .all(repoId, dirPath) as { summary: string | null; children_hash: string | null }[];
+    if (existing.length > 0) {
+      existingSummary = existing[0].summary;
+      existingHash = existing[0].children_hash;
+    }
+  }
+
+  const cacheHit = childrenHash !== null && existingHash === childrenHash && existingSummary;
+
   // Embed the concat skeleton
   let concatEmbedding: number[] | null = null;
-  if (concatSkeleton.length > 0) {
+  if (concatSkeleton.length > 0 && !cacheHit) {
     concatEmbedding = await embedSingle(concatSkeleton.slice(0, 4000));
   }
 
-  // Generate summary via claude --print --model haiku
-  const summary = await generateSummary(concatSkeleton, childSummaries);
+  // Generate summary via claude --print --model haiku (skip on cache hit)
+  let summary: string | null;
+  if (cacheHit) {
+    summary = existingSummary;
+    console.error(`  [cache hit] ${dirPath}`);
+  } else {
+    summary = await generateSummary(concatSkeleton, childSummaries);
+  }
 
-  // Embed the summary
+  // Embed the summary (skip on cache hit)
   let summaryEmbedding: number[] | null = null;
-  if (summary) {
+  if (summary && !cacheHit) {
     summaryEmbedding = await embedSingle(summary);
+  }
+  if (summary) {
     summaryCache.set(dirPath, summary);
   }
 
-  // Upsert directory record
+  // Skip upsert entirely on cache hit — existing data is still valid
+  if (cacheHit) return;
+
+  // Upsert directory record with children_hash
   if (config.store === "pg") {
     await pgUnsafe(
-      `INSERT INTO directories (repo_id, dir_path, concat_skeleton, concat_embedding, summary, summary_embedding)
-       VALUES ($1, $2, $3, $4::vector, $5, $6::vector)
+      `INSERT INTO directories (repo_id, dir_path, concat_skeleton, concat_embedding, summary, summary_embedding, children_hash)
+       VALUES ($1, $2, $3, $4::vector, $5, $6::vector, $7)
        ON CONFLICT (repo_id, dir_path) DO UPDATE SET
          concat_skeleton = EXCLUDED.concat_skeleton,
          concat_embedding = EXCLUDED.concat_embedding,
          summary = EXCLUDED.summary,
-         summary_embedding = EXCLUDED.summary_embedding`,
+         summary_embedding = EXCLUDED.summary_embedding,
+         children_hash = EXCLUDED.children_hash`,
       [
         repoId,
         dirPath,
@@ -129,20 +177,22 @@ async function processDirectory(
         concatEmbedding ? `[${concatEmbedding.join(",")}]` : null,
         summary,
         summaryEmbedding ? `[${summaryEmbedding.join(",")}]` : null,
+        childrenHash,
       ],
     );
   } else {
     const db = await getSqlite(repoRoot);
     const row = db
       .prepare(
-        `INSERT INTO directories (repo_id, dir_path, concat_skeleton, summary)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO directories (repo_id, dir_path, concat_skeleton, summary, children_hash)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, dir_path) DO UPDATE SET
            concat_skeleton = excluded.concat_skeleton,
-           summary = excluded.summary
+           summary = excluded.summary,
+           children_hash = excluded.children_hash
          RETURNING id`,
       )
-      .get(repoId, dirPath, concatSkeleton || null, summary) as { id: number };
+      .get(repoId, dirPath, concatSkeleton || null, summary, childrenHash) as { id: number };
     if (concatEmbedding) {
       db.prepare(`DELETE FROM dir_concat_embeddings WHERE dir_id = ?`).run(row.id);
       db.prepare(`INSERT INTO dir_concat_embeddings (dir_id, embedding) VALUES (?, ?)`).run(
