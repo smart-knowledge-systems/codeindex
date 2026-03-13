@@ -26,6 +26,10 @@ export interface SearchResult {
   lineEnd?: number;
   snippet?: string;
   explanation?: ScoreExplanation;
+  crossRepoEdges?: Array<{
+    repoName: string;
+    direction: "depends-on" | "depended-by";
+  }>;
 }
 
 export interface SearchOptions {

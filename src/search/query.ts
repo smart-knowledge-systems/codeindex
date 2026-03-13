@@ -933,6 +933,11 @@ export async function search(
     await attachSnippets(repoRoot, config, finalResults, query);
   }
 
+  // Post-processing: annotate with cross-repo edges if multi-repo
+  if (repoIds.length > 1) {
+    await attachCrossRepoEdges(repoRoot, config, finalResults);
+  }
+
   return finalResults;
 }
 
@@ -1030,6 +1035,96 @@ async function attachSnippets(
       result.snippet = lines.slice(start, end).join("\n");
     } catch {
       // File might not exist on disk
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-repo edge post-processing
+// ---------------------------------------------------------------------------
+
+async function attachCrossRepoEdges(
+  repoRoot: string,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  results: SearchResult[],
+): Promise<void> {
+  // Build repo name map
+  const repoNameMap = new Map<number, string>();
+  if (config.store === "pg") {
+    const repos = (await pgUnsafe("SELECT id, name FROM repos")) as {
+      id: string;
+      name: string;
+    }[];
+    for (const r of repos) repoNameMap.set(parseInt(r.id), r.name);
+
+    for (const result of results) {
+      if (result.type === "commit" || result.type === "dir") continue;
+
+      const repoId = result.repoId ? parseInt(result.repoId) : null;
+      if (!repoId) continue;
+
+      const deps = (await pgUnsafe(
+        `SELECT DISTINCT r.name, 'depends-on' AS direction
+         FROM cross_repo_edges cre
+         JOIN repos r ON r.id = cre.target_repo_id
+         WHERE cre.source_repo_id = $1
+         UNION
+         SELECT DISTINCT r.name, 'depended-by' AS direction
+         FROM cross_repo_edges cre
+         JOIN repos r ON r.id = cre.source_repo_id
+         WHERE cre.target_repo_id = $1`,
+        [repoId],
+      )) as { name: string; direction: string }[];
+
+      if (deps.length > 0) {
+        result.crossRepoEdges = deps.map((d) => ({
+          repoName: d.name,
+          direction: d.direction as "depends-on" | "depended-by",
+        }));
+      }
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    const repos = db.prepare("SELECT id, name FROM repos").all() as {
+      id: number;
+      name: string;
+    }[];
+    for (const r of repos) repoNameMap.set(r.id, r.name);
+
+    // Build cross-repo edges lookup once
+    const allEdges = db
+      .prepare(
+        `SELECT source_repo_id, target_repo_id FROM cross_repo_edges
+         GROUP BY source_repo_id, target_repo_id`,
+      )
+      .all() as { source_repo_id: number; target_repo_id: number }[];
+
+    const depsByRepo = new Map<
+      number,
+      Array<{ repoName: string; direction: "depends-on" | "depended-by" }>
+    >();
+    for (const e of allEdges) {
+      // source depends-on target
+      const sourceList = depsByRepo.get(e.source_repo_id) ?? [];
+      const targetName = repoNameMap.get(e.target_repo_id) ?? `repo:${e.target_repo_id}`;
+      sourceList.push({ repoName: targetName, direction: "depends-on" });
+      depsByRepo.set(e.source_repo_id, sourceList);
+
+      // target depended-by source
+      const targetList = depsByRepo.get(e.target_repo_id) ?? [];
+      const sourceName = repoNameMap.get(e.source_repo_id) ?? `repo:${e.source_repo_id}`;
+      targetList.push({ repoName: sourceName, direction: "depended-by" });
+      depsByRepo.set(e.target_repo_id, targetList);
+    }
+
+    for (const result of results) {
+      if (result.type === "commit" || result.type === "dir") continue;
+      const repoId = result.repoId ? parseInt(result.repoId) : null;
+      if (!repoId) continue;
+      const edges = depsByRepo.get(repoId);
+      if (edges && edges.length > 0) {
+        result.crossRepoEdges = edges;
+      }
     }
   }
 }
