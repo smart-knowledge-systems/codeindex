@@ -1266,7 +1266,7 @@ async function attachCrossRepoEdges(
     if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
       const placeholders = scopedRepoIds.map(() => "?").join(",");
       edgeQuery += ` WHERE source_repo_id IN (${placeholders}) AND target_repo_id IN (${placeholders})`;
-      edgeBindings.push(...scopedRepoIds);
+      edgeBindings.push(...scopedRepoIds, ...scopedRepoIds);
     }
     edgeQuery += ` GROUP BY source_repo_id, target_repo_id`;
     const allEdges = db.prepare(edgeQuery).all(...edgeBindings) as {
