@@ -100,7 +100,7 @@ export async function startStdio(server: McpServer): Promise<void> {
  * Includes CORS headers and per-session rate limiting.
  */
 export async function startSSE(
-  server: McpServer,
+  createServer_: (session?: AuthSession) => McpServer,
   port: number,
   repoRoot: string,
 ): Promise<Map<string, SessionEntry>> {
@@ -136,7 +136,9 @@ export async function startSSE(
         sessions.delete(sessionId);
         removeRateBucket(sessionId);
       });
-      await server.connect(transport);
+      // Create a per-client McpServer with the authenticated session
+      const perClientServer = createServer_(session);
+      await perClientServer.connect(transport);
     } else if (req.method === "POST" && req.url?.startsWith("/message")) {
       const url = new URL(req.url, `http://localhost:${port}`);
       const sessionId = url.searchParams.get("sessionId");

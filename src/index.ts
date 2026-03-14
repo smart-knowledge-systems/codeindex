@@ -2143,9 +2143,12 @@ async function main() {
         const { startStdio, startSSE } = await import("./mcp/transport");
         const transport = flag(parsed, "transport") ?? "stdio";
         if (transport === "sse") {
-          const mcpServer = createMcpServer(repoRoot);
           const portStr = flag(parsed, "port");
-          await startSSE(mcpServer, portStr ? parseInt(portStr) : 3100, repoRoot);
+          await startSSE(
+            (session) => createMcpServer(repoRoot, session),
+            portStr ? parseInt(portStr) : 3100,
+            repoRoot,
+          );
         } else {
           const { authenticateSession } = await import("./mcp/auth");
           const token = process.env.CODEINDEX_TOKEN;
