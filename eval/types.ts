@@ -32,6 +32,8 @@ export interface EvalResult {
   returnedFiles: string[];
   expectedFiles: string[];
   scoringConfig: Partial<ScoringConfig>;
+  uniqueFilesInTop5?: number;
+  uniqueDirsInTop5?: number;
 }
 
 export interface EvalSummary {
@@ -43,6 +45,8 @@ export interface EvalSummary {
   avgMrr: number;
   avgNdcg: number;
   costPer1kFiles?: number;
+  avgUniqueFilesInTop5?: number;
+  avgUniqueDirsInTop5?: number;
   results: EvalResult[];
   timestamp: string;
 }

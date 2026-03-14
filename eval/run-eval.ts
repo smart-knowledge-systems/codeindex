@@ -99,6 +99,11 @@ export async function runEval(
     const mrr = computeMrr(returnedFiles, q.expectedFiles);
     const ndcg = computeNdcg(returnedFiles, q.expectedFiles);
 
+    // Diversity metrics
+    const top5Files = returnedFiles.slice(0, 5);
+    const uniqueFilesInTop5 = new Set(top5Files).size;
+    const uniqueDirsInTop5 = new Set(top5Files.map((f) => path.dirname(f))).size;
+
     results.push({
       queryId: q.id,
       query: q.query,
@@ -110,6 +115,8 @@ export async function runEval(
       returnedFiles,
       expectedFiles: q.expectedFiles,
       scoringConfig: scoringOverrides ?? {},
+      uniqueFilesInTop5,
+      uniqueDirsInTop5,
     });
   }
 
@@ -132,6 +139,10 @@ function generateMarkdown(summary: EvalSummary, ripgrepSummary?: EvalSummary): s
   lines.push(`| Avg Recall | ${summary.avgRecall.toFixed(3)} |`);
   lines.push(`| Avg MRR | ${summary.avgMrr.toFixed(3)} |`);
   lines.push(`| Avg nDCG@10 | ${summary.avgNdcg.toFixed(3)} |`);
+  if (summary.avgUniqueFilesInTop5 != null)
+    lines.push(`| Avg Unique Files in Top 5 | ${summary.avgUniqueFilesInTop5.toFixed(2)} |`);
+  if (summary.avgUniqueDirsInTop5 != null)
+    lines.push(`| Avg Unique Dirs in Top 5 | ${summary.avgUniqueDirsInTop5.toFixed(2)} |`);
   if (summary.model) lines.push(`| Model | ${summary.model} |`);
   if (summary.costPer1kFiles != null)
     lines.push(`| Cost / 1K files | $${summary.costPer1kFiles.toFixed(4)} |`);
@@ -163,11 +174,11 @@ function generateMarkdown(summary: EvalSummary, ripgrepSummary?: EvalSummary): s
   }
 
   lines.push(`\n## Per-Query Results\n`);
-  lines.push(`| Query | P@5 | HR@5 | Recall | MRR | nDCG |`);
-  lines.push(`|-------|-----|------|--------|-----|------|`);
+  lines.push(`| Query | P@5 | HR@5 | Recall | MRR | nDCG | Files@5 | Dirs@5 |`);
+  lines.push(`|-------|-----|------|--------|-----|------|---------|--------|`);
   for (const r of summary.results) {
     lines.push(
-      `| ${r.queryId} | ${r.precision5.toFixed(2)} | ${r.hitRate5.toFixed(2)} | ${r.recall.toFixed(2)} | ${r.mrr.toFixed(2)} | ${r.ndcg.toFixed(2)} |`,
+      `| ${r.queryId} | ${r.precision5.toFixed(2)} | ${r.hitRate5.toFixed(2)} | ${r.recall.toFixed(2)} | ${r.mrr.toFixed(2)} | ${r.ndcg.toFixed(2)} | ${r.uniqueFilesInTop5 ?? "-"} | ${r.uniqueDirsInTop5 ?? "-"} |`,
     );
   }
 
@@ -251,6 +262,10 @@ async function main() {
   const avgRecall = results.reduce((s, r) => s + r.recall, 0) / results.length;
   const avgMrr = results.reduce((s, r) => s + r.mrr, 0) / results.length;
   const avgNdcg = results.reduce((s, r) => s + r.ndcg, 0) / results.length;
+  const avgUniqueFilesInTop5 =
+    results.reduce((s, r) => s + (r.uniqueFilesInTop5 ?? 0), 0) / results.length;
+  const avgUniqueDirsInTop5 =
+    results.reduce((s, r) => s + (r.uniqueDirsInTop5 ?? 0), 0) / results.length;
 
   const summary: EvalSummary = {
     configName,
@@ -259,6 +274,8 @@ async function main() {
     avgRecall,
     avgMrr,
     avgNdcg,
+    avgUniqueFilesInTop5,
+    avgUniqueDirsInTop5,
     results,
     timestamp: new Date().toISOString(),
   };
@@ -322,6 +339,8 @@ async function main() {
   console.log(`  Avg Recall: ${avgRecall.toFixed(3)}`);
   console.log(`  Avg MRR:    ${avgMrr.toFixed(3)}`);
   console.log(`  Avg nDCG:   ${avgNdcg.toFixed(3)}`);
+  console.log(`  Avg Unique Files@5: ${avgUniqueFilesInTop5.toFixed(2)}`);
+  console.log(`  Avg Unique Dirs@5:  ${avgUniqueDirsInTop5.toFixed(2)}`);
 }
 
 main().catch((err) => {
