@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { statSync } from "fs";
 import { search, searchChanged } from "../search/query";
+import { embed } from "../index/embedder";
 import { generateIntent } from "../intent";
 import { detectDrift } from "../drift";
 import { loadConfig } from "../config";
@@ -258,6 +259,91 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             {
               type: "text" as const,
               text: JSON.stringify(enriched, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = formatError(err);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                error: message,
+                code: err instanceof CodeindexError ? err.code : undefined,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // --- batchSearch tool ---
+  mcp.tool(
+    "batchSearch",
+    "Run multiple semantic search queries in a single call. Deduplicates and batch-embeds queries for efficiency.",
+    {
+      queries: z
+        .array(z.string())
+        .min(1)
+        .max(10)
+        .describe("Array of search queries (max 10)"),
+      topN: z.number().optional().describe("Maximum results per query"),
+      minScore: z.number().optional().describe("Minimum score threshold (0-1)"),
+      scope: z
+        .string()
+        .optional()
+        .describe("Search scope: project, all, or comma-separated repo names"),
+    },
+    async ({ queries, topN, minScore, scope }) => {
+      try {
+        recordEvent({
+          event: "mcp_tool",
+          timestamp: new Date().toISOString(),
+          tool: "batchSearch",
+        });
+        const repoRoot = defaultRepoRoot;
+
+        // Deduplicate queries and batch-embed uncached ones
+        const uniqueQueries = [...new Set(queries)];
+        const uncached: string[] = [];
+        for (const q of uniqueQueries) {
+          if (!embeddingCache.get(q)) {
+            uncached.push(q);
+          }
+        }
+
+        if (uncached.length > 0) {
+          const embeddings = await embed(uncached);
+          for (let i = 0; i < uncached.length; i++) {
+            embeddingCache.set(uncached[i], embeddings[i]);
+          }
+        }
+
+        // Run search for each original query using cached embeddings
+        const resolvedScope = scope === "all" ? "all" : scope ? scope.split(",") : "project";
+        const perQueryResults: Record<string, unknown> = {};
+
+        for (const q of queries) {
+          const results = await search(repoRoot, q, {
+            topN: topN ?? undefined,
+            minScore: minScore ?? undefined,
+            scope: resolvedScope as "project" | "all" | string[],
+            includeSkeleton: true,
+            includeSummary: true,
+            embeddingCache,
+          });
+          const enriched = await enrichResults(repoRoot, results);
+          perQueryResults[q] = enriched;
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(perQueryResults, null, 2),
             },
           ],
         };
