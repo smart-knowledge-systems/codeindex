@@ -8,6 +8,7 @@ import { formatAndHash } from "./formatter";
 import { scanForSecrets } from "./secrets";
 import { embed } from "./embedder";
 import { updateAffectedDirectories } from "./directories";
+import { extractImports, resolveImport } from "./imports";
 
 /**
  * Reindex a single file: extract skeleton, embed, and upsert into the DB.
@@ -91,39 +92,93 @@ export async function reindexSingleFile(
 
   const [embedding] = await embed([skeleton]);
 
+  // Extract imports for the updated file
+  const importEdges = extractImports(relPath, content);
+
   if (config.store === "pg") {
-    await pgUnsafe(
-      `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
-       ON CONFLICT (repo_id, file_path) DO UPDATE SET
-         content_hash = EXCLUDED.content_hash,
-         skeleton = EXCLUDED.skeleton,
-         skeleton_entries = EXCLUDED.skeleton_entries,
-         file_type = EXCLUDED.file_type,
-         embedding = EXCLUDED.embedding,
-         indexed_at = now()`,
-      [repoId, relPath, hash, skeleton, skeletonEntries, ext, `[${embedding.join(",")}]`],
-    );
+    const pg = await getPg();
+    await pg.begin(async (tx) => {
+      const rows = (await tx.unsafe(
+        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
+         ON CONFLICT (repo_id, file_path) DO UPDATE SET
+           content_hash = EXCLUDED.content_hash,
+           skeleton = EXCLUDED.skeleton,
+           skeleton_entries = EXCLUDED.skeleton_entries,
+           file_type = EXCLUDED.file_type,
+           embedding = EXCLUDED.embedding,
+           indexed_at = now()
+         RETURNING id`,
+        [repoId, relPath, hash, skeleton, skeletonEntries, ext, `[${embedding.join(",")}]`],
+      )) as { id: number }[];
+      const fileId = rows[0].id;
+
+      // Refresh file_imports for this file
+      await tx.unsafe("DELETE FROM file_imports WHERE source_file_id = $1", [fileId]);
+      if (importEdges.length > 0) {
+        // Build file lookup for import resolution
+        const allFileRows = (await tx.unsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
+          repoId,
+        ])) as { id: number; file_path: string }[];
+        const allFiles = new Set(allFileRows.map((r) => r.file_path));
+        const fileIdMap = new Map(allFileRows.map((r) => [r.file_path, r.id]));
+
+        for (const edge of importEdges) {
+          const resolved = resolveImport(edge.importedModule, relPath, edge.language, allFiles);
+          const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
+          await tx.unsafe(
+            `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+             VALUES ($1, $2, $3, $4)`,
+            [fileId, edge.importedModule, resolvedId, edge.language],
+          );
+        }
+      }
+    });
   } else {
     const db = await getSqlite(repoRoot);
-    const row = db
-      .prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (repo_id, file_path) DO UPDATE SET
-           content_hash = excluded.content_hash,
-           skeleton = excluded.skeleton,
-           skeleton_entries = excluded.skeleton_entries,
-           file_type = excluded.file_type,
-           indexed_at = datetime('now')
-         RETURNING id`,
-      )
-      .get(repoId, relPath, hash, skeleton, skeletonEntries, ext) as { id: number };
-    db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(row.id);
-    db.prepare("INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)").run(
-      row.id,
-      serializeEmbedding(embedding),
-    );
+    db.transaction(() => {
+      const row = db
+        .prepare(
+          `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (repo_id, file_path) DO UPDATE SET
+             content_hash = excluded.content_hash,
+             skeleton = excluded.skeleton,
+             skeleton_entries = excluded.skeleton_entries,
+             file_type = excluded.file_type,
+             indexed_at = datetime('now')
+           RETURNING id`,
+        )
+        .get(repoId, relPath, hash, skeleton, skeletonEntries, ext) as { id: number };
+
+      db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(row.id);
+      db.prepare("INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)").run(
+        row.id,
+        serializeEmbedding(embedding),
+      );
+
+      // Refresh file_imports for this file
+      db.prepare("DELETE FROM file_imports WHERE source_file_id = ?").run(row.id);
+      if (importEdges.length > 0) {
+        const allFileRows = db
+          .prepare("SELECT id, file_path FROM files WHERE repo_id = ?")
+          .all(repoId) as { id: number; file_path: string }[];
+        const allFiles = new Set(allFileRows.map((r: { file_path: string }) => r.file_path));
+        const fileIdMap = new Map(
+          allFileRows.map((r: { id: number; file_path: string }) => [r.file_path, r.id]),
+        );
+
+        const insertStmt = db.prepare(
+          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+           VALUES (?, ?, ?, ?)`,
+        );
+        for (const edge of importEdges) {
+          const resolved = resolveImport(edge.importedModule, relPath, edge.language, allFiles);
+          const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
+          insertStmt.run(row.id, edge.importedModule, resolvedId, edge.language);
+        }
+      }
+    })();
   }
 
   // Update affected directories
