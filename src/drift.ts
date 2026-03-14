@@ -3,7 +3,7 @@ import { loadConfig } from "./config";
 import { pgUnsafe } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
 import { cosineSimilarity, deserializeEmbedding } from "./db/util";
-import { embedSingle } from "./index/embedder";
+import { embed } from "./index/embedder";
 
 export interface DriftResult {
   dirPath: string;
@@ -133,13 +133,22 @@ export async function detectDrift(
 
   const results: DriftResult[] = [];
 
+  // Batch embed all non-empty sections in a single API call
+  const sectionsWithContent = sections.filter((s) => s.content.length > 0);
+  const sectionEmbeddings =
+    sectionsWithContent.length > 0 ? await embed(sectionsWithContent.map((s) => s.content)) : [];
+  const embeddingMap = new Map<string, number[]>();
+  for (let i = 0; i < sectionsWithContent.length; i++) {
+    embeddingMap.set(sectionsWithContent[i].dirPath, sectionEmbeddings[i]);
+  }
+
   for (const section of sections) {
     if (section.content.length === 0) {
       results.push({ dirPath: section.dirPath, status: "missing" });
       continue;
     }
 
-    const sectionEmbedding = await embedSingle(section.content);
+    const sectionEmbedding = embeddingMap.get(section.dirPath)!;
     const dbEmbedding = await getSummaryEmbedding(repoId, section.dirPath, store, repoRoot);
 
     if (!dbEmbedding) {

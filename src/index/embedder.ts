@@ -10,38 +10,47 @@ function sanitize(text: string): string {
   return text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
 }
 
-let _provider: EmbeddingProvider | null = null;
+const _providers = new Map<string, EmbeddingProvider>();
+const DEFAULT_KEY = "openai:text-embedding-3-small:1536:";
 
 /** Get or create the configured embedding provider. */
 export function getProvider(config?: CodeindexConfig): EmbeddingProvider {
-  if (_provider) return _provider;
   if (!config) {
-    // Default to OpenAI if no config
-    _provider = new OpenAIEmbeddingProvider();
-    return _provider;
+    const cached = _providers.get(DEFAULT_KEY);
+    if (cached) return cached;
+    const p = new OpenAIEmbeddingProvider();
+    _providers.set(DEFAULT_KEY, p);
+    return p;
   }
 
   const { provider, model, dimensions, ollamaUrl } = config.embedding;
+  const key = `${provider}:${model}:${dimensions}:${ollamaUrl ?? ""}`;
 
-  if (provider === "ollama") {
-    _provider = new OllamaEmbeddingProvider(model, dimensions, ollamaUrl);
-  } else {
-    _provider = new OpenAIEmbeddingProvider(model, dimensions);
-  }
+  const cached = _providers.get(key);
+  if (cached) return cached;
 
-  return _provider;
+  const p =
+    provider === "ollama"
+      ? new OllamaEmbeddingProvider(model, dimensions, ollamaUrl)
+      : new OpenAIEmbeddingProvider(model, dimensions);
+  _providers.set(key, p);
+
+  return p;
 }
 
-/** Reset the cached provider (useful when config changes). */
+/** Reset all cached providers. */
 export function resetProvider(): void {
-  _provider = null;
+  _providers.clear();
 }
 
-export async function embed(texts: string | string[]): Promise<number[][]> {
+export async function embed(
+  texts: string | string[],
+  config?: CodeindexConfig,
+): Promise<number[][]> {
   const input = (Array.isArray(texts) ? texts : [texts]).map(sanitize);
-  return getProvider().embed(input);
+  return getProvider(config).embed(input);
 }
 
-export async function embedSingle(text: string): Promise<number[]> {
-  return getProvider().embedSingle(sanitize(text));
+export async function embedSingle(text: string, config?: CodeindexConfig): Promise<number[]> {
+  return getProvider(config).embedSingle(sanitize(text));
 }

@@ -128,29 +128,33 @@ export async function repoRemove(repoRoot: string, name: string): Promise<void> 
       db.prepare(`SELECT id FROM commits WHERE repo_id = ?`).all(repoId) as { id: number }[]
     ).map((r) => r.id);
 
-    // Delete from vec0 virtual tables by primary key
-    const deleteVec0 = db.prepare(`DELETE FROM file_embeddings WHERE file_id = ?`);
-    for (const id of fileIds) deleteVec0.run(id);
+    // Wrap all deletes in a transaction for atomicity
+    const removeAll = db.transaction(() => {
+      // Delete from vec0 virtual tables by primary key
+      const deleteVec0 = db.prepare(`DELETE FROM file_embeddings WHERE file_id = ?`);
+      for (const id of fileIds) deleteVec0.run(id);
 
-    const deleteDirConcat = db.prepare(`DELETE FROM dir_concat_embeddings WHERE dir_id = ?`);
-    const deleteDirSummary = db.prepare(`DELETE FROM dir_summary_embeddings WHERE dir_id = ?`);
-    for (const id of dirIds) {
-      deleteDirConcat.run(id);
-      deleteDirSummary.run(id);
-    }
+      const deleteDirConcat = db.prepare(`DELETE FROM dir_concat_embeddings WHERE dir_id = ?`);
+      const deleteDirSummary = db.prepare(`DELETE FROM dir_summary_embeddings WHERE dir_id = ?`);
+      for (const id of dirIds) {
+        deleteDirConcat.run(id);
+        deleteDirSummary.run(id);
+      }
 
-    const deleteCommitEmb = db.prepare(`DELETE FROM commit_embeddings WHERE commit_id = ?`);
-    for (const id of commitIds) deleteCommitEmb.run(id);
+      const deleteCommitEmb = db.prepare(`DELETE FROM commit_embeddings WHERE commit_id = ?`);
+      for (const id of commitIds) deleteCommitEmb.run(id);
 
-    // Delete from regular tables
-    db.prepare(`DELETE FROM cost_events WHERE repo_id = ?`).run(repoId);
-    db.prepare(
-      `DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = ?)`,
-    ).run(repoId);
-    db.prepare(`DELETE FROM files WHERE repo_id = ?`).run(repoId);
-    db.prepare(`DELETE FROM directories WHERE repo_id = ?`).run(repoId);
-    db.prepare(`DELETE FROM commits WHERE repo_id = ?`).run(repoId);
-    db.prepare(`DELETE FROM repos WHERE id = ?`).run(repoId);
+      // Delete from regular tables
+      db.prepare(`DELETE FROM cost_events WHERE repo_id = ?`).run(repoId);
+      db.prepare(
+        `DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = ?)`,
+      ).run(repoId);
+      db.prepare(`DELETE FROM files WHERE repo_id = ?`).run(repoId);
+      db.prepare(`DELETE FROM directories WHERE repo_id = ?`).run(repoId);
+      db.prepare(`DELETE FROM commits WHERE repo_id = ?`).run(repoId);
+      db.prepare(`DELETE FROM repos WHERE id = ?`).run(repoId);
+    });
+    removeAll();
   }
 
   console.log(`Removed repo: ${name}`);

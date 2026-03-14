@@ -1,3 +1,4 @@
+import path from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { statSync } from "fs";
@@ -134,44 +135,55 @@ async function getStatus(repoRoot: string, showCost: boolean): Promise<StatusRes
 // Staleness check — compare indexed_at vs file mtime
 // ---------------------------------------------------------------------------
 
-async function getIndexedAt(repoRoot: string, filePath: string): Promise<string | null> {
+async function batchGetIndexedAt(
+  repoRoot: string,
+  filePaths: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (filePaths.length === 0) return map;
+
   const config = await loadConfig(repoRoot);
   if (config.store === "pg") {
-    const rows = await pgUnsafe(
-      `SELECT indexed_at FROM files
-       WHERE repo_id IN (SELECT id FROM repos WHERE root_path = $1)
-         AND file_path = $2`,
-      [repoRoot, filePath],
-    );
-    return rows.length > 0 ? (rows[0].indexed_at as string) : null;
+    const placeholders = filePaths.map((_, i) => `$${i + 2}`).join(",");
+    const rows = (await pgUnsafe(
+      `SELECT f.file_path, f.indexed_at::text AS indexed_at
+       FROM files f JOIN repos r ON r.id = f.repo_id
+       WHERE r.root_path = $1 AND f.file_path IN (${placeholders})`,
+      [repoRoot, ...filePaths],
+    )) as { file_path: string; indexed_at: string }[];
+    for (const r of rows) map.set(r.file_path, r.indexed_at);
   } else {
     const db = await getSqlite(repoRoot);
-    const row = db
+    const placeholders = filePaths.map(() => "?").join(",");
+    const rows = db
       .prepare(
-        `SELECT f.indexed_at FROM files f
-         JOIN repos r ON r.id = f.repo_id
-         WHERE r.root_path = ? AND f.file_path = ?`,
+        `SELECT f.file_path, f.indexed_at
+         FROM files f JOIN repos r ON r.id = f.repo_id
+         WHERE r.root_path = ? AND f.file_path IN (${placeholders})`,
       )
-      .get(repoRoot, filePath) as { indexed_at: string } | null;
-    return row?.indexed_at ?? null;
+      .all(repoRoot, ...filePaths) as { file_path: string; indexed_at: string }[];
+    for (const r of rows) map.set(r.file_path, r.indexed_at);
   }
+  return map;
 }
 
 async function enrichResults(
   repoRoot: string,
   results: SearchResult[],
 ): Promise<Array<SearchResult & { indexedAt?: string; stale?: boolean }>> {
+  const filePaths = results.filter((r) => r.type !== "commit").map((r) => r.filePath);
+  const indexedAtMap = await batchGetIndexedAt(repoRoot, filePaths);
   const enriched = [];
   for (const r of results) {
     if (r.type === "commit") {
       enriched.push(r);
       continue;
     }
-    const effectiveRoot = r.repoPath ?? repoRoot;
-    const indexedAt = await getIndexedAt(effectiveRoot, r.filePath);
+    const indexedAt = indexedAtMap.get(r.filePath) ?? null;
     let stale = false;
     if (indexedAt) {
       try {
+        const effectiveRoot = r.repoPath ?? repoRoot;
         const absPath = `${effectiveRoot}/${r.filePath}`;
         const stat = statSync(absPath);
         stale = stat.mtimeMs > new Date(indexedAt).getTime();
@@ -269,7 +281,7 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
     },
     async ({ repoPath, threshold, agentsMdPath }) => {
       const repoRoot = repoPath ?? defaultRepoRoot;
-      const mdPath = agentsMdPath ?? "AGENTS.md";
+      const mdPath = agentsMdPath ?? path.join(repoRoot, "AGENTS.md");
 
       const results = await detectDrift(repoRoot, mdPath, threshold ?? undefined);
 
