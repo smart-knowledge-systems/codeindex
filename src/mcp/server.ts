@@ -28,6 +28,11 @@ const REINDEX_RATE_WINDOW_MS = 60_000;
 // Keyed by session identity so per-user limits persist across reconnections
 const reindexCallLogs = new Map<string, number[]>();
 
+/** Escape SQL LIKE metacharacters (% and _) in a user-provided string. */
+function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, (ch) => `\\${ch}`);
+}
+
 function reindexRateLimitKey(repoRoot: string, session?: AuthSession): string {
   if (!session || session.repoIds === null) return `${repoRoot}:full`;
   return `${repoRoot}:${session.repoIds.slice().sort().join(",")}`;
@@ -1106,7 +1111,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
-      const pattern = `%${symbol}%`;
+      const pattern = `%${escapeLike(symbol)}%`;
       const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
@@ -1114,7 +1119,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           ? `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
              FROM files f
              JOIN repos r ON r.id = f.repo_id
-             WHERE f.skeleton LIKE $1
+             WHERE f.skeleton LIKE $1 ESCAPE '\\'
                AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
                     OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
                AND r.id = ANY($2::int[])
@@ -1122,7 +1127,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           : `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
              FROM files f
              JOIN repos r ON r.id = f.repo_id
-             WHERE f.skeleton LIKE $1
+             WHERE f.skeleton LIKE $1 ESCAPE '\\'
                AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
                     OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
              LIMIT 100`;
@@ -1138,7 +1143,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
               `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
                FROM files f
                JOIN repos r ON r.id = f.repo_id
-               WHERE f.skeleton LIKE ?
+               WHERE f.skeleton LIKE ? ESCAPE '\\'
                  AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
                       OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
                  AND r.id IN (${placeholders})
@@ -1152,7 +1157,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
               `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
                FROM files f
                JOIN repos r ON r.id = f.repo_id
-               WHERE f.skeleton LIKE ?
+               WHERE f.skeleton LIKE ? ESCAPE '\\'
                  AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
                       OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
                LIMIT 100`,
@@ -1190,7 +1195,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
-      const pattern = `%${symbol}%`;
+      const pattern = `%${escapeLike(symbol)}%`;
       const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
@@ -1199,7 +1204,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              JOIN repos r ON r.id = sf.repo_id
-             WHERE fi.imported_module LIKE $1
+             WHERE fi.imported_module LIKE $1 ESCAPE '\\'
                AND r.id = ANY($2::int[])
              ORDER BY r.name, sf.file_path
              LIMIT 100`
@@ -1207,7 +1212,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              JOIN repos r ON r.id = sf.repo_id
-             WHERE fi.imported_module LIKE $1
+             WHERE fi.imported_module LIKE $1 ESCAPE '\\'
              ORDER BY r.name, sf.file_path
              LIMIT 100`;
         const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
@@ -1223,7 +1228,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                FROM file_imports fi
                JOIN files sf ON sf.id = fi.source_file_id
                JOIN repos r ON r.id = sf.repo_id
-               WHERE fi.imported_module LIKE ?
+               WHERE fi.imported_module LIKE ? ESCAPE '\\'
                  AND r.id IN (${placeholders})
                ORDER BY r.name, sf.file_path
                LIMIT 100`,
@@ -1237,7 +1242,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                FROM file_imports fi
                JOIN files sf ON sf.id = fi.source_file_id
                JOIN repos r ON r.id = sf.repo_id
-               WHERE fi.imported_module LIKE ?
+               WHERE fi.imported_module LIKE ? ESCAPE '\\'
                ORDER BY r.name, sf.file_path
                LIMIT 100`,
             )
