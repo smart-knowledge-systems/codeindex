@@ -30,10 +30,23 @@ import type { TransactionSQL } from "bun";
  * For scoped sessions: uses session.repoIds.
  * For full-access / no session: queries all repo IDs so RLS passes.
  */
-/** Cached full-access repo IDs — avoids SELECT id FROM repos on every tool call. */
+/**
+ * Cached full-access repo IDs — avoids SELECT id FROM repos on every tool call.
+ *
+ * Note: newly indexed repos will not appear in search results until this cache
+ * refreshes (up to 60 s). Call `invalidateRepoCache()` after repo creation to
+ * avoid the visibility delay.
+ */
 let cachedAllRepoIds: number[] | null = null;
 let cachedAllRepoIdsAt = 0;
+let inflightRepoIdsFetch: Promise<number[]> | null = null;
 const REPO_CACHE_TTL_MS = 60_000; // refresh every 60 seconds
+
+/** Invalidate the full-access repo ID cache so newly indexed repos are visible immediately. */
+export function invalidateRepoCache(): void {
+  cachedAllRepoIds = null;
+  cachedAllRepoIdsAt = 0;
+}
 
 async function withMcpScope<T>(
   session: AuthSession | undefined,
@@ -45,9 +58,15 @@ async function withMcpScope<T>(
   // Full access — use cached repo IDs for FORCE RLS
   const now = Date.now();
   if (!cachedAllRepoIds || now - cachedAllRepoIdsAt > REPO_CACHE_TTL_MS) {
-    const allRepos = await pgUnsafe("SELECT id FROM repos");
-    cachedAllRepoIds = allRepos.map((r: Record<string, unknown>) => Number(r.id));
-    cachedAllRepoIdsAt = now;
+    if (!inflightRepoIdsFetch) {
+      inflightRepoIdsFetch = pgUnsafe("SELECT id FROM repos")
+        .then((rows) => rows.map((r: Record<string, unknown>) => Number(r.id)))
+        .finally(() => {
+          inflightRepoIdsFetch = null;
+        });
+    }
+    cachedAllRepoIds = await inflightRepoIdsFetch;
+    cachedAllRepoIdsAt = Date.now();
   }
   const allRepoIds: number[] = cachedAllRepoIds!;
   if (allRepoIds.length === 0) {
@@ -1468,6 +1487,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           } catch (err) {
             results.push({ path: p, indexed: false, error: formatError(err) });
           }
+        }
+
+        // Invalidate repo cache so newly indexed files are visible immediately
+        if (results.some((r) => r.indexed)) {
+          invalidateRepoCache();
         }
 
         return {
