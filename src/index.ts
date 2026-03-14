@@ -23,6 +23,11 @@ import { generateIntent } from "./intent";
 import { detectDrift } from "./drift";
 import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
 import { parallelReindex } from "./index/parallel";
+import { runHealthCheck } from "./check/runner";
+import { runQualityCheck } from "./check/quality-runner";
+import { extractImports, resolveImport } from "./index/imports";
+import { discoverCrossRepoEdges } from "./index/cross-repo";
+import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
@@ -98,6 +103,107 @@ async function ensureRepo(repoRoot: string): Promise<number> {
       .get(origin, repoRoot, name, formatter) as { id: number };
     return result.id;
   }
+}
+
+// ---------------------------------------------------------------------------
+// import graph extraction
+// ---------------------------------------------------------------------------
+
+async function extractAndStoreImports(
+  repoRoot: string,
+  repoId: number,
+  allFiles: Set<string>,
+  store: "pg" | "sqlite",
+): Promise<void> {
+  // Build file ID map
+  const fileIdMap = new Map<string, number>();
+
+  if (store === "pg") {
+    const rows = (await pgUnsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
+      repoId,
+    ])) as { id: string; file_path: string }[];
+    for (const r of rows) fileIdMap.set(r.file_path, parseInt(r.id));
+  } else {
+    const db = await getSqlite(repoRoot);
+    const rows = db.prepare("SELECT id, file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      id: number;
+      file_path: string;
+    }[];
+    for (const r of rows) fileIdMap.set(r.file_path, r.id);
+  }
+
+  // Collect all edges first, then write atomically
+  const edgesToInsert: Array<{
+    sourceId: number;
+    importedModule: string;
+    resolvedId: number | null;
+    language: string;
+  }> = [];
+
+  for (const relPath of allFiles) {
+    const sourceId = fileIdMap.get(relPath);
+    if (!sourceId) continue;
+
+    const absPath = path.join(repoRoot, relPath);
+    let content: string;
+    try {
+      content = await Bun.file(absPath).text();
+    } catch {
+      continue;
+    }
+
+    const edges = extractImports(relPath, content);
+    if (edges.length === 0) continue;
+
+    for (const edge of edges) {
+      const resolved = resolveImport(edge.importedModule, relPath, edge.language, allFiles);
+      const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
+      edgesToInsert.push({
+        sourceId,
+        importedModule: edge.importedModule,
+        resolvedId,
+        language: edge.language,
+      });
+    }
+  }
+
+  if (store === "pg") {
+    await pgUnsafe("BEGIN");
+    try {
+      await pgUnsafe(
+        "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1)",
+        [repoId],
+      );
+      for (const e of edgesToInsert) {
+        await pgUnsafe(
+          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+           VALUES ($1, $2, $3, $4)`,
+          [e.sourceId, e.importedModule, e.resolvedId, e.language],
+        );
+      }
+      await pgUnsafe("COMMIT");
+    } catch (err) {
+      await pgUnsafe("ROLLBACK");
+      throw err;
+    }
+  } else {
+    const sqliteDb = await getSqlite(repoRoot);
+    const sqliteStmt = sqliteDb.prepare(
+      `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+       VALUES (?, ?, ?, ?)`,
+    );
+    sqliteDb.transaction(() => {
+      sqliteDb
+        .prepare(
+          "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = ?)",
+        )
+        .run(repoId);
+      for (const e of edgesToInsert) {
+        sqliteStmt.run(e.sourceId, e.importedModule, e.resolvedId, e.language);
+      }
+    })();
+  }
+  console.log(`  ${edgesToInsert.length} import edges stored.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +344,11 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
     for (const f of filesToEmbed) {
       console.log(`  ${f.filePath} (${f.fileType})`);
     }
-    const projected = getProjectedCost(filesToEmbed.length, filesToEmbed.length * 3);
+    const projected = getProjectedCost(
+      filesToEmbed.length,
+      filesToEmbed.length * 3,
+      config.embedding.model,
+    );
     console.log(`\nProjected cost:`);
     console.log(`  Embeddings: $${projected.embeddingCost.toFixed(4)}`);
     console.log(`  Summaries:  $${projected.summaryCost.toFixed(4)}`);
@@ -499,6 +609,11 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   console.log("Building directory index...");
   await buildDirectoryIndex(repoRoot, repoId, allFiles);
   console.log("Directory index complete.");
+
+  // Extract and store import edges
+  console.log("Extracting import graph...");
+  await extractAndStoreImports(repoRoot, repoId, new Set(allFiles), config.store);
+  console.log("Import graph complete.");
 
   console.log("Reindex complete.");
 }
@@ -1307,6 +1422,12 @@ Commands:
   serve                Start MCP server for AI agent integration
     --transport <t>    stdio (default) or sse
     --port <n>         Port for SSE transport (default 3100)
+  check                Run health policy checks against the index
+    --json             Output as JSON
+  token <sub>           Manage access tokens (create|list|revoke)
+    create --name --repos <id,id> [--expires <ISO>]
+    list               List all tokens
+    revoke --id <N>    Revoke a token
   doctor               Check environment and configuration
 
 Options:
@@ -1444,6 +1565,137 @@ async function main() {
       case "manifest":
         await cmdManifest(repoRoot);
         break;
+
+      case "check": {
+        const report = await runHealthCheck(repoRoot);
+        if (hasFlag(parsed, "json")) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          console.log(`Health check: ${report.repo}`);
+          console.log("─".repeat(50));
+          for (const r of report.results) {
+            const icon = r.result.passed ? "✓" : r.severity === "error" ? "✗" : "⚠";
+            console.log(`  ${icon} [${r.severity}] ${r.policy}: ${r.result.message}`);
+          }
+          console.log("─".repeat(50));
+          console.log(report.passed ? "All checks passed." : "Some checks failed.");
+        }
+        let exitCode = report.passed ? 0 : 1;
+
+        if (hasFlag(parsed, "quality")) {
+          const datasetPath = flag(parsed, "dataset");
+          const baselinePath = flag(parsed, "baseline");
+          const qualityReport = await runQualityCheck(repoRoot, datasetPath, baselinePath);
+          if (hasFlag(parsed, "json")) {
+            console.log(JSON.stringify(qualityReport, null, 2));
+          } else {
+            console.log("\nQuality check:");
+            console.log("─".repeat(50));
+            for (const r of qualityReport.results) {
+              const icon = r.result.passed ? "✓" : "✗";
+              console.log(`  ${icon} ${r.policy}: ${r.result.message}`);
+            }
+            console.log("─".repeat(50));
+            console.log(
+              qualityReport.passed ? "All quality checks passed." : "Quality checks failed.",
+            );
+          }
+          if (!qualityReport.passed) exitCode = 1;
+        }
+        if (exitCode !== 0) process.exit(exitCode);
+        break;
+      }
+
+      case "cross-repo": {
+        console.log("Discovering cross-repo relationships...");
+        const edges = await discoverCrossRepoEdges(repoRoot);
+        if (edges.length === 0) {
+          console.log("No cross-repo relationships found.");
+        } else {
+          console.log(`Found ${edges.length} cross-repo edge(s).`);
+          if (hasFlag(parsed, "json")) {
+            console.log(JSON.stringify(edges, null, 2));
+          } else {
+            for (const e of edges) {
+              console.log(
+                `  repo:${e.sourceRepoId} → repo:${e.targetRepoId}  ${e.importedModule} [${e.language}]`,
+              );
+            }
+          }
+        }
+        break;
+      }
+
+      case "token": {
+        const sub = parsed.positional[0];
+        switch (sub) {
+          case "create": {
+            const name = flag(parsed, "name");
+            const repos = flag(parsed, "repos");
+            if (!name || !repos) {
+              console.error("Usage: codeindex token create --name <name> --repos <id1,id2,...>");
+              process.exit(1);
+            }
+            const rawIds = repos.split(",").map((s) => s.trim());
+            const invalidIds = rawIds.filter((s) => isNaN(parseInt(s, 10)));
+            if (invalidIds.length > 0) {
+              console.error(
+                `Error: invalid repo IDs: ${invalidIds.join(", ")} — all IDs must be numeric`,
+              );
+              process.exit(1);
+            }
+            const repoIds = rawIds.map((s) => parseInt(s, 10));
+            if (repoIds.length === 0) {
+              console.error("Error: --repos must be a comma-separated list of numeric IDs");
+              process.exit(1);
+            }
+            const expiresAt = flag(parsed, "expires");
+            if (expiresAt && isNaN(new Date(expiresAt).getTime())) {
+              console.error(`Error: --expires "${expiresAt}" is not a valid ISO date string`);
+              process.exit(1);
+            }
+            const plaintext = await createToken(repoRoot, name, repoIds, expiresAt);
+            console.log(`Token created: ${plaintext}`);
+            console.log("Store this token securely — it cannot be retrieved again.");
+            break;
+          }
+          case "list": {
+            const tokens = await listTokens(repoRoot);
+            if (tokens.length === 0) {
+              console.log("No tokens found.");
+            } else {
+              console.log(
+                `${"ID".padEnd(5)}${"Name".padEnd(20)}${"Repos".padEnd(15)}${"Revoked".padEnd(10)}Expires`,
+              );
+              for (const t of tokens) {
+                console.log(
+                  `${String(t.id).padEnd(5)}${t.name.padEnd(20)}${t.repoIds.join(",").padEnd(15)}${String(t.revoked).padEnd(10)}${t.expiresAt ?? "-"}`,
+                );
+              }
+            }
+            break;
+          }
+          case "revoke": {
+            const id = flag(parsed, "id");
+            if (!id) {
+              console.error("Usage: codeindex token revoke --id <token_id>");
+              process.exit(1);
+            }
+            const parsedId = parseInt(id, 10);
+            if (isNaN(parsedId)) {
+              console.error("Error: --id must be a numeric token ID");
+              process.exit(1);
+            }
+            await revokeToken(repoRoot, parsedId);
+            console.log(`Token ${id} revoked.`);
+            break;
+          }
+          default:
+            console.error("Usage: codeindex token <create|list|revoke>");
+            process.exit(1);
+        }
+        break;
+      }
 
       case "status":
         await cmdStatus(repoRoot, hasFlag(parsed, "cost"));

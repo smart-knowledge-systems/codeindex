@@ -9,6 +9,7 @@ import { loadConfig } from "../config";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { getCostSummary } from "../cost";
+import { runHealthCheck } from "../check/runner";
 import type { SearchResult } from "../search/types";
 
 // ---------------------------------------------------------------------------
@@ -312,6 +313,28 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
           {
             type: "text" as const,
             text: JSON.stringify(status, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  // --- check tool ---
+  mcp.tool(
+    "check",
+    "Run health policy checks against the index. Returns pass/fail for freshness, summary completeness, skeleton extraction, and reindex completion.",
+    {
+      repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
+    },
+    async ({ repoPath }) => {
+      const repoRoot = repoPath ?? defaultRepoRoot;
+      const report = await runHealthCheck(repoRoot);
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(report, null, 2),
           },
         ],
       };

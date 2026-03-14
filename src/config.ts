@@ -31,6 +31,12 @@ const DEFAULTS: CodeindexConfig = {
   formatter: null,
   skeletonFallbackLines: 50,
   costCap: { maxCostPerReindex: null, warnAt: null },
+  languageProfiles: {
+    go: { beta: 0.35, parentBoostMultiplier: 0.4 },
+    java: { beta: 0.1, parentBoostMultiplier: 0.15 },
+    kotlin: { beta: 0.1, parentBoostMultiplier: 0.15 },
+    python: { beta: 0.25 },
+  },
 };
 
 const GLOBAL_CONFIG_PATH = path.join(

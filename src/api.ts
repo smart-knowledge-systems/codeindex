@@ -20,3 +20,5 @@ export { loadConfig } from "./config";
 export { getCostSummary } from "./cost";
 export { extractImports, resolveImport } from "./index/imports";
 export type { ImportEdge } from "./index/imports";
+export { discoverCrossRepoEdges } from "./index/cross-repo";
+export type { CrossRepoEdge } from "./index/cross-repo";

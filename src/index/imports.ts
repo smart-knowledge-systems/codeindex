@@ -26,9 +26,25 @@ export function extractImports(filePath: string, content: string): ImportEdge[] 
       return extractRustImports(content);
     case ".java":
       return extractJavaImports(content);
+    case ".kt":
+    case ".kts":
+      return extractKotlinImports(content);
+    case ".rb":
+      return extractRubyImports(content);
+    case ".php":
+      return extractPhpImports(content);
     default:
       return [];
   }
+}
+
+function deduplicateEdges(edges: ImportEdge[]): ImportEdge[] {
+  const seen = new Set<string>();
+  return edges.filter((e) => {
+    if (seen.has(e.importedModule)) return false;
+    seen.add(e.importedModule);
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +77,7 @@ function extractTsImports(content: string): ImportEdge[] {
       edges.push({ importedModule: match[1], language: "typescript" });
     }
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +96,7 @@ function extractPythonImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(fromRe)) {
     edges.push({ importedModule: match[1], language: "python" });
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +118,7 @@ function extractGoImports(content: string): ImportEdge[] {
       edges.push({ importedModule: pathMatch[1], language: "go" });
     }
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +140,7 @@ function extractRustImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(modRe)) {
     edges.push({ importedModule: match[1], language: "rust" });
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +153,58 @@ function extractJavaImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(importRe)) {
     edges.push({ importedModule: match[1], language: "java" });
   }
-  return edges;
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// Kotlin
+// ---------------------------------------------------------------------------
+
+function extractKotlinImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  const importRe = /import\s+([\w.]+(?:\.\*)?)/g;
+  for (const match of content.matchAll(importRe)) {
+    edges.push({ importedModule: match[1], language: "kotlin" });
+  }
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// Ruby
+// ---------------------------------------------------------------------------
+
+function extractRubyImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  // require "module" / require 'module'
+  const requireRe = /require\s+["']([^"']+)["']/g;
+  for (const match of content.matchAll(requireRe)) {
+    edges.push({ importedModule: match[1], language: "ruby" });
+  }
+  // require_relative "module"
+  const relativeRe = /require_relative\s+["']([^"']+)["']/g;
+  for (const match of content.matchAll(relativeRe)) {
+    edges.push({ importedModule: match[1], language: "ruby" });
+  }
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// PHP
+// ---------------------------------------------------------------------------
+
+function extractPhpImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  // use Namespace\Class
+  const useRe = /use\s+([\w\\]+)(?:\s+as\s+\w+)?\s*;/g;
+  for (const match of content.matchAll(useRe)) {
+    edges.push({ importedModule: match[1], language: "php" });
+  }
+  // require/include
+  const reqRe = /(?:require|include)(?:_once)?\s+["']([^"']+)["']/g;
+  for (const match of content.matchAll(reqRe)) {
+    edges.push({ importedModule: match[1], language: "php" });
+  }
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------

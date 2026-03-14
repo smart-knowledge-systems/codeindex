@@ -11,7 +11,7 @@ export const PRICING: Record<string, { input: number; output?: number }> = {
   "text-embedding-3-small": { input: 0.02 },
   "text-embedding-3-large": { input: 0.13 },
   "nomic-embed-text": { input: 0 }, // local model, no API cost
-  haiku: { input: 0.25, output: 1.25 },
+  haiku: { input: 1.0, output: 5.0 },
 };
 
 // ---------------------------------------------------------------------------
@@ -141,9 +141,11 @@ const AVG_TOKENS_PER_DIR = 2000;
 export function getProjectedCost(
   fileCount: number,
   commitCount: number,
+  embeddingModel = "text-embedding-3-small",
 ): { embeddingCost: number; summaryCost: number; totalCost: number } {
   const embeddingTokens = fileCount * AVG_TOKENS_PER_FILE + commitCount * 50;
-  const embeddingCost = (embeddingTokens * PRICING["text-embedding-3-small"].input) / 1_000_000;
+  const modelPricing = PRICING[embeddingModel] ?? PRICING["text-embedding-3-small"];
+  const embeddingCost = (embeddingTokens * modelPricing.input) / 1_000_000;
 
   // Estimate ~1 directory per 5 files, each needing haiku summarization
   const estimatedDirs = Math.max(1, Math.ceil(fileCount / 5));

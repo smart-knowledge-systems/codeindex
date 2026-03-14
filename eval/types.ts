@@ -7,6 +7,8 @@ export interface EvalQuery {
   expectedTypes?: string[];
   description?: string;
   tags?: string[];
+  repo?: string;
+  language?: string;
 }
 
 export interface SummaryAssessment {

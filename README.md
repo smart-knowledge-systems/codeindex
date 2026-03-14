@@ -1,12 +1,14 @@
 # codeindex
 
-A local semantic index for codebases. Augments Claude Code's built-in Glob/Grep/Read tools with embedding-based search so the agent knows *where to look* before doing text search.
+A semantic search engine for codebases. Uses embeddings, AST extraction, import graph analysis, and commit history to help developers and AI agents find relevant code faster than grep/ripgrep. Supports 14 languages, cross-repo intelligence, and MCP server mode for agent integration.
 
 ## Prerequisites
 
 - [Bun](https://bun.sh) runtime
-- `OPENAI_API_KEY` environment variable (for `text-embedding-3-small` embeddings)
-- `claude` CLI (optional, for directory summary generation)
+- One of:
+  - `OPENAI_API_KEY` for OpenAI `text-embedding-3-small` embeddings, or
+  - [Ollama](https://ollama.com) with `nomic-embed-text` for local embeddings (no API key needed)
+- `claude` CLI or `ANTHROPIC_API_KEY` (for directory summary generation)
 - PostgreSQL with [pgvector](https://github.com/pgvector/pgvector) (optional — SQLite is the default)
 
 ## Setup
@@ -31,11 +33,14 @@ Run `bun src/index.ts doctor` to verify your environment is configured correctly
 # Full reindex of the current directory
 bun src/index.ts reindex
 
-# Index a specific repo
-bun src/index.ts reindex --path /path/to/repo
-
-# Preview what would be indexed without writing
+# Preview what would be indexed and projected cost
 bun src/index.ts reindex --dry-run
+
+# Set a cost cap (USD)
+bun src/index.ts reindex --budget 2.00
+
+# Parallel reindex of all registered repos
+bun src/index.ts reindex --scope all --workers 4
 ```
 
 ### Search
@@ -47,17 +52,31 @@ bun src/index.ts search "authentication middleware"
 # Human-readable output
 bun src/index.ts search "database connection pooling" --pretty
 
-# With options
-bun src/index.ts search "error handling" --min-score 0.4 --top-n 10 --include-skeleton
+# With filtering and options
+bun src/index.ts search "error handling" --lang ts --dir src/api --since 30d --top-n 10
 
-# With code snippets and line numbers
-bun src/index.ts search "scoring formula" --include-snippet --pretty
+# With code snippets and score breakdown
+bun src/index.ts search "scoring formula" --include-snippet --explain --pretty
 
 # Cross-repo search
 bun src/index.ts search "API endpoints" --scope all
 ```
 
-### Intent Layer
+### MCP server (agent integration)
+
+Start a persistent MCP server for AI agent integration with Claude Code, Cursor, or Windsurf:
+
+```bash
+# stdio transport (default — for Claude Code, Cursor)
+bun src/index.ts serve
+
+# SSE transport (for remote/web clients)
+bun src/index.ts serve --transport sse --port 3100
+```
+
+Exposes `search`, `intent`, `drift`, `status`, and `check` as MCP tools. Eliminates CLI startup overhead for agent workflows.
+
+### Intent layer
 
 Generate and monitor an `AGENTS.md` file that maps directory structure to purpose:
 
@@ -65,56 +84,63 @@ Generate and monitor an `AGENTS.md` file that maps directory structure to purpos
 # Generate AGENTS.md from indexed directory summaries
 bun src/index.ts intent --out AGENTS.md
 
-# Detect stale summaries by comparing AGENTS.md against DB embeddings
+# Detect stale summaries
 bun src/index.ts drift --threshold 0.3
 ```
 
 ### Repo management
 
-Manage multiple indexed repositories:
+Manage multiple indexed repositories (PostgreSQL backend):
 
 ```bash
-bun src/index.ts repo add /path/to/repo    # Register a repo
-bun src/index.ts repo list                  # List all registered repos
-bun src/index.ts repo status my-repo        # Show detailed stats
-bun src/index.ts repo remove my-repo        # Remove repo and indexed data
-bun src/index.ts repo purge my-repo --force # Remove without confirmation
+bun src/index.ts repo add /path/to/repo
+bun src/index.ts repo list
+bun src/index.ts repo status my-repo
+bun src/index.ts repo remove my-repo
+bun src/index.ts repo purge my-repo --force
 ```
 
-### Incremental updates
+### Health checks
+
+Policy-based index health validation:
 
 ```bash
-# Install a post-commit hook for automatic indexing
-bun src/index.ts install-hook
+bun src/index.ts check         # Run all health policies
+bun src/index.ts check --json  # Machine-readable output
+```
 
-# Manual incremental update
-bun src/index.ts update --files src/index.ts src/config.ts --commit abc123
+### Export and CI/CD
+
+```bash
+# Export PG index to portable SQLite (embeddings redacted by default)
+bun src/index.ts export --out snapshot.db
+
+# Include embeddings in export
+bun src/index.ts export --out snapshot.db --include-embeddings
+
+# Use exported index in read-only mode
+bun src/index.ts search "auth" --path ./snapshot.db --read-only
+```
+
+### Access control (shared PG)
+
+Scoped tokens for multi-tenant PostgreSQL deployments:
+
+```bash
+bun src/index.ts token create --name ci-reader --repos 1,2,3
+bun src/index.ts token list
+bun src/index.ts token revoke --id 7
 ```
 
 ### Other commands
 
 ```bash
-bun src/index.ts status               # Show index stats
-bun src/index.ts status --cost        # Show token usage and cost breakdown
+bun src/index.ts status               # Index stats
+bun src/index.ts status --cost        # Token usage and cost breakdown
 bun src/index.ts config               # Show current config
-bun src/index.ts config --store sqlite # Set config values
-bun src/index.ts export --out snapshot.db  # Export pg to sqlite
-bun src/index.ts doctor               # Check environment and configuration
-```
-
-### Eval framework
-
-Measure search quality and compare scoring configurations:
-
-```bash
-# Run evaluation against labeled queries
-bun eval/run-eval.ts --repo /path/to/repo
-
-# Compare against ripgrep baseline
-bun eval/run-eval.ts --ripgrep
-
-# Run signal ablation study
-bun eval/ablation.ts
+bun src/index.ts manifest             # Audit trail: indexed, skipped, flagged files
+bun src/index.ts install-hook         # Install post-commit hook for auto-indexing
+bun src/index.ts doctor               # Verify environment and configuration
 ```
 
 ## How it works
@@ -124,44 +150,57 @@ bun eval/ablation.ts
 1. **Walk** the repo, respecting `.gitignore` and `.indexignore`
 2. **Scan** file content for secrets — skip files with potential API keys, tokens, or private keys
 3. **Format** each file in-memory (auto-detected formatter) and SHA-256 hash — skip if unchanged
-4. **Extract** an AST skeleton via tree-sitter (TS/JS, Python, Rust, Go, Java, C/C++, C#) with line-number tracking, or first N lines for non-code files
-5. **Embed** skeletons using `text-embedding-3-small` (batched, up to 2048 per call)
-6. **Embed** recent commit messages and link to files with recency ranks
-7. **Summarize** directories bottom-up via `claude --print --model haiku`, then embed both the concatenated skeleton and the generated summary
-8. **Record** token usage and estimated costs for each embedding and summarization call
+4. **Extract** an AST skeleton via tree-sitter for supported languages, or first N lines for non-code files
+5. **Extract imports** from tree-sitter skeletons into the `file_imports` table for dependency graph queries
+6. **Embed** skeletons using the configured embedding provider (batched)
+7. **Embed** recent commit messages and link to files with recency ranks
+8. **Summarize** directories bottom-up (cached by content hash — ~90% cost reduction on incremental reindex)
+9. **Discover** cross-repo relationships from import edges across registered repos
+10. **Record** token usage and estimated costs
 
-All writes are wrapped in transactions — interrupted indexing does not leave partial state.
+All writes are wrapped in transactions. Schema migrations run automatically on `init`.
+
+### Supported languages (14)
+
+TypeScript/JavaScript, Python, Rust, Go, Java, C, C++, C#, Kotlin, Swift, Ruby, PHP, Lua — with AST-based skeleton extraction, line-number tracking, and import graph indexing.
 
 ### Search scoring
 
 ```
-final_score = file_score + alpha * commit_boost + beta * parent_boost
-parent_boost = parent_boost_multiplier * dir_similarity  (when above threshold)
+final_score = semantic + gamma * keyword + alpha * commit_boost + beta * parent_boost
 ```
 
-- `file_score` — cosine similarity between query and file embedding
-- `commit_boost` — sum of commit similarities with exponential recency decay
-- `parent_boost` — parent directory score propagation when above threshold
+- **semantic** — cosine similarity between query and file embedding
+- **keyword** — BM25 keyword matching (hybrid search)
+- **commit_boost** — sum of commit similarities with exponential recency decay
+- **parent_boost** — parent directory score propagation
 
-Results include files, directories, and commits, all filtered by `minScore` (default 0.3). With `--include-snippet`, results include source code excerpts with line numbers.
+Results include files, directories, and commits. Per-language scoring profiles adjust weights automatically. Use `--explain` to see the full score breakdown per result.
 
 ## Storage
 
 | Backend | Use case | Vector search |
 |---------|----------|---------------|
-| **SQLite** (default) | Single-repo, zero-config, portable | sqlite-vec `vec_distance_cosine()` |
-| **PostgreSQL** | Multi-repo, shared index | pgvector `<=>` operator |
+| **SQLite** (default) | Single-repo, zero-config, portable, CI/CD | sqlite-vec `vec_distance_cosine()` |
+| **PostgreSQL** | Multi-repo, shared index, cross-repo intelligence | pgvector `<=>` operator with HNSW indexes |
+
+## Embedding providers
+
+| Provider | Model | Cost | Setup |
+|----------|-------|------|-------|
+| **OpenAI** (default) | `text-embedding-3-small` | ~$0.02/1K files | `OPENAI_API_KEY` env var |
+| **Ollama** (local) | `nomic-embed-text` | Free | `ollama pull nomic-embed-text` |
 
 ## Ignore patterns
 
-Files are excluded from indexing via three layers (in evaluation order):
+Files are excluded from indexing via three layers:
 
-1. **Hard-coded** — `.git/` and `.codeindex.db` are always excluded and cannot be overridden
-2. **Soft defaults** — `node_modules/`, `.env`, `*.pem`, lock files, build artifacts, etc.
+1. **Hard-coded** — `.git/` and `.codeindex.db` are always excluded
+2. **Soft defaults** — `node_modules/`, `.env`, `*.pem`, lock files, build artifacts
 3. **`.gitignore`** — standard git ignore rules
 4. **`.indexignore`** — additional patterns, same syntax as `.gitignore`
 
-`.indexignore` patterns override `.gitignore` and soft defaults. Use `!` to un-ignore:
+`.indexignore` supports `!` to override `.gitignore` and soft defaults:
 
 ```gitignore
 # .indexignore — index node_modules for dependency debugging
@@ -172,49 +211,26 @@ Files are excluded from indexing via three layers (in evaluation order):
 
 Global config at `~/.config/codeindex/config.json`, per-repo override at `.codeindex.json`.
 
-## Project structure
+## Eval framework
 
-```
-src/
-  index.ts                CLI entry point
-  cli.ts                  Argument parsing
-  config.ts               Config loading and formatter auto-detection
-  cost.ts                 Cost tracking and summary
-  intent.ts               AGENTS.md generation from directory summaries
-  drift.ts                Stale Intent Node detection
-  repo.ts                 Repo add/remove/list/status/purge
-  db/
-    pg.ts                 PostgreSQL connection (pgvector)
-    sqlite.ts             SQLite connection (sqlite-vec)
-    schema.ts             Table creation for both backends
-    util.ts               Embedding serialization, cosine similarity
-    export.ts             pg -> sqlite snapshot
-  index/
-    walker.ts             File tree walk (.gitignore + .indexignore)
-    skeleton.ts           Tree-sitter AST skeleton extraction with line tracking
-    formatter.ts          In-memory formatting and content hashing
-    embedder.ts           OpenAI text-embedding-3-small with cost recording
-    commits.ts            Git commit history extraction
-    directories.ts        Bottom-up directory summary generation
-    secrets.ts            Pre-embedding secret detection
-  search/
-    query.ts              Scoring engine with snippet support
-    types.ts              TypeScript interfaces
-  hooks/
-    post-commit.ts        Git hook installer
-eval/
-  types.ts                Eval framework interfaces
-  dataset.json            Labeled queries with expected results
-  summary-assessments.json  Directory summary quality ratings
-  run-eval.ts             Eval harness (precision@5, recall, MRR)
-  ripgrep-baseline.ts     Ripgrep comparison baseline
-  ablation.ts             Signal ablation study
+Measure search quality and compare scoring configurations:
+
+```bash
+bun eval/run-eval.ts --repo /path/to/repo    # Run eval against labeled queries
+bun eval/run-eval.ts --ripgrep               # Compare against ripgrep baseline
+bun eval/ablation.ts                          # Signal ablation study
+bun eval/compare-models.ts                    # Compare embedding models
 ```
 
 ## Development
 
 ```bash
-bun run check            # lint + typecheck + format check
+bun run check            # lint + typecheck
 bun run format           # Prettier write
 bun run lint:fix         # ESLint with auto-fix
+bun test                 # Run tests
 ```
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for the full product backlog. M0-M4 are complete. Next up: **M5 — Architecture Intelligence** (authenticated MCP tools, cross-repo xref/graph commands, session-aware caching, full RLS, prose search improvements, Scala).

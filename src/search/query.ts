@@ -6,6 +6,7 @@ import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
 import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
+import { getScopedRepoIds } from "../auth/tokens";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -110,6 +111,12 @@ const LANG_ALIASES: Record<string, string[]> = {
   csharp: [".cs"],
   "c#": [".cs"],
   cs: [".cs"],
+  kotlin: [".kt", ".kts"],
+  kt: [".kt", ".kts"],
+  swift: [".swift"],
+  ruby: [".rb"],
+  rb: [".rb"],
+  php: [".php"],
 };
 
 function resolveLangExtensions(langs: string[]): string[] {
@@ -163,6 +170,40 @@ function computeCommitBoost(
   return boost;
 }
 
+/** Map file extension to language profile key. */
+const EXT_TO_LANG_KEY: Record<string, string> = {
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".js": "javascript",
+  ".jsx": "javascript",
+  ".py": "python",
+  ".rs": "rust",
+  ".go": "go",
+  ".java": "java",
+  ".kt": "kotlin",
+  ".kts": "kotlin",
+  ".swift": "swift",
+  ".rb": "ruby",
+  ".php": "php",
+  ".c": "c",
+  ".cpp": "cpp",
+  ".cs": "csharp",
+};
+
+/** Resolve per-language scoring overrides for a given file type. */
+function langScoring(
+  fileType: string,
+  base: ScoringConfig,
+  profiles?: Record<string, Partial<ScoringConfig>>,
+): ScoringConfig {
+  if (!profiles) return base;
+  const lang = EXT_TO_LANG_KEY[fileType];
+  if (!lang) return base;
+  const override = profiles[lang];
+  if (!override) return base;
+  return { ...base, ...override };
+}
+
 // ---------------------------------------------------------------------------
 // PostgreSQL implementation
 // ---------------------------------------------------------------------------
@@ -174,6 +215,7 @@ async function searchPg(
   query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
+  languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
   const pg = await getPg();
 
@@ -188,6 +230,7 @@ async function searchPg(
       query,
       options,
       scoring,
+      languageProfiles,
     );
   });
 }
@@ -200,6 +243,7 @@ async function searchPgInTransaction(
   query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
+  languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
   await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
@@ -373,21 +417,24 @@ async function searchPgInTransaction(
     const fileId = parseInt(row.id);
     const repoId = parseInt(row.repo_id);
     const fileSim = parseFloat(row.similarity);
+    const fileScoring = langScoring(row.file_type, scoring, languageProfiles);
     const links = linksByFileId.get(fileId) ?? [];
-    const commitBoost = computeCommitBoost(links, scoring);
+    const commitBoost = computeCommitBoost(links, fileScoring);
 
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
+    const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
 
     // Length normalization penalty (token-approximated skeleton length)
     const tokenCount = (row.skeleton?.length ?? 0) / 4;
     const lengthPenalty =
       tokenCount > 0 ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight : 0;
 
-    // Semantic score with length penalty
-    const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
+    // Semantic score with length penalty (using per-language alpha/beta)
+    const fAlpha = fileScoring.alpha;
+    const fBeta = fileScoring.beta;
+    const semanticScore = fileSim + fAlpha * commitBoost + fBeta * parentBoost - lengthPenalty;
 
     // BM25 keyword score
     const rawBM25 = bm25Scores.get(row.id) ?? 0;
@@ -515,6 +562,7 @@ async function searchSqlite(
   query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
+  languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
   const db = await getSqlite(repoRoot);
   const embBuf = serializeEmbedding(queryEmbedding);
@@ -592,22 +640,29 @@ async function searchSqlite(
     )
     .all(embBuf, knnLimit, ...dirFilterParams) as (SqliteDirRow & { concat_distance: number })[];
 
-  // Enrich with summary distances where available
-  const dirRows: SqliteDirRow[] = dirConcatRows.map((row) => {
-    let summaryDistance: number | null = null;
+  // Batch load summary distances for all directories in a single query
+  const summaryByDirId = new Map<number, number>();
+  if (dirConcatRows.length > 0) {
+    const dirIds = dirConcatRows.map((r) => r.id);
+    const dirPlaceholders = dirIds.map(() => "?").join(",");
     try {
-      const summaryRow = db
+      const summaryRows = db
         .prepare(
-          `SELECT vec_distance_cosine(embedding, ?) AS distance
-           FROM dir_summary_embeddings WHERE dir_id = ?`,
+          `SELECT dir_id, vec_distance_cosine(embedding, ?) AS distance
+           FROM dir_summary_embeddings WHERE dir_id IN (${dirPlaceholders})`,
         )
-        .get(embBuf, row.id) as { distance: number } | null;
-      if (summaryRow) summaryDistance = summaryRow.distance;
+        .all(embBuf, ...dirIds) as { dir_id: number; distance: number }[];
+      for (const row of summaryRows) {
+        summaryByDirId.set(row.dir_id, row.distance);
+      }
     } catch {
-      // No summary embedding for this directory
+      // No summary embeddings table or empty
     }
-    return { ...row, summary_distance: summaryDistance };
-  });
+  }
+  const dirRows: SqliteDirRow[] = dirConcatRows.map((row) => ({
+    ...row,
+    summary_distance: summaryByDirId.get(row.id) ?? null,
+  }));
 
   // --- Commits (KNN via vec0 MATCH) ---
   let commitFilterSql = "";
@@ -698,13 +753,14 @@ async function searchSqlite(
   // --- File results ---
   for (const row of fileRows) {
     const fileSim = 1 - row.distance;
+    const fileScoring = langScoring(row.file_type, scoring, languageProfiles);
     const links = linksByFileId.get(row.id) ?? [];
-    const commitBoost = computeCommitBoost(links, scoring);
+    const commitBoost = computeCommitBoost(links, fileScoring);
 
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
+    const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
 
     // Length normalization penalty (token-approximated skeleton length)
     const tokenCount = (row.skeleton?.length ?? 0) / 4;
@@ -713,8 +769,10 @@ async function searchSqlite(
         ? Math.max(0, Math.log(tokenCount / avgTokenCountSqlite)) * lengthPenaltyWeight
         : 0;
 
-    // Semantic score with length penalty
-    const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
+    // Semantic score with length penalty (using per-language alpha/beta)
+    const fAlpha = fileScoring.alpha;
+    const fBeta = fileScoring.beta;
+    const semanticScore = fileSim + fAlpha * commitBoost + fBeta * parentBoost - lengthPenalty;
 
     // BM25 keyword score
     const rawBM25 = bm25ScoresSqlite.get(String(row.id)) ?? 0;
@@ -847,7 +905,9 @@ async function resolveRepoIds(
       return { repoIds: repos.map((r) => parseInt(r.id)), currentRepoId };
     }
     if (Array.isArray(scope)) {
-      const filtered = repos.filter((r) => scope.includes(r.name)).map((r) => parseInt(r.id));
+      const filtered = repos
+        .filter((r) => scope.includes(r.name) || scope.includes(r.root_path))
+        .map((r) => parseInt(r.id));
       return { repoIds: filtered.length > 0 ? filtered : [currentRepoId], currentRepoId };
     }
     // "project" or undefined
@@ -863,7 +923,9 @@ async function resolveRepoIds(
       return { repoIds: repos.map((r) => r.id), currentRepoId };
     }
     if (Array.isArray(scope)) {
-      const filtered = repos.filter((r) => scope.includes(r.name)).map((r) => r.id);
+      const filtered = repos
+        .filter((r) => scope.includes(r.name) || scope.includes(r.root_path))
+        .map((r) => r.id);
       return { repoIds: filtered.length > 0 ? filtered : [currentRepoId], currentRepoId };
     }
     return { repoIds: currentRepoId !== -1 ? [currentRepoId] : [], currentRepoId };
@@ -904,7 +966,16 @@ export async function search(
   };
 
   const queryEmbedding = await embedSingle(query);
-  const { repoIds, currentRepoId } = await resolveRepoIds(repoRoot, resolvedOptions.scope, config);
+  const resolved = await resolveRepoIds(repoRoot, resolvedOptions.scope, config);
+  let repoIds = resolved.repoIds;
+  const currentRepoId = resolved.currentRepoId;
+
+  // Apply token-based repo scoping if CODEINDEX_TOKEN is set
+  const tokenRepoIds = await getScopedRepoIds(repoRoot);
+  if (tokenRepoIds !== null) {
+    const allowed = new Set(tokenRepoIds);
+    repoIds = repoIds.filter((id) => allowed.has(id));
+  }
 
   if (repoIds.length === 0) {
     return [];
@@ -920,6 +991,7 @@ export async function search(
       query,
       resolvedOptions,
       scoring,
+      config.languageProfiles,
     );
   } else {
     results = await searchSqlite(
@@ -930,6 +1002,7 @@ export async function search(
       query,
       resolvedOptions,
       scoring,
+      config.languageProfiles,
     );
   }
 
@@ -939,7 +1012,12 @@ export async function search(
 
   // Post-processing: attach snippets if requested
   if (resolvedOptions.includeSnippet) {
-    await attachSnippets(repoRoot, config, finalResults, query);
+    await attachSnippets(repoRoot, config, finalResults, query, currentRepoId);
+  }
+
+  // Post-processing: annotate with cross-repo edges if multi-repo
+  if (repoIds.length > 1) {
+    await attachCrossRepoEdges(repoRoot, config, finalResults, currentRepoId);
   }
 
   return finalResults;
@@ -954,6 +1032,7 @@ async function attachSnippets(
   config: Awaited<ReturnType<typeof loadConfig>>,
   results: SearchResult[],
   query: string,
+  currentRepoId: number,
 ): Promise<void> {
   const queryWords = new Set(
     query
@@ -962,29 +1041,56 @@ async function attachSnippets(
       .filter((w) => w.length > 2),
   );
 
-  for (const result of results) {
-    if (result.type === "dir" || result.type === "commit") continue;
+  // Batch load skeleton_entries for all file results in a single query
+  // Include all repo IDs from results (not just current repo) for multi-repo support
+  const fileResults = results.filter((r) => r.type !== "dir" && r.type !== "commit");
+  const filePaths = fileResults.map((r) => r.filePath);
+  const resultRepoIds = [
+    ...new Set(
+      fileResults
+        .map((r) => (r.repoId ? parseInt(r.repoId) : currentRepoId))
+        .filter((id) => !isNaN(id)),
+    ),
+  ];
+  // Key by repo_id:file_path to avoid collisions across repos with identical relative paths
+  const entriesMap = new Map<string, string>();
 
-    // Load skeleton_entries from DB
-    let entriesJson: string | null = null;
+  if (filePaths.length > 0) {
     if (config.store === "pg") {
-      const rows = await pgUnsafe(
-        "SELECT skeleton_entries FROM files WHERE repo_id IN (SELECT id FROM repos WHERE root_path = $1) AND file_path = $2",
-        [repoRoot, result.filePath],
-      );
-      if (rows.length > 0) entriesJson = rows[0].skeleton_entries as string | null;
+      const rows = (await pgUnsafe(
+        `SELECT repo_id, file_path, skeleton_entries FROM files
+         WHERE repo_id = ANY($1)
+         AND file_path = ANY($2)`,
+        [resultRepoIds, filePaths],
+      )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
+      for (const row of rows) {
+        if (row.skeleton_entries)
+          entriesMap.set(`${row.repo_id}:${row.file_path}`, row.skeleton_entries);
+      }
     } else {
       const db = await getSqlite(repoRoot);
+      const pathPlaceholders = filePaths.map(() => "?").join(",");
+      const repoPlaceholders = resultRepoIds.map(() => "?").join(",");
       const rows = db
         .prepare(
-          `SELECT f.skeleton_entries FROM files f
-           JOIN repos r ON r.id = f.repo_id
-           WHERE r.root_path = ? AND f.file_path = ?`,
+          `SELECT f.repo_id, f.file_path, f.skeleton_entries FROM files f
+           WHERE f.repo_id IN (${repoPlaceholders}) AND f.file_path IN (${pathPlaceholders})`,
         )
-        .all(repoRoot, result.filePath) as { skeleton_entries: string | null }[];
-      if (rows.length > 0) entriesJson = rows[0].skeleton_entries;
+        .all(...resultRepoIds, ...filePaths) as {
+        repo_id: number;
+        file_path: string;
+        skeleton_entries: string | null;
+      }[];
+      for (const row of rows) {
+        if (row.skeleton_entries)
+          entriesMap.set(`${row.repo_id}:${row.file_path}`, row.skeleton_entries);
+      }
     }
+  }
 
+  for (const result of fileResults) {
+    const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
+    const entriesJson = entriesMap.get(`${repoId}:${result.filePath}`);
     if (!entriesJson) continue;
 
     let entries: SkeletonEntry[];
@@ -1039,6 +1145,102 @@ async function attachSnippets(
       result.snippet = lines.slice(start, end).join("\n");
     } catch {
       // File might not exist on disk
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-repo edge post-processing
+// ---------------------------------------------------------------------------
+
+async function attachCrossRepoEdges(
+  repoRoot: string,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  results: SearchResult[],
+  currentRepoId: number,
+): Promise<void> {
+  // Build repo name map
+  const repoNameMap = new Map<number, string>();
+  if (config.store === "pg") {
+    const repos = (await pgUnsafe("SELECT id, name FROM repos")) as {
+      id: string;
+      name: string;
+    }[];
+    for (const r of repos) repoNameMap.set(parseInt(r.id), r.name);
+
+    // Build cross-repo edges lookup once (matching the SQLite approach)
+    const allEdges = (await pgUnsafe(
+      `SELECT DISTINCT source_repo_id, target_repo_id FROM cross_repo_edges`,
+    )) as { source_repo_id: string; target_repo_id: string }[];
+
+    const depsByRepo = new Map<
+      number,
+      Array<{ repoName: string; direction: "depends-on" | "depended-by" }>
+    >();
+    for (const e of allEdges) {
+      const srcId = parseInt(e.source_repo_id);
+      const tgtId = parseInt(e.target_repo_id);
+
+      const sourceList = depsByRepo.get(srcId) ?? [];
+      const targetName = repoNameMap.get(tgtId) ?? `repo:${tgtId}`;
+      sourceList.push({ repoName: targetName, direction: "depends-on" });
+      depsByRepo.set(srcId, sourceList);
+
+      const targetList = depsByRepo.get(tgtId) ?? [];
+      const sourceName = repoNameMap.get(srcId) ?? `repo:${srcId}`;
+      targetList.push({ repoName: sourceName, direction: "depended-by" });
+      depsByRepo.set(tgtId, targetList);
+    }
+
+    for (const result of results) {
+      if (result.type === "commit" || result.type === "dir") continue;
+      const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
+      const edges = depsByRepo.get(repoId);
+      if (edges && edges.length > 0) {
+        result.crossRepoEdges = edges;
+      }
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    const repos = db.prepare("SELECT id, name FROM repos").all() as {
+      id: number;
+      name: string;
+    }[];
+    for (const r of repos) repoNameMap.set(r.id, r.name);
+
+    // Build cross-repo edges lookup once
+    const allEdges = db
+      .prepare(
+        `SELECT source_repo_id, target_repo_id FROM cross_repo_edges
+         GROUP BY source_repo_id, target_repo_id`,
+      )
+      .all() as { source_repo_id: number; target_repo_id: number }[];
+
+    const depsByRepo = new Map<
+      number,
+      Array<{ repoName: string; direction: "depends-on" | "depended-by" }>
+    >();
+    for (const e of allEdges) {
+      // source depends-on target
+      const sourceList = depsByRepo.get(e.source_repo_id) ?? [];
+      const targetName = repoNameMap.get(e.target_repo_id) ?? `repo:${e.target_repo_id}`;
+      sourceList.push({ repoName: targetName, direction: "depends-on" });
+      depsByRepo.set(e.source_repo_id, sourceList);
+
+      // target depended-by source
+      const targetList = depsByRepo.get(e.target_repo_id) ?? [];
+      const sourceName = repoNameMap.get(e.source_repo_id) ?? `repo:${e.source_repo_id}`;
+      targetList.push({ repoName: sourceName, direction: "depended-by" });
+      depsByRepo.set(e.target_repo_id, targetList);
+    }
+
+    for (const result of results) {
+      if (result.type === "commit" || result.type === "dir") continue;
+      const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
+      const edges = depsByRepo.get(repoId);
+      if (edges && edges.length > 0) {
+        result.crossRepoEdges = edges;
+      }
     }
   }
 }
