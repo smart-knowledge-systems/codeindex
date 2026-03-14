@@ -20,8 +20,7 @@ async function hasEmbeddings(ctx: PolicyContext): Promise<boolean> {
 
 export const secretScanCoverage: HealthPolicy = {
   name: "reindex-completed",
-  description:
-    "Verify that the repo has been indexed (embedding events exist, implying secret scanning ran)",
+  description: "Verify that the repo has been fully indexed (embedding events exist)",
   severity: "error",
 
   async check(ctx: PolicyContext): Promise<PolicyResult> {
@@ -31,15 +30,13 @@ export const secretScanCoverage: HealthPolicy = {
       return {
         passed: false,
         message: "No embedding events found — repo has not been indexed",
-        details: { note: "Run `codeindex reindex` to index the repo with secret scanning" },
+        details: { note: "Run `codeindex reindex` to index the repo" },
       };
     }
 
-    // Secret scanning is integrated into the reindex pipeline and always runs
-    // before embedding. If embeddings exist, secret scanning has run.
     return {
       passed: true,
-      message: "Reindex completed (secret scanning runs before every embedding operation)",
+      message: "Reindex completed (embedding events found)",
     };
   },
 };
