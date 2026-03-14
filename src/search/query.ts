@@ -219,12 +219,11 @@ async function searchPg(
 ): Promise<SearchResult[]> {
   const pg = await getPg();
 
-  // Wrap all queries in a transaction so SET LOCAL hnsw.ef_search applies
-  // to every query on the same connection
-  await pg.unsafe("BEGIN");
-  try {
+  // Use pg.begin() to pin to a single connection so SET LOCAL hnsw.ef_search
+  // applies to all queries in the transaction
+  return pg.begin(async (tx) => {
     return await searchPgInTransaction(
-      pg,
+      tx,
       repoIds,
       currentRepoId,
       queryEmbedding,
@@ -233,9 +232,7 @@ async function searchPg(
       scoring,
       languageProfiles,
     );
-  } finally {
-    await pg.unsafe("COMMIT");
-  }
+  });
 }
 
 async function searchPgInTransaction(
