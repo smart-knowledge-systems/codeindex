@@ -164,8 +164,9 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
     }
   }
 
-  // Backfill checksums for migrations applied before 0007
-  if (applied.includes(7)) {
+  // Backfill checksums for any migrations that predate the checksums table
+  const finalVersion = await getSqliteVersion(repoRoot);
+  if (finalVersion >= 7) {
     for (const m of migrations) {
       if (m.version < 7) {
         db.prepare(
