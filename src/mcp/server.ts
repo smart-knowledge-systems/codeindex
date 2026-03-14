@@ -286,11 +286,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
     "batchSearch",
     "Run multiple semantic search queries in a single call. Deduplicates and batch-embeds queries for efficiency.",
     {
-      queries: z
-        .array(z.string())
-        .min(1)
-        .max(10)
-        .describe("Array of search queries (max 10)"),
+      queries: z.array(z.string()).min(1).max(10).describe("Array of search queries (max 10)"),
       topN: z.number().optional().describe("Maximum results per query"),
       minScore: z.number().optional().describe("Minimum score threshold (0-1)"),
       scope: z
@@ -371,9 +367,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
     "searchChanged",
     "Find files that were indexed after a given timestamp, optionally filtered by semantic query.",
     {
-      since: z
-        .string()
-        .describe("ISO date or relative duration (e.g. '1d', '7d', '2w', '3m')"),
+      since: z.string().describe("ISO date or relative duration (e.g. '1d', '7d', '2w', '3m')"),
       query: z.string().optional().describe("Optional semantic search query to intersect with"),
       topN: z.number().optional().describe("Maximum number of results to return"),
       minScore: z.number().optional().describe("Minimum score threshold (0-1)"),

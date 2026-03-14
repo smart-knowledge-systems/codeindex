@@ -218,7 +218,7 @@ async function searchPg(
   currentRepoId: number,
   queryEmbedding: number[],
   query: string,
-  options: Required<SearchOptions>,
+  options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
@@ -246,7 +246,7 @@ async function searchPgInTransaction(
   currentRepoId: number,
   queryEmbedding: number[],
   query: string,
-  options: Required<SearchOptions>,
+  options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
@@ -570,7 +570,7 @@ async function searchSqlite(
   repoRoot: string,
   queryEmbedding: number[],
   query: string,
-  options: Required<SearchOptions>,
+  options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
@@ -964,7 +964,7 @@ export async function search(
     ? { ...config.scoring, ...options.scoringOverrides }
     : config.scoring;
 
-  const resolvedOptions: Required<SearchOptions> = {
+  const resolvedOptions: Required<Omit<SearchOptions, "embeddingCache">> = {
     minScore: options?.minScore ?? scoring.minScore,
     topN: options?.topN ?? 0,
     scope: options?.scope ?? "project",
@@ -1372,9 +1372,7 @@ export async function searchChanged(
 
   // Run semantic search and intersect with changed files
   const semanticResults = await search(repoRoot, query, options);
-  return semanticResults.filter(
-    (r) => r.type === "file" && changedPaths.has(r.filePath),
-  );
+  return semanticResults.filter((r) => r.type === "file" && changedPaths.has(r.filePath));
 }
 
 /**
