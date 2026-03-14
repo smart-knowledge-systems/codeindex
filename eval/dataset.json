@@ -387,5 +387,61 @@
     "description": "Lua __index metamethod enabling prototype-based inheritance",
     "tags": ["lua", "language-specific"],
     "language": "lua"
+  },
+  {
+    "id": "prose-claude-instructions",
+    "query": "project instructions and required behavior for contributors",
+    "expectedFiles": ["CLAUDE.md"],
+    "description": "Prose query targeting CLAUDE.md contributor instructions",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-readme-overview",
+    "query": "project overview and getting started guide",
+    "expectedFiles": ["README.md"],
+    "description": "Prose query for README project overview",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-spec-architecture",
+    "query": "codeindex specification and architecture design",
+    "expectedFiles": ["SPEC.md"],
+    "description": "Prose query targeting the project specification document",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-plan-milestones",
+    "query": "development plan with milestone phases",
+    "expectedFiles": ["PLAN.md"],
+    "description": "Prose query about the development plan and milestones",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-ci-guide",
+    "query": "continuous integration setup and CI pipeline",
+    "expectedFiles": ["docs/ci-guide.md"],
+    "description": "Prose query about CI/CD documentation",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-tree-sitter-upgrade",
+    "query": "tree-sitter WASM upgrade and parser migration",
+    "expectedFiles": ["docs/tree-sitter-upgrade.md"],
+    "description": "Prose query about tree-sitter upgrade documentation",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-skill-definition",
+    "query": "codeindex skill definition for AI agent tools",
+    "expectedFiles": ["codeindex.skill.md"],
+    "description": "Prose query targeting the skill definition document",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-package-manager-bun",
+    "query": "bun package manager and never use npm",
+    "expectedFiles": ["CLAUDE.md"],
+    "description": "Prose query for specific instruction content in CLAUDE.md",
+    "tags": ["prose"]
   }
 ]

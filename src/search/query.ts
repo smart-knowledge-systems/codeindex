@@ -172,6 +172,9 @@ function computeCommitBoost(
   return boost;
 }
 
+/** Prose file types exempt from length normalization penalty. */
+const PROSE_FILE_TYPES = new Set([".md", ".mdx", ".rst", ".txt", ".adoc"]);
+
 /** Map file extension to language profile key. */
 const EXT_TO_LANG_KEY: Record<string, string> = {
   ".ts": "typescript",
@@ -429,9 +432,14 @@ async function searchPgInTransaction(
     const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
 
     // Length normalization penalty (token-approximated skeleton length)
+    // Prose files (md, rst, txt, adoc) are exempt — their skeletons are intentionally
+    // full-content and should not be penalized for length.
     const tokenCount = (row.skeleton?.length ?? 0) / 4;
+    const isProse = PROSE_FILE_TYPES.has(row.file_type);
     const lengthPenalty =
-      tokenCount > 0 ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight : 0;
+      !isProse && tokenCount > 0
+        ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight
+        : 0;
 
     // Semantic score with length penalty (using per-language alpha/beta)
     const fAlpha = fileScoring.alpha;
@@ -765,9 +773,12 @@ async function searchSqlite(
     const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
 
     // Length normalization penalty (token-approximated skeleton length)
+    // Prose files (md, rst, txt, adoc) are exempt — their skeletons are intentionally
+    // full-content and should not be penalized for length.
     const tokenCount = (row.skeleton?.length ?? 0) / 4;
+    const isProse = PROSE_FILE_TYPES.has(row.file_type);
     const lengthPenalty =
-      tokenCount > 0
+      !isProse && tokenCount > 0
         ? Math.max(0, Math.log(tokenCount / avgTokenCountSqlite)) * lengthPenaltyWeight
         : 0;
 

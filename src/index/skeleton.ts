@@ -1939,7 +1939,10 @@ function collectEntries(root: Node): SkeletonEntry[] {
 }
 
 /** Extensions treated as prose/documentation — get a structured extractor instead of firstNLines. */
-const PROSE_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst"]);
+const PROSE_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst", ".adoc"]);
+
+/** Maximum characters for prose skeleton — matches MAX_EMBED_CHARS in embedder.ts */
+const MAX_PROSE_CHARS = 4_000;
 
 /**
  * Extract a structured skeleton from a markdown/prose file.
@@ -1987,9 +1990,11 @@ function skeletonProse(content: string): { text: string; entries: SkeletonEntry[
     }
   }
 
-  // If the structured extraction is too sparse, use more of the original content
-  const text = parts.length >= 5 ? parts.join("\n") : content;
-  return { text, entries };
+  // Use full content (up to MAX_PROSE_CHARS) to preserve searchable prose content.
+  // The structured parts are still extracted for entries, but the text should retain
+  // as much of the original document as possible for embedding quality.
+  const fullText = content.length > MAX_PROSE_CHARS ? content.slice(0, MAX_PROSE_CHARS) : content;
+  return { text: fullText, entries };
 }
 
 export async function extractSkeletonWithEntries(
