@@ -53,16 +53,18 @@ export async function createToken(
     }
   } else {
     const db = await getSqlite(repoRoot);
-    const result = db
-      .prepare(`INSERT INTO access_tokens (token_hash, name, expires_at) VALUES (?, ?, ?)`)
-      .run(hash, name, expiresAt ?? null);
-    const tokenId = Number(result.lastInsertRowid);
-    const insertAccess = db.prepare(
-      `INSERT INTO token_repo_access (token_id, repo_id) VALUES (?, ?)`,
-    );
-    for (const repoId of repoIds) {
-      insertAccess.run(tokenId, repoId);
-    }
+    db.transaction(() => {
+      const result = db
+        .prepare(`INSERT INTO access_tokens (token_hash, name, expires_at) VALUES (?, ?, ?)`)
+        .run(hash, name, expiresAt ?? null);
+      const tokenId = Number(result.lastInsertRowid);
+      const insertAccess = db.prepare(
+        `INSERT INTO token_repo_access (token_id, repo_id) VALUES (?, ?)`,
+      );
+      for (const repoId of repoIds) {
+        insertAccess.run(tokenId, repoId);
+      }
+    })();
   }
 
   return plaintext;
@@ -184,5 +186,7 @@ export async function revokeToken(repoRoot: string, tokenId: number): Promise<vo
 export async function getScopedRepoIds(repoRoot: string): Promise<number[] | null> {
   const token = process.env.CODEINDEX_TOKEN;
   if (!token) return null;
-  return validateToken(repoRoot, token);
+  // Invalid/expired/revoked token should deny access (empty array),
+  // not grant full access (null)
+  return (await validateToken(repoRoot, token)) ?? [];
 }
