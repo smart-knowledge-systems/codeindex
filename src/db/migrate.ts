@@ -3,6 +3,7 @@ import { readdir, readFile } from "fs/promises";
 import path from "path";
 import { getPg } from "./pg";
 import { getSqlite } from "./sqlite";
+import { logEvent } from "../logging";
 
 const MIGRATIONS_DIR = path.join(import.meta.dir, "../../migrations");
 
@@ -100,6 +101,7 @@ async function applyPgMigrations(): Promise<number[]> {
 
       await pg.unsafe("COMMIT");
       applied.push(m.version);
+      logEvent({ event: "migrate", version: m.version, backend: "pg" });
     } catch (err) {
       await pg.unsafe("ROLLBACK");
       throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
@@ -157,6 +159,7 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
     try {
       runMigration();
       applied.push(m.version);
+      logEvent({ event: "migrate", version: m.version, backend: "sqlite" });
     } catch (err) {
       throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
     }
