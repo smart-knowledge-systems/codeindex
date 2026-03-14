@@ -200,7 +200,7 @@ async function reindexOne(
               f.skeleton,
               f.skeletonEntries,
               f.fileType,
-              serializeEmbedding(embedding),
+              `[${embedding.join(",")}]`,
             ],
           );
         }
