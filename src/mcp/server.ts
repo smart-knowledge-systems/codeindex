@@ -12,6 +12,7 @@ import { getCostSummary } from "../cost";
 import { runHealthCheck } from "../check/runner";
 import type { SearchResult } from "../search/types";
 import { validateRepoScope, type AuthSession } from "./auth";
+import { recordEvent } from "../telemetry";
 
 // ---------------------------------------------------------------------------
 // Status helper (shared with CLI but returns structured data)
@@ -228,6 +229,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       explain: z.boolean().optional().describe("Include per-result score breakdown"),
     },
     async ({ query, topN, minScore, lang, dir, since, scope, explain }) => {
+      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "search" });
       const repoRoot = defaultRepoRoot;
       const results = await search(repoRoot, query, {
         topN: topN ?? undefined,
@@ -262,6 +264,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
+      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "intent" });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
         if (!allowed) {
@@ -291,6 +294,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       agentsMdPath: z.string().optional().describe("Path to AGENTS.md (default: AGENTS.md)"),
     },
     async ({ repoPath, threshold, agentsMdPath }) => {
+      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "drift" });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
         if (!allowed) {
@@ -326,6 +330,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       cost: z.boolean().optional().describe("Include token usage and cost breakdown"),
     },
     async ({ repoPath, cost }) => {
+      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "status" });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
         if (!allowed) {
@@ -358,6 +363,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
+      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "check" });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
         if (!allowed) {
