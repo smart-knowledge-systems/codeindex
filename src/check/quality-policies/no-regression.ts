@@ -13,11 +13,11 @@ export function noRegression(baselinePath: string, tolerance = 0.02): QualityPol
         baseline = JSON.parse(fs.readFileSync(baselinePath, "utf-8"));
       } catch {
         return {
-          passed: true,
+          passed: false,
           metric: "avgNdcg",
           actual: summary.avgNdcg,
           threshold: 0,
-          message: `No baseline found at ${baselinePath} — skipping regression check`,
+          message: `Baseline file not found or unreadable at ${baselinePath} — cannot verify regression`,
         };
       }
 
