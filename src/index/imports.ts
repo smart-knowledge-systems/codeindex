@@ -118,7 +118,7 @@ function extractGoImports(content: string): ImportEdge[] {
       edges.push({ importedModule: pathMatch[1], language: "go" });
     }
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ function extractRustImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(modRe)) {
     edges.push({ importedModule: match[1], language: "rust" });
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ function extractJavaImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(importRe)) {
     edges.push({ importedModule: match[1], language: "java" });
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ function extractKotlinImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(importRe)) {
     edges.push({ importedModule: match[1], language: "kotlin" });
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
