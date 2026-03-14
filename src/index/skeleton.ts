@@ -1379,6 +1379,22 @@ function skeletonSwift(filename: string, root: Node): string {
         lines.push(`${indent}+ init(${paramStr})`);
         break;
       }
+      case "typealias_declaration": {
+        const nameNode = node.childForFieldName("name") ?? firstChildOfType(node, "type_identifier");
+        const name = nameNode?.text ?? "(anonymous)";
+        // Find the value type — skip the name node itself
+        const valueNode = node.namedChildren.find(
+          (c) => c !== nameNode && (c.type === "type_identifier" || c.type === "user_type" || c.type === "array_type" || c.type === "tuple_type"),
+        );
+        const valueStr = valueNode ? ` = ${valueNode.text}` : "";
+        lines.push(`${indent}typealias ${name}${valueStr}`);
+        break;
+      }
+      case "attribute": {
+        // @available, @objc, etc.
+        lines.push(`${indent}${node.text}`);
+        break;
+      }
     }
   }
 
@@ -1576,6 +1592,21 @@ function skeletonPhp(filename: string, root: Node): string {
         lines.push(`${indent}${vis} ${name?.text ?? "(anonymous)"}(${paramStr})${retStr}`);
         break;
       }
+      case "enum_declaration": {
+        const name = node.childForFieldName("name");
+        lines.push(`${indent}enum ${name?.text ?? "(anonymous)"}`);
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "enum_declaration_list", "declaration_list");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "enum_case": {
+        const name = node.childForFieldName("name");
+        if (name) lines.push(`${indent}case ${name.text}`);
+        break;
+      }
       case "function_definition": {
         const name = node.childForFieldName("name");
         const params = node.childForFieldName("parameters");
@@ -1584,6 +1615,23 @@ function skeletonPhp(filename: string, root: Node): string {
         const retStr = retType ? ` -> ${retType.text}` : "";
         lines.push(`${indent}function ${name?.text ?? "(anonymous)"}(${paramStr})${retStr}`);
         lines.push("");
+        break;
+      }
+      case "property_declaration": {
+        // PHP 8.1 readonly properties
+        const isReadonly = node.text.includes("readonly");
+        const varNode = firstChildOfType(node, "property_element");
+        const propName = varNode?.text ?? "";
+        if (propName) {
+          const modifier = isReadonly ? "readonly " : "";
+          const vis = node.text.match(/^\s*(private|protected)/) ? "-" : "+";
+          lines.push(`${indent}${vis} ${modifier}${propName}`);
+        }
+        break;
+      }
+      case "attribute_list": {
+        // PHP 8 #[...] attributes
+        lines.push(`${indent}${node.text}`);
         break;
       }
     }
@@ -1884,8 +1932,13 @@ function collectEntries(root: Node): SkeletonEntry[] {
       }
 
       // TS type alias
-      case "type_alias_declaration": {
-        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+      case "type_alias_declaration":
+      // Swift typealias
+      case "typealias_declaration": {
+        const name =
+          node.childForFieldName("name")?.text ??
+          firstChildOfType(node, "type_identifier")?.text ??
+          "(anonymous)";
         entries.push({ name, kind: "type", startLine, endLine });
         return;
       }
