@@ -1,7 +1,8 @@
 import path from "path";
 import { loadConfig } from "../config";
 import { embedSingle } from "../index/embedder";
-import { getPg, pgUnsafe } from "../db/pg";
+import { pgUnsafe } from "../db/pg";
+import { withRepoScope } from "../db/rls";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
@@ -222,11 +223,9 @@ async function searchPg(
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
-  const pg = await getPg();
-
-  // Use pg.begin() to pin to a single connection so SET LOCAL hnsw.ef_search
-  // applies to all queries in the transaction
-  return pg.begin(async (tx) => {
+  // Use withRepoScope to pin to a single connection, set RLS scope, and
+  // apply SET LOCAL hnsw.ef_search within the same transaction
+  return withRepoScope(repoIds, async (tx) => {
     return await searchPgInTransaction(
       tx,
       repoIds,
@@ -1100,12 +1099,14 @@ async function attachSnippets(
 
   if (filePaths.length > 0) {
     if (config.store === "pg") {
-      const rows = (await pgUnsafe(
-        `SELECT repo_id, file_path, skeleton_entries FROM files
-         WHERE repo_id = ANY($1)
-         AND file_path = ANY($2)`,
-        [resultRepoIds, filePaths],
-      )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
+      const rows = await withRepoScope(resultRepoIds, async (tx) => {
+        return (await tx.unsafe(
+          `SELECT repo_id, file_path, skeleton_entries FROM files
+           WHERE repo_id = ANY($1)
+           AND file_path = ANY($2)`,
+          [resultRepoIds, filePaths],
+        )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
+      });
       for (const row of rows) {
         if (row.skeleton_entries)
           entriesMap.set(`${row.repo_id}:${row.file_path}`, row.skeleton_entries);
@@ -1213,6 +1214,8 @@ async function attachCrossRepoEdges(
     for (const r of repos) repoNameMap.set(parseInt(r.id), r.name);
 
     // Build cross-repo edges lookup, filtered by scoped repo IDs if present
+    // Wrap in withRepoScope so FORCE RLS on cross_repo_edges passes
+    const edgeRepoIds = scopedRepoIds ?? [...repoNameMap.keys()];
     let edgeQuery = `SELECT DISTINCT source_repo_id, target_repo_id FROM cross_repo_edges`;
     const edgeParams: unknown[] = [];
     if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
@@ -1223,10 +1226,12 @@ async function attachCrossRepoEdges(
       edgeQuery += ` WHERE (source_repo_id IN (${placeholders}) OR target_repo_id IN (${placeholders2}))`;
       edgeParams.push(...scopedRepoIds, ...scopedRepoIds);
     }
-    const allEdges = (await pgUnsafe(edgeQuery, edgeParams)) as {
-      source_repo_id: string;
-      target_repo_id: string;
-    }[];
+    const allEdges = await withRepoScope(edgeRepoIds, async (tx) => {
+      return (await tx.unsafe(edgeQuery, edgeParams)) as {
+        source_repo_id: string;
+        target_repo_id: string;
+      }[];
+    });
 
     const depsByRepo = new Map<
       number,
@@ -1362,11 +1367,13 @@ export async function searchChanged(
 
   if (config.store === "pg") {
     const placeholders = repoIds.map((_, i) => `$${i + 2}`).join(",");
-    const rows = (await pgUnsafe(
-      `SELECT file_path FROM files
-       WHERE repo_id IN (${placeholders}) AND indexed_at >= $1`,
-      [sinceIso, ...repoIds],
-    )) as { file_path: string }[];
+    const rows = await withRepoScope(repoIds, async (tx) => {
+      return (await tx.unsafe(
+        `SELECT file_path FROM files
+         WHERE repo_id IN (${placeholders}) AND indexed_at >= $1`,
+        [sinceIso, ...repoIds],
+      )) as { file_path: string }[];
+    });
     for (const r of rows) changedPaths.add(r.file_path);
   } else {
     const db = await getSqlite(repoRoot);

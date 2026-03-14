@@ -7,7 +7,8 @@ import { embed } from "../index/embedder";
 import { generateIntent } from "../intent";
 import { detectDrift } from "../drift";
 import { loadConfig } from "../config";
-import { pgUnsafe } from "../db/pg";
+import { getPg, pgUnsafe } from "../db/pg";
+import { withRepoScope } from "../db/rls";
 import { getSqlite } from "../db/sqlite";
 import { getCostSummary } from "../cost";
 import { runHealthCheck } from "../check/runner";
@@ -18,6 +19,34 @@ import { validateRepoScope, type AuthSession } from "./auth";
 import { recordEvent } from "../telemetry";
 import { EmbeddingCache } from "./cache";
 import { reindexSingleFile, loadFileIndex } from "../index/reindex";
+import type { TransactionSQL } from "bun";
+
+// ---------------------------------------------------------------------------
+// RLS scope helper for MCP tool handlers
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap PG queries in an RLS-scoped transaction.
+ * For scoped sessions: uses session.repoIds.
+ * For full-access / no session: queries all repo IDs so RLS passes.
+ */
+async function withMcpScope<T>(
+  session: AuthSession | undefined,
+  fn: (tx: TransactionSQL) => Promise<T>,
+): Promise<T> {
+  if (session?.repoIds) {
+    return withRepoScope(session.repoIds, fn);
+  }
+  // Full access — need all repo IDs for FORCE RLS
+  const allRepos = await pgUnsafe("SELECT id FROM repos");
+  const allRepoIds = allRepos.map((r: Record<string, unknown>) => Number(r.id));
+  if (allRepoIds.length === 0) {
+    // No repos at all — run in a plain transaction
+    const pg = await getPg();
+    return pg.begin(async (tx) => fn(tx));
+  }
+  return withRepoScope(allRepoIds, fn);
+}
 
 // ---------------------------------------------------------------------------
 // Module-level reindex rate limiter (persists across SSE reconnections)
@@ -52,10 +81,12 @@ function checkReindexRateLimit(repoRoot: string, session?: AuthSession): boolean
   if (log.length >= REINDEX_RATE_LIMIT) return false;
   log.push(now);
 
-  // Periodically evict empty entries to prevent unbounded map growth
+  // Periodically evict stale/empty entries to prevent unbounded map growth
   if (reindexCallLogs.size > 100) {
+    const cutoff = Date.now() - REINDEX_RATE_WINDOW_MS;
     for (const [k, v] of reindexCallLogs) {
-      if (v.length === 0) reindexCallLogs.delete(k);
+      // Evict empty entries AND entries whose newest timestamp is stale
+      if (v.length === 0 || v[v.length - 1] < cutoff) reindexCallLogs.delete(k);
     }
   }
 
@@ -87,7 +118,11 @@ interface StatusResult {
   };
 }
 
-async function getStatus(repoRoot: string, showCost: boolean): Promise<StatusResult> {
+async function getStatus(
+  repoRoot: string,
+  showCost: boolean,
+  session?: AuthSession,
+): Promise<StatusResult> {
   const config = await loadConfig(repoRoot);
 
   if (config.store === "pg") {
@@ -95,12 +130,16 @@ async function getStatus(repoRoot: string, showCost: boolean): Promise<StatusRes
     if (repos.length === 0) throw new Error("Not indexed yet. Run: codeindex reindex");
     const repoId = repos[0].id;
 
-    const [fileCount, dirCount, commitCount, lastIndexed] = await Promise.all([
-      pgUnsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [repoId]),
-      pgUnsafe("SELECT count(*) as cnt FROM directories WHERE repo_id = $1", [repoId]),
-      pgUnsafe("SELECT count(*) as cnt FROM commits WHERE repo_id = $1", [repoId]),
-      pgUnsafe("SELECT max(indexed_at) as last FROM files WHERE repo_id = $1", [repoId]),
-    ]);
+    const [fileCount, dirCount, commitCount, lastIndexed] = await withMcpScope(
+      session,
+      async (tx) =>
+        Promise.all([
+          tx.unsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [repoId]),
+          tx.unsafe("SELECT count(*) as cnt FROM directories WHERE repo_id = $1", [repoId]),
+          tx.unsafe("SELECT count(*) as cnt FROM commits WHERE repo_id = $1", [repoId]),
+          tx.unsafe("SELECT max(indexed_at) as last FROM files WHERE repo_id = $1", [repoId]),
+        ]),
+    );
 
     const result: StatusResult = {
       repo: repos[0].name,
@@ -188,6 +227,7 @@ async function getStatus(repoRoot: string, showCost: boolean): Promise<StatusRes
 async function batchGetIndexedAt(
   repoRoot: string,
   filePaths: string[],
+  session?: AuthSession,
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (filePaths.length === 0) return map;
@@ -195,11 +235,13 @@ async function batchGetIndexedAt(
   const config = await loadConfig(repoRoot);
   if (config.store === "pg") {
     const placeholders = filePaths.map((_, i) => `$${i + 2}`).join(",");
-    const rows = (await pgUnsafe(
-      `SELECT f.file_path, f.indexed_at::text AS indexed_at
+    const rows = (await withMcpScope(session, async (tx) =>
+      tx.unsafe(
+        `SELECT f.file_path, f.indexed_at::text AS indexed_at
        FROM files f JOIN repos r ON r.id = f.repo_id
        WHERE r.root_path = $1 AND f.file_path IN (${placeholders})`,
-      [repoRoot, ...filePaths],
+        [repoRoot, ...filePaths],
+      ),
     )) as { file_path: string; indexed_at: string }[];
     for (const r of rows) map.set(r.file_path, r.indexed_at);
   } else {
@@ -220,9 +262,10 @@ async function batchGetIndexedAt(
 async function enrichResults(
   repoRoot: string,
   results: SearchResult[],
+  session?: AuthSession,
 ): Promise<Array<SearchResult & { indexedAt?: string; stale?: boolean }>> {
   const filePaths = results.filter((r) => r.type !== "commit").map((r) => r.filePath);
-  const indexedAtMap = await batchGetIndexedAt(repoRoot, filePaths);
+  const indexedAtMap = await batchGetIndexedAt(repoRoot, filePaths, session);
   const enriched = [];
   for (const r of results) {
     if (r.type === "commit") {
@@ -306,7 +349,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           embeddingCache,
         });
 
-        const enriched = await enrichResults(repoRoot, results);
+        const enriched = await enrichResults(repoRoot, results, session);
 
         return {
           content: [
@@ -387,21 +430,23 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           }
         }
 
-        // Run search for each unique query, then map results back preserving order
+        // Run search for each unique query in parallel, then map results back preserving order
         const resolvedScope = scope === "all" ? "all" : scope ? scope.split(",") : "project";
         const searchCache = new Map<string, unknown>();
 
-        for (const q of uniqueQueries) {
-          const results = await search(repoRoot, q, {
-            topN: topN ?? undefined,
-            minScore: minScore ?? undefined,
-            scope: resolvedScope as "project" | "all" | string[],
-            includeSkeleton: true,
-            includeSummary: true,
-            embeddingCache,
-          });
-          searchCache.set(q, await enrichResults(repoRoot, results));
-        }
+        await Promise.all(
+          uniqueQueries.map(async (q) => {
+            const results = await search(repoRoot, q, {
+              topN: topN ?? undefined,
+              minScore: minScore ?? undefined,
+              scope: resolvedScope as "project" | "all" | string[],
+              includeSkeleton: true,
+              includeSummary: true,
+              embeddingCache,
+            });
+            searchCache.set(q, await enrichResults(repoRoot, results, session));
+          }),
+        );
 
         // Return array preserving original query order (including duplicates)
         const perQueryResults = queries.map((q) => ({
@@ -476,7 +521,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           embeddingCache,
         });
 
-        const enriched = await enrichResults(repoRoot, results);
+        const enriched = await enrichResults(repoRoot, results, session);
 
         return {
           content: [
@@ -591,7 +636,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           }
         }
         const repoRoot = repoPath ?? defaultRepoRoot;
-        const status = await getStatus(repoRoot, cost ?? false);
+        const status = await getStatus(repoRoot, cost ?? false, session);
 
         return {
           content: [
@@ -686,14 +731,15 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           repoCount = repos.length;
           if (repos.length > 0) {
             const repoId = repos[0].id;
-            const files = await pgUnsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [
-              repoId,
-            ]);
-            fileCount = Number(files[0].cnt);
-            const lastIdx = await pgUnsafe(
-              "SELECT max(indexed_at)::text as last FROM files WHERE repo_id = $1",
-              [repoId],
+            const [files, lastIdx] = await withMcpScope(session, async (tx) =>
+              Promise.all([
+                tx.unsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [repoId]),
+                tx.unsafe("SELECT max(indexed_at)::text as last FROM files WHERE repo_id = $1", [
+                  repoId,
+                ]),
+              ]),
             );
+            fileCount = Number(files[0].cnt);
             lastReindexAt = lastIdx[0].last ?? null;
           }
         } else {
@@ -779,14 +825,16 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       const config = await loadConfig(repoRoot);
 
       if (config.store === "pg") {
-        const rows = await pgUnsafe(
-          `SELECT sf.file_path AS importer, fi.imported_module
+        const rows = await withMcpScope(session, async (tx) =>
+          tx.unsafe(
+            `SELECT sf.file_path AS importer, fi.imported_module
            FROM file_imports fi
            JOIN files tf ON tf.id = fi.resolved_file_id
            JOIN files sf ON sf.id = fi.source_file_id
            JOIN repos r ON r.id = tf.repo_id
            WHERE r.root_path = $1 AND tf.file_path = $2`,
-          [repoRoot, filePath],
+            [repoRoot, filePath],
+          ),
         );
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
@@ -834,14 +882,16 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       const config = await loadConfig(repoRoot);
 
       if (config.store === "pg") {
-        const rows = await pgUnsafe(
-          `SELECT tf.file_path AS dependency, fi.imported_module
+        const rows = await withMcpScope(session, async (tx) =>
+          tx.unsafe(
+            `SELECT tf.file_path AS dependency, fi.imported_module
            FROM file_imports fi
            JOIN files sf ON sf.id = fi.source_file_id
            LEFT JOIN files tf ON tf.id = fi.resolved_file_id
            JOIN repos r ON r.id = sf.repo_id
            WHERE r.root_path = $1 AND sf.file_path = $2`,
-          [repoRoot, filePath],
+            [repoRoot, filePath],
+          ),
         );
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
@@ -927,7 +977,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                  WHERE c.depth < $3 ${repoFilter}
                )
                SELECT DISTINCT file_path, depth FROM chain ORDER BY depth`;
-        const rows = await pgUnsafe(query, params);
+        const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
         // SQLite: iterative approach since recursive CTEs with dynamic column names are awkward
@@ -1044,7 +1094,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              JOIN files tf ON tf.id = e.target_file_id
              ORDER BY sr.name, tr.name`;
         const params = scopedRepoIds ? [scopedRepoIds] : [];
-        const rows = await pgUnsafe(query, params);
+        const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
         const db = await getSqlite(repoRoot);
@@ -1132,7 +1182,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                     OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
              LIMIT 100`;
         const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
-        const rows = await pgUnsafe(query, params);
+        const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
         const db = await getSqlite(repoRoot);
@@ -1216,7 +1266,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              ORDER BY r.name, sf.file_path
              LIMIT 100`;
         const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
-        const rows = await pgUnsafe(query, params);
+        const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
         const db = await getSqlite(repoRoot);
@@ -1374,7 +1424,10 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         }
 
         // Pre-load file index once for import resolution across the batch
-        const fileIndex = await loadFileIndex(repoRoot, repoId);
+        const fileIndex =
+          config.store === "pg"
+            ? await withMcpScope(session, async () => loadFileIndex(repoRoot, repoId))
+            : await loadFileIndex(repoRoot, repoId);
 
         const results: { path: string; indexed: boolean; error?: string }[] = [];
         for (const p of paths) {
@@ -1388,9 +1441,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
               if (!fileIndex.fileIdMap.has(p)) {
                 // Fetch the newly inserted file's ID
                 if (config.store === "pg") {
-                  const rows = (await pgUnsafe(
-                    "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
-                    [repoId, p],
+                  const rows = (await withMcpScope(session, async (tx) =>
+                    tx.unsafe("SELECT id FROM files WHERE repo_id = $1 AND file_path = $2", [
+                      repoId,
+                      p,
+                    ]),
                   )) as { id: number }[];
                   if (rows.length > 0) fileIndex.fileIdMap.set(p, rows[0].id);
                 } else {
