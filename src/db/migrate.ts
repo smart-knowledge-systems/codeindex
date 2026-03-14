@@ -271,7 +271,7 @@ export async function verifyMigrationChecksums(
  * These can't be in SQL migration files because they require the sqlite-vec
  * extension to be loaded first (which happens in getSqlite).
  */
-export async function ensureSqliteVecTables(repoRoot?: string, dimensions = 1536): Promise<void> {
+export async function ensureSqliteVecTables(repoRoot?: string): Promise<void> {
   const db = await getSqlite(repoRoot);
   const config = await loadConfig(repoRoot);
   const dims = config.embedding.dimensions;
