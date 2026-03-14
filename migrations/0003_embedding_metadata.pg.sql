@@ -2,5 +2,3 @@
 
 ALTER TABLE repos ADD COLUMN IF NOT EXISTS embedding_provider text;
 ALTER TABLE repos ADD COLUMN IF NOT EXISTS embedding_dimensions int;
-
-INSERT INTO schema_version (version) VALUES (3);
