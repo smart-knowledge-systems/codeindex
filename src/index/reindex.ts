@@ -1,6 +1,6 @@
 import path from "path";
 import { loadConfig, detectFormatter } from "../config";
-import { getPg, pgUnsafe } from "../db/pg";
+import { withRepoScope } from "../db/rls";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import { extractSkeletonWithEntries, initParser } from "./skeleton";
@@ -20,13 +20,15 @@ export interface FileIndex {
 export async function loadFileIndex(repoRoot: string, repoId: number): Promise<FileIndex> {
   const config = await loadConfig(repoRoot);
   if (config.store === "pg") {
-    const rows = (await pgUnsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
-      repoId,
-    ])) as { id: number; file_path: string }[];
-    return {
-      allFiles: new Set(rows.map((r) => r.file_path)),
-      fileIdMap: new Map(rows.map((r) => [r.file_path, r.id])),
-    };
+    return withRepoScope([repoId], async (tx) => {
+      const rows = (await tx.unsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
+        repoId,
+      ])) as { id: number; file_path: string }[];
+      return {
+        allFiles: new Set(rows.map((r) => r.file_path)),
+        fileIdMap: new Map(rows.map((r) => [r.file_path, r.id])),
+      };
+    });
   } else {
     const db = await getSqlite(repoRoot);
     const rows = db.prepare("SELECT id, file_path FROM files WHERE repo_id = ?").all(repoId) as {
@@ -59,8 +61,7 @@ export async function reindexSingleFile(
   if (!(await file.exists())) {
     // File was deleted — remove from index
     if (config.store === "pg") {
-      const pg = await getPg();
-      await pg.begin(async (tx) => {
+      await withRepoScope([repoId], async (tx) => {
         const rows = (await tx.unsafe(
           "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
           [repoId, relPath],
@@ -107,10 +108,12 @@ export async function reindexSingleFile(
 
   // Check if already indexed with same hash
   if (config.store === "pg") {
-    const existing = await pgUnsafe(
-      "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2 AND content_hash = $3",
-      [repoId, relPath, hash],
-    );
+    const existing = await withRepoScope([repoId], async (tx) => {
+      return await tx.unsafe(
+        "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2 AND content_hash = $3",
+        [repoId, relPath, hash],
+      );
+    });
     if (existing.length > 0) return false;
   } else {
     const db = await getSqlite(repoRoot);
@@ -135,8 +138,7 @@ export async function reindexSingleFile(
   const importEdges = extractImports(relPath, content);
 
   if (config.store === "pg") {
-    const pg = await getPg();
-    await pg.begin(async (tx) => {
+    await withRepoScope([repoId], async (tx) => {
       const rows = (await tx.unsafe(
         `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
          VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
