@@ -7,6 +7,8 @@ import { serializeEmbedding } from "../db/util";
 import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
 import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
 import { getScopedRepoIds } from "../auth/tokens";
+import { logEvent } from "../logging";
+import { recordEvent, hashQuery } from "../telemetry";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -1017,8 +1019,17 @@ export async function search(
 
   // Post-processing: annotate with cross-repo edges if multi-repo
   if (repoIds.length > 1) {
-    await attachCrossRepoEdges(repoRoot, config, finalResults, currentRepoId);
+    await attachCrossRepoEdges(repoRoot, config, finalResults, currentRepoId, tokenRepoIds);
   }
+
+  logEvent({ event: "search", query_length: query.length, result_count: finalResults.length });
+
+  recordEvent({
+    event: "search",
+    timestamp: new Date().toISOString(),
+    queryHash: hashQuery(query),
+    resultCount: finalResults.length,
+  });
 
   return finalResults;
 }
@@ -1158,6 +1169,7 @@ async function attachCrossRepoEdges(
   config: Awaited<ReturnType<typeof loadConfig>>,
   results: SearchResult[],
   currentRepoId: number,
+  scopedRepoIds: number[] | null = null,
 ): Promise<void> {
   // Build repo name map
   const repoNameMap = new Map<number, string>();
@@ -1168,10 +1180,18 @@ async function attachCrossRepoEdges(
     }[];
     for (const r of repos) repoNameMap.set(parseInt(r.id), r.name);
 
-    // Build cross-repo edges lookup once (matching the SQLite approach)
-    const allEdges = (await pgUnsafe(
-      `SELECT DISTINCT source_repo_id, target_repo_id FROM cross_repo_edges`,
-    )) as { source_repo_id: string; target_repo_id: string }[];
+    // Build cross-repo edges lookup, filtered by scoped repo IDs if present
+    let edgeQuery = `SELECT DISTINCT source_repo_id, target_repo_id FROM cross_repo_edges`;
+    const edgeParams: unknown[] = [];
+    if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
+      const placeholders = scopedRepoIds.map((_, i) => `$${i + 1}`).join(",");
+      edgeQuery += ` WHERE source_repo_id IN (${placeholders}) AND target_repo_id IN (${placeholders})`;
+      edgeParams.push(...scopedRepoIds);
+    }
+    const allEdges = (await pgUnsafe(edgeQuery, edgeParams)) as {
+      source_repo_id: string;
+      target_repo_id: string;
+    }[];
 
     const depsByRepo = new Map<
       number,
@@ -1208,13 +1228,19 @@ async function attachCrossRepoEdges(
     }[];
     for (const r of repos) repoNameMap.set(r.id, r.name);
 
-    // Build cross-repo edges lookup once
-    const allEdges = db
-      .prepare(
-        `SELECT source_repo_id, target_repo_id FROM cross_repo_edges
-         GROUP BY source_repo_id, target_repo_id`,
-      )
-      .all() as { source_repo_id: number; target_repo_id: number }[];
+    // Build cross-repo edges lookup, filtered by scoped repo IDs if present
+    let edgeQuery = `SELECT source_repo_id, target_repo_id FROM cross_repo_edges`;
+    const edgeBindings: number[] = [];
+    if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
+      const placeholders = scopedRepoIds.map(() => "?").join(",");
+      edgeQuery += ` WHERE source_repo_id IN (${placeholders}) AND target_repo_id IN (${placeholders})`;
+      edgeBindings.push(...scopedRepoIds);
+    }
+    edgeQuery += ` GROUP BY source_repo_id, target_repo_id`;
+    const allEdges = db.prepare(edgeQuery).all(...edgeBindings) as {
+      source_repo_id: number;
+      target_repo_id: number;
+    }[];
 
     const depsByRepo = new Map<
       number,
