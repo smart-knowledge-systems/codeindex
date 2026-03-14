@@ -1368,7 +1368,7 @@ function skeletonSwift(filename: string, root: Node): string {
         const name =
           childText(node, "name") ?? firstChildOfType(node, "simple_identifier")?.text ?? "";
         const paramStr = extractSwiftParams(
-          node.namedChildren.find((c) => c.type === "parameter") ? node : null,
+          node.namedChildren.find((c) => c.type === "parameter_clause") ?? null,
         );
         const retType = firstChildOfType(node, "array_type", "user_type", "tuple_type");
         const retStr = retType ? ` -> ${retType.text}` : "";
