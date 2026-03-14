@@ -21,22 +21,27 @@ interface MigrationFile {
 function splitPgStatements(sql: string): string[] {
   const results: string[] = [];
   let current = "";
-  let inDollarQuote = false;
+  let dollarTag: string | null = null; // null = outside, string = the tag we're inside
 
   const lines = sql.split("\n");
   for (const line of lines) {
     const trimmed = line.trimStart();
-    if (!inDollarQuote && trimmed.startsWith("--")) continue;
+    if (!dollarTag && trimmed.startsWith("--")) continue;
 
     current += (current ? "\n" : "") + line;
 
-    // Toggle dollar-quoting state
-    const dollarMatches = line.match(/\$\$/g);
-    if (dollarMatches) {
-      for (let i = 0; i < dollarMatches.length; i++) {
-        inDollarQuote = !inDollarQuote;
+    // Toggle dollar-quoting state (supports both $$ and tagged variants like $body$)
+    const dollarRe = /\$([A-Za-z_]*)\$/g;
+    let m: RegExpExecArray | null;
+    while ((m = dollarRe.exec(line)) !== null) {
+      const tag = m[0]; // e.g. "$$" or "$body$"
+      if (dollarTag === null) {
+        dollarTag = tag; // entering a dollar-quoted block
+      } else if (dollarTag === tag) {
+        dollarTag = null; // closing the matching tag
       }
     }
+    const inDollarQuote = dollarTag !== null;
 
     // Only split on ; when not inside a dollar-quoted block
     // Strip trailing inline comments before checking for statement terminator
