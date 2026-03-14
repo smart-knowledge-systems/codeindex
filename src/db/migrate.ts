@@ -2,6 +2,7 @@ import { readdir, readFile } from "fs/promises";
 import path from "path";
 import { getPg } from "./pg";
 import { getSqlite } from "./sqlite";
+import { loadConfig } from "../config";
 
 const MIGRATIONS_DIR = path.join(import.meta.dir, "../../migrations");
 
@@ -63,35 +64,33 @@ async function applyPgMigrations(): Promise<number[]> {
   for (const m of migrations) {
     if (m.version <= currentVersion) continue;
 
-    // Run each migration in a transaction
-    await pg.unsafe("BEGIN");
+    // Run each migration in a connection-pinned transaction
     try {
-      // Split on semicolons and execute each statement
-      const statements = m.sql
-        .split(";")
-        .map((s) => s.trim())
-        .map((s) =>
-          s
-            .split("\n")
-            .filter((line) => !line.trimStart().startsWith("--"))
-            .join("\n")
-            .trim(),
-        )
-        .filter((s) => s.length > 0);
+      await pg.begin(async (tx) => {
+        // Split on semicolons and execute each statement
+        const statements = m.sql
+          .split(";")
+          .map((s) => s.trim())
+          .map((s) =>
+            s
+              .split("\n")
+              .filter((line) => !line.trimStart().startsWith("--"))
+              .join("\n")
+              .trim(),
+          )
+          .filter((s) => s.length > 0);
 
-      for (const stmt of statements) {
-        await pg.unsafe(stmt);
-      }
+        for (const stmt of statements) {
+          await tx.unsafe(stmt);
+        }
 
-      // Update version if the migration didn't already do it
-      if (m.version > 1) {
-        await pg.unsafe("INSERT INTO schema_version (version) VALUES ($1)", [m.version]);
-      }
-
-      await pg.unsafe("COMMIT");
+        // Update version if the migration didn't already do it
+        if (m.version > 1) {
+          await tx.unsafe("INSERT INTO schema_version (version) VALUES ($1)", [m.version]);
+        }
+      });
       applied.push(m.version);
     } catch (err) {
-      await pg.unsafe("ROLLBACK");
       throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
     }
   }
@@ -177,32 +176,34 @@ export async function applyMigrations(
  */
 export async function ensureSqliteVecTables(repoRoot?: string): Promise<void> {
   const db = await getSqlite(repoRoot);
+  const config = await loadConfig(repoRoot);
+  const dims = config.embedding.dimensions;
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS file_embeddings USING vec0(
       file_id integer PRIMARY KEY,
-      embedding float[1536]
+      embedding float[${dims}]
     )
   `);
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS dir_concat_embeddings USING vec0(
       dir_id integer PRIMARY KEY,
-      embedding float[1536]
+      embedding float[${dims}]
     )
   `);
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS dir_summary_embeddings USING vec0(
       dir_id integer PRIMARY KEY,
-      embedding float[1536]
+      embedding float[${dims}]
     )
   `);
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS commit_embeddings USING vec0(
       commit_id integer PRIMARY KEY,
-      embedding float[1536]
+      embedding float[${dims}]
     )
   `);
 }
