@@ -1029,29 +1029,40 @@ async function attachSnippets(
       .filter((w) => w.length > 2),
   );
 
-  for (const result of results) {
-    if (result.type === "dir" || result.type === "commit") continue;
+  // Batch load skeleton_entries for all file results in a single query
+  const fileResults = results.filter((r) => r.type !== "dir" && r.type !== "commit");
+  const filePaths = fileResults.map((r) => r.filePath);
+  const entriesMap = new Map<string, string>();
 
-    // Load skeleton_entries from DB
-    let entriesJson: string | null = null;
+  if (filePaths.length > 0) {
     if (config.store === "pg") {
-      const rows = await pgUnsafe(
-        "SELECT skeleton_entries FROM files WHERE repo_id IN (SELECT id FROM repos WHERE root_path = $1) AND file_path = $2",
-        [repoRoot, result.filePath],
-      );
-      if (rows.length > 0) entriesJson = rows[0].skeleton_entries as string | null;
+      const rows = (await pgUnsafe(
+        `SELECT file_path, skeleton_entries FROM files
+         WHERE repo_id IN (SELECT id FROM repos WHERE root_path = $1)
+         AND file_path = ANY($2)`,
+        [repoRoot, filePaths],
+      )) as { file_path: string; skeleton_entries: string | null }[];
+      for (const row of rows) {
+        if (row.skeleton_entries) entriesMap.set(row.file_path, row.skeleton_entries);
+      }
     } else {
       const db = await getSqlite(repoRoot);
+      const placeholders = filePaths.map(() => "?").join(",");
       const rows = db
         .prepare(
-          `SELECT f.skeleton_entries FROM files f
+          `SELECT f.file_path, f.skeleton_entries FROM files f
            JOIN repos r ON r.id = f.repo_id
-           WHERE r.root_path = ? AND f.file_path = ?`,
+           WHERE r.root_path = ? AND f.file_path IN (${placeholders})`,
         )
-        .all(repoRoot, result.filePath) as { skeleton_entries: string | null }[];
-      if (rows.length > 0) entriesJson = rows[0].skeleton_entries;
+        .all(repoRoot, ...filePaths) as { file_path: string; skeleton_entries: string | null }[];
+      for (const row of rows) {
+        if (row.skeleton_entries) entriesMap.set(row.file_path, row.skeleton_entries);
+      }
     }
+  }
 
+  for (const result of fileResults) {
+    const entriesJson = entriesMap.get(result.filePath);
     if (!entriesJson) continue;
 
     let entries: SkeletonEntry[];
