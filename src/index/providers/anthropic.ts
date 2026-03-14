@@ -58,11 +58,14 @@ export async function generateSummariesBatch(
   let status = batch;
   const maxWaitMs = 30 * 60 * 1000; // 30 minutes
   const startTime = Date.now();
+  let pollIntervalMs = 5_000;
+  const MAX_POLL_INTERVAL_MS = 60_000;
   while (status.processing_status === "in_progress") {
     if (Date.now() - startTime > maxWaitMs) {
       throw new Error(`Batch ${batch.id} did not complete within 30 minutes`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    pollIntervalMs = Math.min(pollIntervalMs * 1.5, MAX_POLL_INTERVAL_MS);
     status = await client.messages.batches.retrieve(batch.id);
   }
 
