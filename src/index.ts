@@ -112,7 +112,7 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 async function extractAndStoreImports(
   repoRoot: string,
   repoId: number,
-  allFiles: string[],
+  allFiles: Set<string>,
   store: "pg" | "sqlite",
 ): Promise<void> {
   // Build file ID map
@@ -144,6 +144,15 @@ async function extractAndStoreImports(
 
   let importCount = 0;
 
+  // Hoist SQLite handle + prepared statement outside the loop
+  const sqliteDb = store === "sqlite" ? await getSqlite(repoRoot) : null;
+  const sqliteStmt = sqliteDb
+    ? sqliteDb.prepare(
+        `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+         VALUES (?, ?, ?, ?)`,
+      )
+    : null;
+
   for (const relPath of allFiles) {
     const sourceId = fileIdMap.get(relPath);
     if (!sourceId) continue;
@@ -170,11 +179,7 @@ async function extractAndStoreImports(
           [sourceId, edge.importedModule, resolvedId, edge.language],
         );
       } else {
-        const db = await getSqlite(repoRoot);
-        db.prepare(
-          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
-           VALUES (?, ?, ?, ?)`,
-        ).run(sourceId, edge.importedModule, resolvedId, edge.language);
+        sqliteStmt!.run(sourceId, edge.importedModule, resolvedId, edge.language);
       }
       importCount++;
     }
@@ -585,7 +590,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
 
   // Extract and store import edges
   console.log("Extracting import graph...");
-  await extractAndStoreImports(repoRoot, repoId, allFiles, config.store);
+  await extractAndStoreImports(repoRoot, repoId, new Set(allFiles), config.store);
   console.log("Import graph complete.");
 
   console.log("Reindex complete.");
@@ -1553,7 +1558,7 @@ async function main() {
           console.log("─".repeat(50));
           console.log(report.passed ? "All checks passed." : "Some checks failed.");
         }
-        if (!report.passed) process.exit(1);
+        let exitCode = report.passed ? 0 : 1;
 
         if (hasFlag(parsed, "quality")) {
           const datasetPath = flag(parsed, "dataset");
@@ -1573,8 +1578,9 @@ async function main() {
               qualityReport.passed ? "All quality checks passed." : "Quality checks failed.",
             );
           }
-          if (!qualityReport.passed) process.exit(1);
+          if (!qualityReport.passed) exitCode = 1;
         }
+        if (exitCode !== 0) process.exit(exitCode);
         break;
       }
 
