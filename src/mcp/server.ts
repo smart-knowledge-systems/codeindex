@@ -239,6 +239,16 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
     async ({ query, topN, minScore, lang, dir, since, scope, explain }) => {
       try {
         recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "search" });
+        if (session) {
+          const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
+          if (!allowed) {
+            return {
+              content: [
+                { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+              ],
+            };
+          }
+        }
         const repoRoot = defaultRepoRoot;
         const results = await search(repoRoot, query, {
           topN: topN ?? undefined,
@@ -1183,10 +1193,12 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           }
         }
 
-        // Rate limit check
+        // Rate limit check — trim stale entries first, then check count
         const now = Date.now();
-        const recentCalls = reindexCallLog.filter((t) => now - t < REINDEX_RATE_WINDOW_MS);
-        if (recentCalls.length >= REINDEX_RATE_LIMIT) {
+        while (reindexCallLog.length > 0 && now - reindexCallLog[0] > REINDEX_RATE_WINDOW_MS) {
+          reindexCallLog.shift();
+        }
+        if (reindexCallLog.length >= REINDEX_RATE_LIMIT) {
           return {
             content: [
               {
@@ -1200,10 +1212,6 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           };
         }
         reindexCallLog.push(now);
-        // Trim old entries
-        while (reindexCallLog.length > 0 && now - reindexCallLog[0] > REINDEX_RATE_WINDOW_MS) {
-          reindexCallLog.shift();
-        }
 
         // Path traversal validation
         const repoRoot = defaultRepoRoot;
