@@ -577,6 +577,17 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
+      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "health" });
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
       const backend = config.store;
@@ -947,31 +958,55 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
       const pattern = `%${symbol}%`;
+      const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
-        const rows = await pgUnsafe(
-          `SELECT f.file_path, f.skeleton, r.name AS repo_name
-           FROM files f
-           JOIN repos r ON r.id = f.repo_id
-           WHERE f.skeleton LIKE $1
-             AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
-                  OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')`,
-          [pattern],
-        );
+        const query = scopedRepoIds
+          ? `SELECT f.file_path, f.skeleton, r.name AS repo_name
+             FROM files f
+             JOIN repos r ON r.id = f.repo_id
+             WHERE f.skeleton LIKE $1
+               AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
+                    OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
+               AND r.id = ANY($2::int[])`
+          : `SELECT f.file_path, f.skeleton, r.name AS repo_name
+             FROM files f
+             JOIN repos r ON r.id = f.repo_id
+             WHERE f.skeleton LIKE $1
+               AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
+                    OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')`;
+        const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
+        const rows = await pgUnsafe(query, params);
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
         const db = await getSqlite(repoRoot);
-        const rows = db
-          .prepare(
-            `SELECT f.file_path, f.skeleton, r.name AS repo_name
-             FROM files f
-             JOIN repos r ON r.id = f.repo_id
-             WHERE f.skeleton LIKE ?
-               AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
-                    OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')`,
-          )
-          .all(pattern);
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        if (scopedRepoIds && scopedRepoIds.length > 0) {
+          const placeholders = scopedRepoIds.map(() => "?").join(",");
+          const rows = db
+            .prepare(
+              `SELECT f.file_path, f.skeleton, r.name AS repo_name
+               FROM files f
+               JOIN repos r ON r.id = f.repo_id
+               WHERE f.skeleton LIKE ?
+                 AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
+                      OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
+                 AND r.id IN (${placeholders})`,
+            )
+            .all(pattern, ...scopedRepoIds);
+          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        } else {
+          const rows = db
+            .prepare(
+              `SELECT f.file_path, f.skeleton, r.name AS repo_name
+               FROM files f
+               JOIN repos r ON r.id = f.repo_id
+               WHERE f.skeleton LIKE ?
+                 AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
+                      OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')`,
+            )
+            .all(pattern);
+          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        }
       }
     },
   );
@@ -1003,31 +1038,55 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
       const pattern = `%${symbol}%`;
+      const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
-        const rows = await pgUnsafe(
-          `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
-           FROM file_imports fi
-           JOIN files sf ON sf.id = fi.source_file_id
-           JOIN repos r ON r.id = sf.repo_id
-           WHERE fi.import_specifier LIKE $1
-           ORDER BY r.name, sf.file_path`,
-          [pattern],
-        );
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
-      } else {
-        const db = await getSqlite(repoRoot);
-        const rows = db
-          .prepare(
-            `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+        const query = scopedRepoIds
+          ? `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              JOIN repos r ON r.id = sf.repo_id
-             WHERE fi.import_specifier LIKE ?
-             ORDER BY r.name, sf.file_path`,
-          )
-          .all(pattern);
+             WHERE fi.import_specifier LIKE $1
+               AND r.id = ANY($2::int[])
+             ORDER BY r.name, sf.file_path`
+          : `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+             FROM file_imports fi
+             JOIN files sf ON sf.id = fi.source_file_id
+             JOIN repos r ON r.id = sf.repo_id
+             WHERE fi.import_specifier LIKE $1
+             ORDER BY r.name, sf.file_path`;
+        const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
+        const rows = await pgUnsafe(query, params);
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      } else {
+        const db = await getSqlite(repoRoot);
+        if (scopedRepoIds && scopedRepoIds.length > 0) {
+          const placeholders = scopedRepoIds.map(() => "?").join(",");
+          const rows = db
+            .prepare(
+              `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+               FROM file_imports fi
+               JOIN files sf ON sf.id = fi.source_file_id
+               JOIN repos r ON r.id = sf.repo_id
+               WHERE fi.import_specifier LIKE ?
+                 AND r.id IN (${placeholders})
+               ORDER BY r.name, sf.file_path`,
+            )
+            .all(pattern, ...scopedRepoIds);
+          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        } else {
+          const rows = db
+            .prepare(
+              `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+               FROM file_imports fi
+               JOIN files sf ON sf.id = fi.source_file_id
+               JOIN repos r ON r.id = sf.repo_id
+               WHERE fi.import_specifier LIKE ?
+               ORDER BY r.name, sf.file_path`,
+            )
+            .all(pattern);
+          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        }
       }
     },
   );
@@ -1056,6 +1115,22 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           timestamp: new Date().toISOString(),
           tool: "reindexFiles",
         });
+
+        // Scope validation
+        if (session) {
+          const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
+          if (!allowed) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({ error: "access denied — repo not in token scope" }),
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
 
         // Rate limit check
         const now = Date.now();
