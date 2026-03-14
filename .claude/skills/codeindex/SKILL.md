@@ -100,6 +100,61 @@ codeindex repo remove my-repo        # Remove repo and all indexed data
 codeindex repo purge my-repo --force # Remove without confirmation prompt
 ```
 
+## Cross-repo intelligence
+
+Trace symbols and dependencies across repositories:
+
+```bash
+# Find all consumers of a symbol across repos
+codeindex xref UserDTO
+
+# JSON output for programmatic use
+codeindex xref UserDTO --format json
+
+# Dependency graph (JSON, Mermaid, or DOT output)
+codeindex graph --format mermaid
+codeindex graph --format dot
+codeindex graph --format json
+```
+
+## MCP server
+
+codeindex runs as a persistent MCP server for agent integration (Claude Code, Cursor, Windsurf). Eliminates CLI startup overhead.
+
+```bash
+# Start MCP server (stdio transport for Claude Code / Cursor)
+codeindex serve
+
+# SSE transport for remote/web clients
+codeindex serve --transport sse --port 3100
+
+# Print MCP config JSON for editor integration
+codeindex mcp-config
+codeindex mcp-config --transport sse --port 3100
+```
+
+### MCP tools available
+
+| Tool | Description |
+|------|-------------|
+| `search` | Semantic search with all CLI flags |
+| `batchSearch` | Multiple queries in one call (shared embedding, deduplication) |
+| `searchChanged` | Files modified since a timestamp, optionally filtered by semantic query |
+| `intent` | Generate AGENTS.md from directory summaries |
+| `drift` | Detect stale intent nodes |
+| `status` | Index stats with optional cost breakdown |
+| `health` | Schema version, connection status, index freshness |
+| `check` | Run health policies |
+| `getImporters` | Find files that import a given file |
+| `getDependencies` | Find files imported by a given file |
+| `traceImportChain` | Trace transitive import paths between files |
+| `getCrossRepoEdges` | Cross-repo import relationships |
+| `findImplementors` | Find implementations of an interface/trait/protocol |
+| `findCallers` | Find callers of a function/method |
+| `reindexFiles` | Trigger reindex of specific files (rate-limited, max 50/call) |
+
+MCP results include `indexedAt` timestamp and `stale` boolean for trust decisions. Authentication via scoped tokens (`codeindex token create`).
+
 ## Other CLI commands
 
 ```bash
@@ -111,6 +166,15 @@ codeindex config                     # Show current config
 codeindex config --gamma 0.15        # Tune scoring parameters
 codeindex status                     # Index stats (file count, last indexed, etc.)
 codeindex status --cost              # Show token usage and cost breakdown
+codeindex xref <symbol>              # Cross-repo symbol resolution
+codeindex graph                      # Dependency DAG visualization
+codeindex check                      # Run health policies
+codeindex check --json               # Machine-readable health output
+codeindex manifest                   # Audit trail: indexed, skipped, flagged
+codeindex doctor                     # Verify environment and config
+codeindex mcp-config                 # Print MCP server config for editors
+codeindex telemetry                  # Usage telemetry management
+codeindex setup                      # Guided setup wizard
 ```
 
 ## Custom queries via code
@@ -126,6 +190,9 @@ directories    (id, repo_id, dir_path, concat_skeleton, concat_embedding, summar
 commits        (id, repo_id, commit_hash, message, embedding, authored_at)
 file_commits   (file_id, commit_id, recency)   -- recency 1 = most recent
 cost_events    (id, repo_id, operation, model, tokens_in, tokens_out, cost_usd, created_at)
+file_imports   (id, source_file_id, imported_module, resolved_file_id, language)
+cross_repo_edges (id, source_repo_id, target_repo_id, source_file_id, target_file_id, import_specifier)
+access_tokens  (id, name, token_hash, expires_at, revoked_at, created_at)
 ```
 
 `skeleton_entries` stores JSON array of `{ name, kind, startLine, endLine }` for AST-extracted code entities.
@@ -190,6 +257,12 @@ Tune via `codeindex config`:
 For agent or library use, import from `src/api.ts`:
 
 ```typescript
-import { search, searchFiles, loadConfig } from "./src/api";
+import { search, searchFiles, searchDirectories, searchCommits, loadConfig, getCostSummary, extractImports, resolveImport, discoverCrossRepoEdges, pgUnsafe, getSqlite } from "./src/api";
+
+// Semantic search
 const results = await search("/path/to/repo", "authentication middleware", { topN: 5, explain: true });
+
+// Import graph queries
+const imports = await extractImports("/path/to/file.ts", "typescript");
+const resolved = await resolveImport("./utils", "/path/to/file.ts", fileIndex);
 ```

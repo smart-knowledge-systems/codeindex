@@ -1,6 +1,6 @@
 # codeindex
 
-A semantic search engine for codebases. Uses embeddings, AST extraction, import graph analysis, and commit history to help developers and AI agents find relevant code faster than grep/ripgrep. Supports 14 languages, cross-repo intelligence, and MCP server mode for agent integration.
+A semantic search engine for codebases. Uses embeddings, AST extraction, import graph analysis, and commit history to help developers and AI agents find relevant code faster than grep/ripgrep. Supports 18 languages, cross-repo intelligence, re-ranking, and MCP server mode for agent integration.
 
 ## Prerequisites
 
@@ -21,6 +21,9 @@ bun src/index.ts init
 
 # Or with PostgreSQL (auto-detected if PGHOST or DATABASE_URL is set)
 PGHOST=localhost bun src/index.ts init
+
+# Or use the guided setup wizard (multi-repo scanning, store selection)
+bun src/index.ts setup
 ```
 
 Run `bun src/index.ts doctor` to verify your environment is configured correctly.
@@ -74,7 +77,7 @@ bun src/index.ts serve
 bun src/index.ts serve --transport sse --port 3100
 ```
 
-Exposes `search`, `intent`, `drift`, `status`, and `check` as MCP tools. Eliminates CLI startup overhead for agent workflows.
+Exposes 14 MCP tools including `search`, `batchSearch`, `searchChanged`, `intent`, `drift`, `status`, `health`, `check`, `getImporters`, `getDependencies`, `traceImportChain`, `getCrossRepoEdges`, `findImplementors`, `findCallers`, and `reindexFiles`. Authenticated via scoped tokens. Eliminates CLI startup overhead for agent workflows.
 
 ### Intent layer
 
@@ -98,6 +101,19 @@ bun src/index.ts repo list
 bun src/index.ts repo status my-repo
 bun src/index.ts repo remove my-repo
 bun src/index.ts repo purge my-repo --force
+```
+
+### Cross-repo intelligence
+
+Trace symbols and dependencies across repositories:
+
+```bash
+# Find all consumers of a symbol across repos
+bun src/index.ts xref UserDTO
+
+# Dependency graph (JSON, Mermaid, or DOT)
+bun src/index.ts graph --format mermaid
+bun src/index.ts graph --format dot | dot -Tsvg > deps.svg
 ```
 
 ### Health checks
@@ -141,6 +157,10 @@ bun src/index.ts config               # Show current config
 bun src/index.ts manifest             # Audit trail: indexed, skipped, flagged files
 bun src/index.ts install-hook         # Install post-commit hook for auto-indexing
 bun src/index.ts doctor               # Verify environment and configuration
+bun src/index.ts xref <symbol>           # Cross-repo symbol resolution
+bun src/index.ts graph                   # Dependency DAG visualization
+bun src/index.ts telemetry               # Usage telemetry management
+bun src/index.ts mcp-config              # Print MCP server config for editors
 ```
 
 ## How it works
@@ -160,9 +180,9 @@ bun src/index.ts doctor               # Verify environment and configuration
 
 All writes are wrapped in transactions. Schema migrations run automatically on `init`.
 
-### Supported languages (14)
+### Supported languages (18)
 
-TypeScript/JavaScript, Python, Rust, Go, Java, C, C++, C#, Kotlin, Swift, Ruby, PHP, Lua — with AST-based skeleton extraction, line-number tracking, and import graph indexing.
+TypeScript/JavaScript, Python, Rust, Go, Java, C, C++, C#, Kotlin, Swift, Ruby, PHP, Lua, Scala, Zig, Elixir — with AST-based skeleton extraction, line-number tracking, and import graph indexing.
 
 ### Search scoring
 
@@ -190,6 +210,7 @@ Results include files, directories, and commits. Per-language scoring profiles a
 |----------|-------|------|-------|
 | **OpenAI** (default) | `text-embedding-3-small` | ~$0.02/1K files | `OPENAI_API_KEY` env var |
 | **Ollama** (local) | `nomic-embed-text` | Free | `ollama pull nomic-embed-text` |
+| **Anthropic** | `voyage-3-lite` | ~$0.02/1K files | `ANTHROPIC_API_KEY` env var |
 
 ## Ignore patterns
 
@@ -233,4 +254,4 @@ bun test                 # Run tests
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full product backlog. M0-M4 are complete. Next up: **M5 — Architecture Intelligence** (authenticated MCP tools, cross-repo xref/graph commands, session-aware caching, full RLS, prose search improvements, Scala).
+See [ROADMAP.md](ROADMAP.md) for the historic product backlog (M0-M6, substantially complete). See [WHATS_NEXT.md](WHATS_NEXT.md) for remaining work identified by the dialogue team audit.
