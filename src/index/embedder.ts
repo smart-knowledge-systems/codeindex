@@ -10,36 +10,37 @@ function sanitize(text: string): string {
   return text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
 }
 
-let _provider: EmbeddingProvider | null = null;
-let _providerKey: string | null = null;
+const _providers = new Map<string, EmbeddingProvider>();
+const DEFAULT_KEY = "openai:text-embedding-3-small:1536:";
 
 /** Get or create the configured embedding provider. */
 export function getProvider(config?: CodeindexConfig): EmbeddingProvider {
   if (!config) {
-    if (_provider) return _provider;
-    _provider = new OpenAIEmbeddingProvider();
-    _providerKey = "openai:text-embedding-3-small:1536";
-    return _provider;
+    const cached = _providers.get(DEFAULT_KEY);
+    if (cached) return cached;
+    const p = new OpenAIEmbeddingProvider();
+    _providers.set(DEFAULT_KEY, p);
+    return p;
   }
 
   const { provider, model, dimensions, ollamaUrl } = config.embedding;
   const key = `${provider}:${model}:${dimensions}:${ollamaUrl ?? ""}`;
 
-  if (_provider && _providerKey === key) return _provider;
+  const cached = _providers.get(key);
+  if (cached) return cached;
 
-  if (provider === "ollama") {
-    _provider = new OllamaEmbeddingProvider(model, dimensions, ollamaUrl);
-  } else {
-    _provider = new OpenAIEmbeddingProvider(model, dimensions);
-  }
-  _providerKey = key;
+  const p =
+    provider === "ollama"
+      ? new OllamaEmbeddingProvider(model, dimensions, ollamaUrl)
+      : new OpenAIEmbeddingProvider(model, dimensions);
+  _providers.set(key, p);
 
-  return _provider;
+  return p;
 }
 
-/** Reset the cached provider (useful when config changes). */
+/** Reset all cached providers. */
 export function resetProvider(): void {
-  _provider = null;
+  _providers.clear();
 }
 
 export async function embed(
