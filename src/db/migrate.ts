@@ -145,6 +145,24 @@ async function applyPgMigrations(): Promise<number[]> {
     }
   }
 
+  // Backfill checksums for pre-v7 migrations on PG
+  const finalVersion = await getPgVersion();
+  if (finalVersion >= 7) {
+    for (const m of migrations) {
+      if (m.version < 7) {
+        try {
+          await pg.unsafe(
+            `UPDATE schema_version SET checksum = $1, filename = $2
+             WHERE version = $3 AND checksum IS NULL`,
+            [sha256(m.sql), m.filename, m.version],
+          );
+        } catch {
+          /* column may not exist on very old schemas */
+        }
+      }
+    }
+  }
+
   return applied;
 }
 
