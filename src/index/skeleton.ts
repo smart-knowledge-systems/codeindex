@@ -1388,7 +1388,10 @@ function skeletonSwift(filename: string, root: Node): string {
         break;
       }
       case "init_declaration": {
-        lines.push(`${indent}+ init()`);
+        const paramStr = extractSwiftParams(
+          node.namedChildren.find((c) => c.type === "parameter_clause") ?? null,
+        );
+        lines.push(`${indent}+ init(${paramStr})`);
         break;
       }
     }
