@@ -897,25 +897,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
+      const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
-        const rows = await pgUnsafe(
-          `SELECT sr.name AS source_repo, tr.name AS target_repo,
-                  sf.file_path AS source_file, tf.file_path AS target_file,
-                  e.import_specifier
-           FROM cross_repo_edges e
-           JOIN repos sr ON sr.id = e.source_repo_id
-           JOIN repos tr ON tr.id = e.target_repo_id
-           JOIN files sf ON sf.id = e.source_file_id
-           JOIN files tf ON tf.id = e.target_file_id
-           ORDER BY sr.name, tr.name`,
-        );
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
-      } else {
-        const db = await getSqlite(repoRoot);
-        const rows = db
-          .prepare(
-            `SELECT sr.name AS source_repo, tr.name AS target_repo,
+        const query = scopedRepoIds
+          ? `SELECT sr.name AS source_repo, tr.name AS target_repo,
                     sf.file_path AS source_file, tf.file_path AS target_file,
                     e.import_specifier
              FROM cross_repo_edges e
@@ -923,10 +909,55 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              JOIN repos tr ON tr.id = e.target_repo_id
              JOIN files sf ON sf.id = e.source_file_id
              JOIN files tf ON tf.id = e.target_file_id
-             ORDER BY sr.name, tr.name`,
-          )
-          .all();
+             WHERE e.source_repo_id = ANY($1::int[]) AND e.target_repo_id = ANY($1::int[])
+             ORDER BY sr.name, tr.name`
+          : `SELECT sr.name AS source_repo, tr.name AS target_repo,
+                    sf.file_path AS source_file, tf.file_path AS target_file,
+                    e.import_specifier
+             FROM cross_repo_edges e
+             JOIN repos sr ON sr.id = e.source_repo_id
+             JOIN repos tr ON tr.id = e.target_repo_id
+             JOIN files sf ON sf.id = e.source_file_id
+             JOIN files tf ON tf.id = e.target_file_id
+             ORDER BY sr.name, tr.name`;
+        const params = scopedRepoIds ? [scopedRepoIds] : [];
+        const rows = await pgUnsafe(query, params);
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      } else {
+        const db = await getSqlite(repoRoot);
+        if (scopedRepoIds && scopedRepoIds.length > 0) {
+          const placeholders = scopedRepoIds.map(() => "?").join(",");
+          const rows = db
+            .prepare(
+              `SELECT sr.name AS source_repo, tr.name AS target_repo,
+                      sf.file_path AS source_file, tf.file_path AS target_file,
+                      e.import_specifier
+               FROM cross_repo_edges e
+               JOIN repos sr ON sr.id = e.source_repo_id
+               JOIN repos tr ON tr.id = e.target_repo_id
+               JOIN files sf ON sf.id = e.source_file_id
+               JOIN files tf ON tf.id = e.target_file_id
+               WHERE e.source_repo_id IN (${placeholders}) AND e.target_repo_id IN (${placeholders})
+               ORDER BY sr.name, tr.name`,
+            )
+            .all(...scopedRepoIds, ...scopedRepoIds);
+          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        } else {
+          const rows = db
+            .prepare(
+              `SELECT sr.name AS source_repo, tr.name AS target_repo,
+                      sf.file_path AS source_file, tf.file_path AS target_file,
+                      e.import_specifier
+               FROM cross_repo_edges e
+               JOIN repos sr ON sr.id = e.source_repo_id
+               JOIN repos tr ON tr.id = e.target_repo_id
+               JOIN files sf ON sf.id = e.source_file_id
+               JOIN files tf ON tf.id = e.target_file_id
+               ORDER BY sr.name, tr.name`,
+            )
+            .all();
+          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        }
       }
     },
   );
