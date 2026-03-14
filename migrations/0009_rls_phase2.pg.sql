@@ -22,4 +22,3 @@ ALTER TABLE file_commits FORCE ROW LEVEL SECURITY;
 ALTER TABLE file_imports FORCE ROW LEVEL SECURITY;
 ALTER TABLE cross_repo_edges FORCE ROW LEVEL SECURITY;
 
-INSERT INTO schema_version (version, checksum, filename) VALUES (9, '', '0009_rls_phase2.pg.sql');

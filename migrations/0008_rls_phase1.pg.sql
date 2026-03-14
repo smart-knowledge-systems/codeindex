@@ -32,4 +32,3 @@ ALTER TABLE cost_events FORCE ROW LEVEL SECURITY;
 -- Grant bypass to admin
 ALTER ROLE codeindex_admin BYPASSRLS;
 
-INSERT INTO schema_version (version, checksum, filename) VALUES (8, '', '0008_rls_phase1.pg.sql');
