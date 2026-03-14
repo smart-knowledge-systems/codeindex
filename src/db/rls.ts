@@ -24,10 +24,7 @@ export async function clearRepoScope(): Promise<void> {
  * Run a function within a transaction with RLS scope set.
  * The scope is automatically cleared when the transaction ends.
  */
-export async function withRepoScope<T>(
-  repoIds: number[],
-  fn: () => Promise<T>,
-): Promise<T> {
+export async function withRepoScope<T>(repoIds: number[], fn: () => Promise<T>): Promise<T> {
   if (process.env.CODEINDEX_RLS_DISABLED === "1") return fn();
   const pg = await getPg();
   const arrayStr = `{${repoIds.join(",")}}`;

@@ -1380,11 +1380,17 @@ function skeletonSwift(filename: string, root: Node): string {
         break;
       }
       case "typealias_declaration": {
-        const nameNode = node.childForFieldName("name") ?? firstChildOfType(node, "type_identifier");
+        const nameNode =
+          node.childForFieldName("name") ?? firstChildOfType(node, "type_identifier");
         const name = nameNode?.text ?? "(anonymous)";
         // Find the value type — skip the name node itself
         const valueNode = node.namedChildren.find(
-          (c) => c !== nameNode && (c.type === "type_identifier" || c.type === "user_type" || c.type === "array_type" || c.type === "tuple_type"),
+          (c) =>
+            c !== nameNode &&
+            (c.type === "type_identifier" ||
+              c.type === "user_type" ||
+              c.type === "array_type" ||
+              c.type === "tuple_type"),
         );
         const valueStr = valueNode ? ` = ${valueNode.text}` : "";
         lines.push(`${indent}typealias ${name}${valueStr}`);
@@ -1595,7 +1601,9 @@ function skeletonPhp(filename: string, root: Node): string {
       case "enum_declaration": {
         const name = node.childForFieldName("name");
         lines.push(`${indent}enum ${name?.text ?? "(anonymous)"}`);
-        const body = node.childForFieldName("body") ?? firstChildOfType(node, "enum_declaration_list", "declaration_list");
+        const body =
+          node.childForFieldName("body") ??
+          firstChildOfType(node, "enum_declaration_list", "declaration_list");
         if (body) {
           for (const member of body.namedChildren) processNode(member, indent + "  ");
         }
@@ -1931,9 +1939,8 @@ function collectEntries(root: Node): SkeletonEntry[] {
         return;
       }
 
-      // TS type alias
+      // TS type alias / Swift typealias
       case "type_alias_declaration":
-      // Swift typealias
       case "typealias_declaration": {
         const name =
           node.childForFieldName("name")?.text ??
@@ -2082,8 +2089,7 @@ function collectEntries(root: Node): SkeletonEntry[] {
         }
         // Scala: has "name" field
         const typeName =
-          node.childForFieldName("name")?.text ??
-          firstChildOfType(node, "type_identifier")?.text;
+          node.childForFieldName("name")?.text ?? firstChildOfType(node, "type_identifier")?.text;
         if (typeName) {
           entries.push({ name: typeName, kind: "type", startLine, endLine });
         }

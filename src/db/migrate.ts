@@ -272,10 +272,7 @@ export async function verifyMigrationChecksums(
  * These can't be in SQL migration files because they require the sqlite-vec
  * extension to be loaded first (which happens in getSqlite).
  */
-export async function ensureSqliteVecTables(
-  repoRoot?: string,
-  dimensions = 1536,
-): Promise<void> {
+export async function ensureSqliteVecTables(repoRoot?: string, dimensions = 1536): Promise<void> {
   const db = await getSqlite(repoRoot);
 
   db.exec(`
@@ -320,9 +317,7 @@ export async function checkEmbeddingDimensions(
     // sqlite-vec stores dimension info in the virtual table schema
     // We can probe by trying to query with a known dimension vector
     const rows = db
-      .prepare(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'file_embeddings'",
-      )
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'file_embeddings'")
       .all() as { sql: string | null }[];
 
     if (rows.length === 0 || !rows[0].sql) return null;
