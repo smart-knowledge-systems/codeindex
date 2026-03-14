@@ -14,3 +14,5 @@ CREATE TABLE IF NOT EXISTS token_repo_access (
   repo_id       INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
   PRIMARY KEY (token_id, repo_id)
 );
+
+INSERT INTO schema_version (version) VALUES (5);
