@@ -15,6 +15,32 @@ interface MigrationFile {
 }
 
 /**
+ * Strip a trailing SQL inline comment (`-- ...`) from a line, but only if the
+ * `--` is not inside a string literal.  Walks the line character-by-character
+ * toggling an in-string flag on unescaped single quotes.
+ */
+function stripInlineComment(line: string): string {
+  let inString = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "'" && !inString) {
+      inString = true;
+    } else if (ch === "'" && inString) {
+      // Two consecutive quotes ('') are an escaped quote inside a literal
+      if (i + 1 < line.length && line[i + 1] === "'") {
+        i++; // skip the escaped quote
+      } else {
+        inString = false;
+      }
+    } else if (!inString && ch === "-" && i + 1 < line.length && line[i + 1] === "-") {
+      // Found an unquoted `--` — trim from here
+      return line.slice(0, i).trimEnd();
+    }
+  }
+  return line;
+}
+
+/**
  * Split SQL into statements, preserving dollar-quoted blocks (DO $$ ... $$;).
  * Strips comment-only lines and empty statements.
  */
@@ -44,8 +70,9 @@ function splitPgStatements(sql: string): string[] {
     const inDollarQuote = dollarTag !== null;
 
     // Only split on ; when not inside a dollar-quoted block
-    // Strip trailing inline comments before checking for statement terminator
-    const effectiveLine = !inDollarQuote ? line.replace(/\s*--.*$/, "") : line;
+    // Strip trailing inline comments before checking for statement terminator,
+    // but skip lines where '--' appears inside a string literal
+    const effectiveLine = !inDollarQuote ? stripInlineComment(line) : line;
     if (!inDollarQuote && effectiveLine.trimEnd().endsWith(";")) {
       const stmt = current
         .replace(/\s*--[^\n]*$/, "")
