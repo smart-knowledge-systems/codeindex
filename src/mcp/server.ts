@@ -46,6 +46,14 @@ function checkReindexRateLimit(repoRoot: string, session?: AuthSession): boolean
   }
   if (log.length >= REINDEX_RATE_LIMIT) return false;
   log.push(now);
+
+  // Periodically evict empty entries to prevent unbounded map growth
+  if (reindexCallLogs.size > 100) {
+    for (const [k, v] of reindexCallLogs) {
+      if (v.length === 0) reindexCallLogs.delete(k);
+    }
+  }
+
   return true;
 }
 
@@ -1193,13 +1201,15 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              JOIN repos r ON r.id = sf.repo_id
              WHERE fi.imported_module LIKE $1
                AND r.id = ANY($2::int[])
-             ORDER BY r.name, sf.file_path`
+             ORDER BY r.name, sf.file_path
+             LIMIT 100`
           : `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              JOIN repos r ON r.id = sf.repo_id
              WHERE fi.imported_module LIKE $1
-             ORDER BY r.name, sf.file_path`;
+             ORDER BY r.name, sf.file_path
+             LIMIT 100`;
         const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
         const rows = await pgUnsafe(query, params);
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
@@ -1215,7 +1225,8 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                JOIN repos r ON r.id = sf.repo_id
                WHERE fi.imported_module LIKE ?
                  AND r.id IN (${placeholders})
-               ORDER BY r.name, sf.file_path`,
+               ORDER BY r.name, sf.file_path
+               LIMIT 100`,
             )
             .all(pattern, ...scopedRepoIds);
           return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
@@ -1227,7 +1238,8 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                JOIN files sf ON sf.id = fi.source_file_id
                JOIN repos r ON r.id = sf.repo_id
                WHERE fi.imported_module LIKE ?
-               ORDER BY r.name, sf.file_path`,
+               ORDER BY r.name, sf.file_path
+               LIMIT 100`,
             )
             .all(pattern);
           return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
