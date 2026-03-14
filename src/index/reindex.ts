@@ -148,7 +148,20 @@ export async function reindexSingleFile(
       // Refresh file_imports for this file
       await tx.unsafe("DELETE FROM file_imports WHERE source_file_id = $1", [fileId]);
       if (importEdges.length > 0) {
-        const idx = fileIndex ?? (await loadFileIndex(repoRoot, repoId));
+        // Use pre-built index or load via the pinned transaction (not the pool)
+        let idx: FileIndex;
+        if (fileIndex) {
+          idx = fileIndex;
+        } else {
+          const allFileRows = (await tx.unsafe(
+            "SELECT id, file_path FROM files WHERE repo_id = $1",
+            [repoId],
+          )) as { id: number; file_path: string }[];
+          idx = {
+            allFiles: new Set(allFileRows.map((r) => r.file_path)),
+            fileIdMap: new Map(allFileRows.map((r) => [r.file_path, r.id])),
+          };
+        }
 
         for (const edge of importEdges) {
           const resolved = resolveImport(edge.importedModule, relPath, edge.language, idx.allFiles);
