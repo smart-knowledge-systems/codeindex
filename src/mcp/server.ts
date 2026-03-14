@@ -17,6 +17,7 @@ import { CodeindexError, formatError } from "../errors";
 import { validateRepoScope, type AuthSession } from "./auth";
 import { recordEvent } from "../telemetry";
 import { EmbeddingCache } from "./cache";
+import { reindexSingleFile } from "../index/reindex";
 
 // ---------------------------------------------------------------------------
 // Status helper (shared with CLI but returns structured data)
@@ -651,6 +652,167 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
               ),
             },
           ],
+        };
+      }
+    },
+  );
+
+  // --- reindexFiles tool ---
+
+  // Rate limiter: 5 calls/min
+  const reindexCallLog: number[] = [];
+  const REINDEX_RATE_LIMIT = 5;
+  const REINDEX_RATE_WINDOW_MS = 60_000;
+
+  mcp.tool(
+    "reindexFiles",
+    "Re-index specific files. Extracts skeleton, embeds, and upserts into the index. Rate limited to 5 calls/min.",
+    {
+      paths: z
+        .array(z.string())
+        .min(1)
+        .max(50)
+        .describe("Relative file paths to re-index (max 50)"),
+    },
+    async ({ paths }) => {
+      try {
+        recordEvent({
+          event: "mcp_tool",
+          timestamp: new Date().toISOString(),
+          tool: "reindexFiles",
+        });
+
+        // Rate limit check
+        const now = Date.now();
+        const recentCalls = reindexCallLog.filter((t) => now - t < REINDEX_RATE_WINDOW_MS);
+        if (recentCalls.length >= REINDEX_RATE_LIMIT) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({
+                  error: "Rate limit exceeded: max 5 reindexFiles calls per minute",
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+        reindexCallLog.push(now);
+        // Trim old entries
+        while (reindexCallLog.length > 0 && now - reindexCallLog[0] > REINDEX_RATE_WINDOW_MS) {
+          reindexCallLog.shift();
+        }
+
+        // Path traversal validation
+        const repoRoot = defaultRepoRoot;
+        for (const p of paths) {
+          if (p.includes("..") || path.isAbsolute(p)) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({
+                    error: `Invalid path: ${p} — paths must be relative and cannot contain '..'`,
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+          // Verify resolved path is within repo root
+          const resolved = path.resolve(repoRoot, p);
+          if (!resolved.startsWith(repoRoot + "/") && resolved !== repoRoot) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({
+                    error: `Path traversal detected: ${p} resolves outside repo root`,
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+
+        // Get repo ID
+        const config = await loadConfig(repoRoot);
+        let repoId: number;
+        if (config.store === "pg") {
+          const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
+          if (repos.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({ error: "Repository not indexed yet" }),
+                },
+              ],
+              isError: true,
+            };
+          }
+          repoId = repos[0].id as number;
+        } else {
+          const db = await getSqlite(repoRoot);
+          const repos = db.prepare("SELECT id FROM repos WHERE root_path = ?").all(repoRoot) as {
+            id: number;
+          }[];
+          if (repos.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({ error: "Repository not indexed yet" }),
+                },
+              ],
+              isError: true,
+            };
+          }
+          repoId = repos[0].id;
+        }
+
+        const results: { path: string; indexed: boolean; error?: string }[] = [];
+        for (const p of paths) {
+          try {
+            const indexed = await reindexSingleFile(repoRoot, repoId, p);
+            results.push({ path: p, indexed });
+          } catch (err) {
+            results.push({ path: p, indexed: false, error: formatError(err) });
+          }
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  indexed: results.filter((r) => r.indexed).length,
+                  skipped: results.filter((r) => !r.indexed && !r.error).length,
+                  errors: results.filter((r) => r.error).length,
+                  details: results,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = formatError(err);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                error: message,
+                code: err instanceof CodeindexError ? err.code : undefined,
+              }),
+            },
+          ],
+          isError: true,
         };
       }
     },
