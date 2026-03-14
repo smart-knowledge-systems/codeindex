@@ -1629,7 +1629,14 @@ async function main() {
               console.error("Usage: codeindex token create --name <name> --repos <id1,id2,...>");
               process.exit(1);
             }
-            const repoIds = repos.split(",").map((s) => parseInt(s.trim()));
+            const repoIds = repos
+              .split(",")
+              .map((s) => parseInt(s.trim(), 10))
+              .filter((id) => !isNaN(id));
+            if (repoIds.length === 0) {
+              console.error("Error: --repos must be a comma-separated list of numeric IDs");
+              process.exit(1);
+            }
             const expiresAt = flag(parsed, "expires");
             const plaintext = await createToken(repoRoot, name, repoIds, expiresAt);
             console.log(`Token created: ${plaintext}`);
