@@ -352,7 +352,11 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
     for (const f of filesToEmbed) {
       console.log(`  ${f.filePath} (${f.fileType})`);
     }
-    const projected = getProjectedCost(filesToEmbed.length, filesToEmbed.length * 3);
+    const projected = getProjectedCost(
+      filesToEmbed.length,
+      filesToEmbed.length * 3,
+      config.embedding.model,
+    );
     console.log(`\nProjected cost:`);
     console.log(`  Embeddings: $${projected.embeddingCost.toFixed(4)}`);
     console.log(`  Summaries:  $${projected.summaryCost.toFixed(4)}`);

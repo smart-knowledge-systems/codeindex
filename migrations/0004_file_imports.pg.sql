@@ -10,5 +10,3 @@ CREATE TABLE IF NOT EXISTS file_imports (
 
 CREATE INDEX IF NOT EXISTS idx_file_imports_source ON file_imports(source_file_id);
 CREATE INDEX IF NOT EXISTS idx_file_imports_resolved ON file_imports(resolved_file_id);
-
-INSERT INTO schema_version (version) VALUES (4);
