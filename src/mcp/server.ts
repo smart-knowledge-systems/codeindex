@@ -334,6 +334,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
         if (uncached.length > 0) {
           const embeddings = await embed(uncached);
+          if (embeddings.length < uncached.length) {
+            console.warn(
+              `batchSearch: embed() returned ${embeddings.length} embeddings for ${uncached.length} queries`,
+            );
+          }
           for (let i = 0; i < uncached.length && i < embeddings.length; i++) {
             embeddingCache.set(uncached[i], embeddings[i]);
           }
