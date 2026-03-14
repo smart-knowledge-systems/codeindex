@@ -142,11 +142,7 @@ async function xrefPg(symbol: string, matches: XrefMatch[]): Promise<void> {
 // SQLite xref
 // ---------------------------------------------------------------------------
 
-async function xrefSqlite(
-  repoRoot: string,
-  symbol: string,
-  matches: XrefMatch[],
-): Promise<void> {
+async function xrefSqlite(repoRoot: string, symbol: string, matches: XrefMatch[]): Promise<void> {
   const db = await getSqlite(repoRoot);
 
   // 1. Search skeletons for symbol using BM25
@@ -277,7 +273,9 @@ export function formatXrefTable(result: XrefResult): string {
     }
   }
 
-  lines.push(`\nTotal: ${result.matches.length} references across ${Object.keys(result.byRepo).length} repo(s)`);
+  lines.push(
+    `\nTotal: ${result.matches.length} references across ${Object.keys(result.byRepo).length} repo(s)`,
+  );
   return lines.join("\n");
 }
 
