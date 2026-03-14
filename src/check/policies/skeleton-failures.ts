@@ -19,6 +19,11 @@ const SUPPORTED_EXTENSIONS = [
   ".hpp",
   ".hxx",
   ".cs",
+  ".kt",
+  ".kts",
+  ".swift",
+  ".rb",
+  ".php",
 ];
 
 async function getCounts(ctx: PolicyContext): Promise<{ missing: number; total: number }> {
