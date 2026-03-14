@@ -88,6 +88,11 @@ export async function generateSummariesBatch(
         tokensIn: msg.usage.input_tokens,
         tokensOut: msg.usage.output_tokens,
       });
+    } else {
+      console.error(
+        `Batch item ${result.custom_id} failed: ${result.result.type}`,
+        result.result.type === "errored" ? result.result.error : undefined,
+      );
     }
   }
 
