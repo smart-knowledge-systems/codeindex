@@ -841,7 +841,7 @@ async function resolveRepoIds(
   config: Awaited<ReturnType<typeof loadConfig>>,
 ): Promise<{ repoIds: number[]; currentRepoId: number }> {
   if (config.store === "pg") {
-    const repos = (await pgUnsafe(`SELECT id, root_path FROM repos`)) as PgRepoRow[];
+    const repos = (await pgUnsafe(`SELECT id, root_path, name FROM repos`)) as PgRepoRow[];
 
     const currentRepo = repos.find((r) => r.root_path === repoRoot);
     const currentRepoId = currentRepo ? parseInt(currentRepo.id) : -1;
@@ -850,14 +850,14 @@ async function resolveRepoIds(
       return { repoIds: repos.map((r) => parseInt(r.id)), currentRepoId };
     }
     if (Array.isArray(scope)) {
-      const filtered = repos.filter((r) => scope.includes(r.root_path)).map((r) => parseInt(r.id));
+      const filtered = repos.filter((r) => scope.includes(r.name)).map((r) => parseInt(r.id));
       return { repoIds: filtered.length > 0 ? filtered : [currentRepoId], currentRepoId };
     }
     // "project" or undefined
     return { repoIds: currentRepoId !== -1 ? [currentRepoId] : [], currentRepoId };
   } else {
     const db = await getSqlite(repoRoot);
-    const repos = db.prepare(`SELECT id, root_path FROM repos`).all() as SqliteRepoRow[];
+    const repos = db.prepare(`SELECT id, root_path, name FROM repos`).all() as SqliteRepoRow[];
 
     const currentRepo = repos.find((r) => r.root_path === repoRoot);
     const currentRepoId = currentRepo ? currentRepo.id : -1;
@@ -866,7 +866,7 @@ async function resolveRepoIds(
       return { repoIds: repos.map((r) => r.id), currentRepoId };
     }
     if (Array.isArray(scope)) {
-      const filtered = repos.filter((r) => scope.includes(r.root_path)).map((r) => r.id);
+      const filtered = repos.filter((r) => scope.includes(r.name)).map((r) => r.id);
       return { repoIds: filtered.length > 0 ? filtered : [currentRepoId], currentRepoId };
     }
     return { repoIds: currentRepoId !== -1 ? [currentRepoId] : [], currentRepoId };
