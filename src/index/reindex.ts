@@ -26,7 +26,15 @@ export async function reindexSingleFile(
   if (!(await file.exists())) {
     // File was deleted — remove from index
     if (config.store === "pg") {
-      await pgUnsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [repoId, relPath]);
+      const rows = (await pgUnsafe("SELECT id FROM files WHERE repo_id = $1 AND file_path = $2", [
+        repoId,
+        relPath,
+      ])) as { id: number }[];
+      if (rows.length > 0) {
+        await pgUnsafe("DELETE FROM file_commits WHERE file_id = $1", [rows[0].id]);
+        await pgUnsafe("DELETE FROM file_imports WHERE source_file_id = $1", [rows[0].id]);
+        await pgUnsafe("DELETE FROM files WHERE id = $1", [rows[0].id]);
+      }
     } else {
       const db = await getSqlite(repoRoot);
       const rows = db
