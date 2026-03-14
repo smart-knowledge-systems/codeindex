@@ -38,6 +38,15 @@ export function extractImports(filePath: string, content: string): ImportEdge[] 
   }
 }
 
+function deduplicateEdges(edges: ImportEdge[]): ImportEdge[] {
+  const seen = new Set<string>();
+  return edges.filter((e) => {
+    if (seen.has(e.importedModule)) return false;
+    seen.add(e.importedModule);
+    return true;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // TypeScript / JavaScript
 // ---------------------------------------------------------------------------
@@ -68,15 +77,7 @@ function extractTsImports(content: string): ImportEdge[] {
       edges.push({ importedModule: match[1], language: "typescript" });
     }
   }
-  // Deduplicate by importedModule — multiple import lines from the same package
-  // (e.g. `import { A } from 'lib'` and `import { B } from 'lib'`) must produce
-  // a single edge to avoid UNIQUE constraint failures in cross-repo discovery.
-  const seen = new Set<string>();
-  return edges.filter((e) => {
-    if (seen.has(e.importedModule)) return false;
-    seen.add(e.importedModule);
-    return true;
-  });
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ function extractPythonImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(fromRe)) {
     edges.push({ importedModule: match[1], language: "python" });
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +185,7 @@ function extractRubyImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(relativeRe)) {
     edges.push({ importedModule: match[1], language: "ruby" });
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +204,7 @@ function extractPhpImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(reqRe)) {
     edges.push({ importedModule: match[1], language: "php" });
   }
-  return edges;
+  return deduplicateEdges(edges);
 }
 
 // ---------------------------------------------------------------------------
