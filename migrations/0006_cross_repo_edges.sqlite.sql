@@ -15,5 +15,3 @@ CREATE INDEX IF NOT EXISTS idx_cross_repo_edges_source ON cross_repo_edges(sourc
 CREATE INDEX IF NOT EXISTS idx_cross_repo_edges_target ON cross_repo_edges(target_repo_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cross_repo_edges_unique
   ON cross_repo_edges(source_file_id, imported_module);
-
-INSERT INTO schema_version (version) VALUES (6);
