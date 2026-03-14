@@ -72,46 +72,54 @@ async function discoverPg(edges: CrossRepoEdge[]): Promise<void> {
     filesByRepo.set(repoId, list);
   }
 
-  // Clear existing cross-repo edges
-  await pgUnsafe("DELETE FROM cross_repo_edges");
+  // Wrap DELETE + INSERT in a transaction for atomicity
+  await pgUnsafe("BEGIN");
+  try {
+    await pgUnsafe("DELETE FROM cross_repo_edges");
 
-  for (const imp of unresolved) {
-    const sourceRepoId = parseInt(imp.source_repo_id);
-    const match = tryResolveAcrossRepos(
-      imp.imported_module,
-      imp.language,
-      imp.source_file_path,
-      sourceRepoId,
-      filesByRepo,
-    );
-
-    if (match) {
-      const edge: CrossRepoEdge = {
+    for (const imp of unresolved) {
+      const sourceRepoId = parseInt(imp.source_repo_id);
+      const match = tryResolveAcrossRepos(
+        imp.imported_module,
+        imp.language,
+        imp.source_file_path,
         sourceRepoId,
-        targetRepoId: match.repoId,
-        sourceFileId: parseInt(imp.source_file_id),
-        importedModule: imp.imported_module,
-        targetFileId: match.fileId,
-        language: imp.language,
-      };
-      edges.push(edge);
-
-      await pgUnsafe(
-        `INSERT INTO cross_repo_edges (source_repo_id, target_repo_id, source_file_id, imported_module, target_file_id, language)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (source_file_id, imported_module) DO UPDATE SET
-           target_repo_id = EXCLUDED.target_repo_id,
-           target_file_id = EXCLUDED.target_file_id`,
-        [
-          edge.sourceRepoId,
-          edge.targetRepoId,
-          edge.sourceFileId,
-          edge.importedModule,
-          edge.targetFileId,
-          edge.language,
-        ],
+        filesByRepo,
       );
+
+      if (match) {
+        const edge: CrossRepoEdge = {
+          sourceRepoId,
+          targetRepoId: match.repoId,
+          sourceFileId: parseInt(imp.source_file_id),
+          importedModule: imp.imported_module,
+          targetFileId: match.fileId,
+          language: imp.language,
+        };
+        edges.push(edge);
+
+        await pgUnsafe(
+          `INSERT INTO cross_repo_edges (source_repo_id, target_repo_id, source_file_id, imported_module, target_file_id, language)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (source_file_id, imported_module) DO UPDATE SET
+             target_repo_id = EXCLUDED.target_repo_id,
+             target_file_id = EXCLUDED.target_file_id`,
+          [
+            edge.sourceRepoId,
+            edge.targetRepoId,
+            edge.sourceFileId,
+            edge.importedModule,
+            edge.targetFileId,
+            edge.language,
+          ],
+        );
+      }
     }
+
+    await pgUnsafe("COMMIT");
+  } catch (err) {
+    await pgUnsafe("ROLLBACK");
+    throw err;
   }
 }
 
@@ -148,42 +156,46 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
     filesByRepo.set(f.repo_id, list);
   }
 
-  db.prepare("DELETE FROM cross_repo_edges").run();
-
   const insert = db.prepare(
     `INSERT INTO cross_repo_edges (source_repo_id, target_repo_id, source_file_id, imported_module, target_file_id, language)
      VALUES (?, ?, ?, ?, ?, ?)`,
   );
 
-  for (const imp of unresolved) {
-    const match = tryResolveAcrossRepos(
-      imp.imported_module,
-      imp.language,
-      imp.source_file_path,
-      imp.source_repo_id,
-      filesByRepo,
-    );
+  // Wrap DELETE + INSERT in a transaction for atomicity
+  const replaceEdges = db.transaction(() => {
+    db.prepare("DELETE FROM cross_repo_edges").run();
 
-    if (match) {
-      const edge: CrossRepoEdge = {
-        sourceRepoId: imp.source_repo_id,
-        targetRepoId: match.repoId,
-        sourceFileId: imp.source_file_id,
-        importedModule: imp.imported_module,
-        targetFileId: match.fileId,
-        language: imp.language,
-      };
-      edges.push(edge);
-      insert.run(
-        edge.sourceRepoId,
-        edge.targetRepoId,
-        edge.sourceFileId,
-        edge.importedModule,
-        edge.targetFileId,
-        edge.language,
+    for (const imp of unresolved) {
+      const match = tryResolveAcrossRepos(
+        imp.imported_module,
+        imp.language,
+        imp.source_file_path,
+        imp.source_repo_id,
+        filesByRepo,
       );
+
+      if (match) {
+        const edge: CrossRepoEdge = {
+          sourceRepoId: imp.source_repo_id,
+          targetRepoId: match.repoId,
+          sourceFileId: imp.source_file_id,
+          importedModule: imp.imported_module,
+          targetFileId: match.fileId,
+          language: imp.language,
+        };
+        edges.push(edge);
+        insert.run(
+          edge.sourceRepoId,
+          edge.targetRepoId,
+          edge.sourceFileId,
+          edge.importedModule,
+          edge.targetFileId,
+          edge.language,
+        );
+      }
     }
-  }
+  });
+  replaceEdges();
 }
 
 /**
