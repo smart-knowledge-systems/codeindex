@@ -19,8 +19,9 @@ async function hasEmbeddings(ctx: PolicyContext): Promise<boolean> {
 }
 
 export const secretScanCoverage: HealthPolicy = {
-  name: "secret-scan-coverage",
-  description: "Verify that the secret scanner ran during the most recent reindex",
+  name: "reindex-completed",
+  description:
+    "Verify that the repo has been indexed (embedding events exist, implying secret scanning ran)",
   severity: "error",
 
   async check(ctx: PolicyContext): Promise<PolicyResult> {
@@ -38,7 +39,7 @@ export const secretScanCoverage: HealthPolicy = {
     // before embedding. If embeddings exist, secret scanning has run.
     return {
       passed: true,
-      message: "Secret scanning is active (runs before every embedding operation)",
+      message: "Reindex completed (secret scanning runs before every embedding operation)",
     };
   },
 };
