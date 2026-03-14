@@ -54,7 +54,9 @@ function splitPgStatements(sql: string): string[] {
     const trimmed = line.trimStart();
     if (!dollarTag && trimmed.startsWith("--")) continue;
 
-    current += (current ? "\n" : "") + line;
+    // Strip trailing inline comments (string-literal-aware) outside dollar-quoted blocks
+    const effectiveLine = !dollarTag ? stripInlineComment(line) : line;
+    current += (current ? "\n" : "") + effectiveLine;
 
     // Toggle dollar-quoting state (supports both $$ and tagged variants like $body$)
     const dollarRe = /\$([A-Za-z_]*)\$/g;
@@ -68,16 +70,8 @@ function splitPgStatements(sql: string): string[] {
       }
     }
     const inDollarQuote = dollarTag !== null;
-
-    // Only split on ; when not inside a dollar-quoted block
-    // Strip trailing inline comments before checking for statement terminator,
-    // but skip lines where '--' appears inside a string literal
-    const effectiveLine = !inDollarQuote ? stripInlineComment(line) : line;
     if (!inDollarQuote && effectiveLine.trimEnd().endsWith(";")) {
-      const stmt = current
-        .replace(/\s*--[^\n]*$/, "")
-        .replace(/;$/, "")
-        .trim();
+      const stmt = current.replace(/;$/, "").trim();
       if (stmt.length > 0) results.push(stmt);
       current = "";
     }
