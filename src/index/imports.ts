@@ -224,8 +224,8 @@ function extractLuaImports(content: string): ImportEdge[] {
   for (const match of content.matchAll(requireRe)) {
     edges.push({ importedModule: match[1], language: "lua" });
   }
-  // require with single-quoted string without parens: require 'module'
-  const requireNoParenRe = /require\s+["']([^"']+)["']/g;
+  // require without parens: require 'module' (negative lookahead excludes paren variant)
+  const requireNoParenRe = /require\s+(?!\()["']([^"']+)["']/g;
   for (const match of content.matchAll(requireNoParenRe)) {
     edges.push({ importedModule: match[1], language: "lua" });
   }

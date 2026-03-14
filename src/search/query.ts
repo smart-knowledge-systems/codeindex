@@ -1004,7 +1004,7 @@ export async function search(
   };
 
   // Expand query for local embedding providers to improve match quality
-  const effectiveQuery = provider !== "openai" ? expandQuery(query) : query;
+  const effectiveQuery = provider === "ollama" ? expandQuery(query) : query;
 
   let queryEmbedding: number[];
   const cached = options?.embeddingCache?.get(effectiveQuery);
@@ -1066,6 +1066,7 @@ export async function search(
       reranking: config.reranking,
     });
     results = [...reranked, ...results.slice(50)];
+    results.sort((a, b) => b.finalScore - a.finalScore);
   }
 
   const finalResults = resolvedOptions.topN > 0 ? results.slice(0, resolvedOptions.topN) : results;
