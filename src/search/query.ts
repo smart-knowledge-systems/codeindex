@@ -986,8 +986,8 @@ export async function search(
   const scoring: ScoringConfig = {
     ...config.scoring,
     ...providerOverrides,
-    results = [...reranked, ...results.slice(50)];
-    results.sort((a, b) => b.finalScore - a.finalScore);
+    ...(options?.scoringOverrides ?? {}),
+  };
 
   const resolvedOptions: Required<Omit<SearchOptions, "embeddingCache">> = {
     minScore: options?.minScore ?? scoring.minScore,
