@@ -1632,10 +1632,15 @@ async function main() {
               console.error("Usage: codeindex token create --name <name> --repos <id1,id2,...>");
               process.exit(1);
             }
-            const repoIds = repos
-              .split(",")
-              .map((s) => parseInt(s.trim(), 10))
-              .filter((id) => !isNaN(id));
+            const rawIds = repos.split(",").map((s) => s.trim());
+            const invalidIds = rawIds.filter((s) => isNaN(parseInt(s, 10)));
+            if (invalidIds.length > 0) {
+              console.error(
+                `Error: invalid repo IDs: ${invalidIds.join(", ")} — all IDs must be numeric`,
+              );
+              process.exit(1);
+            }
+            const repoIds = rawIds.map((s) => parseInt(s, 10));
             if (repoIds.length === 0) {
               console.error("Error: --repos must be a comma-separated list of numeric IDs");
               process.exit(1);
