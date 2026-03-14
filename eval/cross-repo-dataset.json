@@ -1,0 +1,202 @@
+[
+  {
+    "id": "xrepo-import-resolution",
+    "query": "import resolution across repositories",
+    "expectedFiles": ["src/index/imports.ts", "src/index/cross-repo.ts"],
+    "description": "Cross-repo import resolution and edge discovery",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-edge-discovery",
+    "query": "discover cross-repo dependency edges between repos",
+    "expectedFiles": ["src/index/cross-repo.ts"],
+    "description": "Cross-repo edge discovery algorithm",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-token-scoping",
+    "query": "token-based access control for cross-repo queries",
+    "expectedFiles": ["src/auth/tokens.ts", "src/search/query.ts"],
+    "description": "Token scoping restricts cross-repo visibility",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-graph-visualization",
+    "query": "visualize repository dependency graph mermaid",
+    "expectedFiles": ["src/index.ts"],
+    "description": "Graph command for cross-repo dependency visualization",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-multi-repo-search",
+    "query": "search across all registered repositories",
+    "expectedFiles": ["src/search/query.ts", "src/repo.ts"],
+    "description": "Multi-repo search with scope=all",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-repo-registration",
+    "query": "register and manage multiple repositories",
+    "expectedFiles": ["src/repo.ts"],
+    "description": "Repository registration and management",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-parallel-reindex",
+    "query": "parallel reindex across multiple repos with workers",
+    "expectedFiles": ["src/index/parallel.ts"],
+    "description": "Parallel reindex for multi-repo setups",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-shared-types",
+    "query": "shared type definitions used across search and index",
+    "expectedFiles": ["src/search/types.ts"],
+    "description": "Shared types that bridge indexing and search layers",
+    "tags": ["cross-repo", "cross-file"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-embedding-pipeline",
+    "query": "embedding generation pipeline for cross-repo files",
+    "expectedFiles": ["src/index/embedder.ts", "src/index/skeleton.ts"],
+    "description": "Embedding pipeline that processes files from any repo",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-database-schema",
+    "query": "database schema for multi-repo storage",
+    "expectedFiles": ["src/db/schema.ts"],
+    "description": "Schema supporting multi-repo data storage",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-mcp-server-auth",
+    "query": "MCP server authentication for multi-repo access",
+    "expectedFiles": ["src/mcp/server.ts", "src/mcp/auth.ts"],
+    "description": "MCP server with token-based auth for cross-repo queries",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-go-module-resolve",
+    "query": "Go module import path resolution",
+    "expectedFiles": ["src/index/imports.ts"],
+    "description": "Go import resolution via go.mod module path",
+    "tags": ["cross-repo", "language-specific"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-ruby-require-resolve",
+    "query": "Ruby require and require_relative file resolution",
+    "expectedFiles": ["src/index/imports.ts"],
+    "description": "Ruby import resolution for require and require_relative",
+    "tags": ["cross-repo", "language-specific"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-kotlin-package-resolve",
+    "query": "Kotlin Java package import to file resolution",
+    "expectedFiles": ["src/index/imports.ts"],
+    "description": "JVM import resolution with convention directories",
+    "tags": ["cross-repo", "language-specific"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-scoring-cross-boundary",
+    "query": "scoring and ranking results from different repos",
+    "expectedFiles": ["src/search/query.ts"],
+    "description": "Score normalization across repo boundaries",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-export-multi-repo",
+    "query": "export database with multi-repo data",
+    "expectedFiles": ["src/db/export.ts"],
+    "description": "Exporting index data spanning multiple repos",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-cross-repo-edges-table",
+    "query": "cross_repo_edges database table structure",
+    "expectedFiles": ["src/index/cross-repo.ts", "src/db/schema.ts"],
+    "description": "Cross-repo edges storage and schema",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-file-imports-table",
+    "query": "file_imports table for intra-repo import tracking",
+    "expectedFiles": ["src/index.ts", "src/index/imports.ts"],
+    "description": "File import edges within a repository",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-repo-purge",
+    "query": "purge repository and remove all associated data",
+    "expectedFiles": ["src/repo.ts"],
+    "description": "Repository purge including cross-repo edges cleanup",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-config-multi-repo",
+    "query": "configuration for multi-repository codeindex setup",
+    "expectedFiles": ["src/config.ts"],
+    "description": "Config handling for multi-repo deployments",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-health-check-policy",
+    "query": "health check policies for indexed repositories",
+    "expectedFiles": ["src/check/runner.ts"],
+    "description": "Health check policies validating repo index state",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-commit-cross-reference",
+    "query": "git commit indexing with cross-file references",
+    "expectedFiles": ["src/index/commits.ts"],
+    "description": "Commit indexing that enables cross-file linking",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-directory-summary-cross",
+    "query": "directory summaries spanning shared components",
+    "expectedFiles": ["src/index/directories.ts"],
+    "description": "Directory summarization for shared code directories",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-bm25-hybrid-search",
+    "query": "BM25 hybrid search across repository boundaries",
+    "expectedFiles": ["src/search/query.ts", "src/search/bm25.ts"],
+    "description": "Hybrid BM25+semantic search in cross-repo context",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  },
+  {
+    "id": "xrepo-secret-scan-cross-repo",
+    "query": "secret scanning across multiple repositories",
+    "expectedFiles": ["src/index/secrets.ts"],
+    "description": "Secret detection applied across all indexed repos",
+    "tags": ["cross-repo"],
+    "scope": "all"
+  }
+]
