@@ -5,7 +5,7 @@ import { parseArgs, flag, hasFlag, warnUnknownFlags, type ParsedArgs } from "./c
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
 import { getCurrentSchemaVersion, getLatestMigrationVersion } from "./db/migrate";
-import { pgUnsafe, closePg } from "./db/pg";
+import { getPg, pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
 import { walkRepo } from "./index/walker";
@@ -1458,6 +1458,120 @@ async function cmdDoctor(repoRoot: string) {
 }
 
 // ---------------------------------------------------------------------------
+// graph command
+// ---------------------------------------------------------------------------
+
+interface GraphNode {
+  name: string;
+  id: number;
+}
+
+interface GraphEdge {
+  source: number;
+  target: number;
+  count: number;
+}
+
+async function cmdGraph(repoRoot: string, format: string) {
+  const config = await loadConfig(repoRoot);
+
+  let rows: Array<{ source_repo_id: number; target_repo_id: number; cnt: number }>;
+  let repoNames: Map<number, string>;
+
+  if (config.store === "pg") {
+    const pg = await getPg();
+    const edgeRows = await pg`
+      SELECT source_repo_id, target_repo_id, COUNT(*) as cnt
+      FROM cross_repo_edges
+      GROUP BY source_repo_id, target_repo_id
+    `;
+    rows = edgeRows.map((r) => ({
+      source_repo_id: Number(r.source_repo_id),
+      target_repo_id: Number(r.target_repo_id),
+      cnt: Number(r.cnt),
+    }));
+
+    const repoRows = await pg`SELECT id, name FROM repos`;
+    repoNames = new Map(repoRows.map((r) => [Number(r.id), String(r.name)]));
+  } else {
+    const db = await getSqlite(repoRoot);
+    const edgeRows = db
+      .prepare(
+        `SELECT source_repo_id, target_repo_id, COUNT(*) as cnt
+         FROM cross_repo_edges
+         GROUP BY source_repo_id, target_repo_id`,
+      )
+      .all() as Array<{ source_repo_id: number; target_repo_id: number; cnt: number }>;
+    rows = edgeRows;
+
+    const repoRows = db.prepare(`SELECT id, name FROM repos`).all() as Array<{
+      id: number;
+      name: string;
+    }>;
+    repoNames = new Map(repoRows.map((r) => [r.id, r.name]));
+  }
+
+  if (rows.length === 0) {
+    console.log("No cross-repo edges found.");
+    return;
+  }
+
+  // Collect unique node IDs
+  const nodeIds = new Set<number>();
+  for (const r of rows) {
+    nodeIds.add(r.source_repo_id);
+    nodeIds.add(r.target_repo_id);
+  }
+
+  const nodes: GraphNode[] = [...nodeIds].map((id) => ({
+    name: repoNames.get(id) ?? `repo_${id}`,
+    id,
+  }));
+
+  const edges: GraphEdge[] = rows.map((r) => ({
+    source: r.source_repo_id,
+    target: r.target_repo_id,
+    count: r.cnt,
+  }));
+
+  switch (format) {
+    case "json":
+      console.log(JSON.stringify({ nodes, edges }, null, 2));
+      break;
+
+    case "dot": {
+      const dotLines = ["digraph cross_repo {"];
+      for (const n of nodes) {
+        dotLines.push(`  "${n.name}" [label="${n.name}"];`);
+      }
+      for (const e of edges) {
+        const src = repoNames.get(e.source) ?? `repo_${e.source}`;
+        const tgt = repoNames.get(e.target) ?? `repo_${e.target}`;
+        dotLines.push(`  "${src}" -> "${tgt}" [label="${e.count}"];`);
+      }
+      dotLines.push("}");
+      console.log(dotLines.join("\n"));
+      break;
+    }
+
+    case "mermaid":
+    default: {
+      const mermaidLines = ["graph TD"];
+      for (const e of edges) {
+        const src = repoNames.get(e.source) ?? `repo_${e.source}`;
+        const tgt = repoNames.get(e.target) ?? `repo_${e.target}`;
+        // Sanitize names for Mermaid (replace special chars)
+        const srcId = `r${e.source}`;
+        const tgtId = `r${e.target}`;
+        mermaidLines.push(`  ${srcId}["${src}"] -->|${e.count} edges| ${tgtId}["${tgt}"]`);
+      }
+      console.log(mermaidLines.join("\n"));
+      break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // mcp-config command
 // ---------------------------------------------------------------------------
 
@@ -1546,6 +1660,8 @@ Commands:
   mcp-config           Print MCP integration JSON config
     --transport <t>    stdio (default) or sse
     --port <n>         Port for SSE transport (default 3100)
+  graph                Visualize cross-repo dependency graph
+    --format <f>       json|mermaid|dot (default: mermaid)
   doctor               Check environment and configuration
 
 Options:
@@ -1575,6 +1691,8 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   repo: "Usage: codeindex repo <add|remove|list|status|purge>\n\nSubcommands:\n  add <path>            Register a repository\n  remove <name>         Unregister a repository\n  list                  List all registered repos\n  status [name]         Show repo status\n  purge <name> [--force] Remove repo and all its data",
   token:
     "Usage: codeindex token <create|list|revoke>\n\nSubcommands:\n  create --name <name> --repos <id,id> [--expires <ISO>]\n  list                  List all tokens\n  revoke --id <N>       Revoke a token",
+  graph:
+    "Usage: codeindex graph [options]\n\nOptions:\n  --format <f>          Output format: mermaid (default), json, dot",
   "mcp-config":
     "Usage: codeindex mcp-config [options]\n\nOptions:\n  --transport <t>       stdio (default) or sse\n  --port <n>            Port for SSE transport (default 3100)",
   config:
@@ -1964,6 +2082,12 @@ async function main() {
             console.error("Usage: codeindex repo <add|remove|list|status|purge>");
             process.exit(1);
         }
+        break;
+      }
+
+      case "graph": {
+        const graphFormat = flag(parsed, "format") ?? "mermaid";
+        await cmdGraph(repoRoot, graphFormat);
         break;
       }
 
