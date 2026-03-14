@@ -13,6 +13,18 @@ const PATTERNS: [string, RegExp][] = [
     /['"]?[a-zA-Z_]*(?:api[_-]?key|secret|token|password)['"]?\s*[:=]\s*['"]([^'"]{8,})['"]/i,
   ],
   ["Connection String", /(?:postgres|mysql|mongodb|redis):\/\/[^\s]+/],
+  ["Slack Bot Token", /xoxb-[0-9]{10,}-[0-9]{10,}-[A-Za-z0-9]{24,}/],
+  ["Slack User Token", /xoxp-[0-9]{10,}-[0-9]{10,}-[0-9]{10,}-[a-f0-9]{32}/],
+  ["Google API Key", /AIza[0-9A-Za-z_-]{35}/],
+  ["JWT Token", /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/],
+  ["Stripe Secret Key", /sk_live_[0-9a-zA-Z]{24,}/],
+  ["Stripe Publishable Key", /pk_live_[0-9a-zA-Z]{24,}/],
+  ["Twilio API Key", /SK[0-9a-fA-F]{32}/],
+  ["SendGrid API Key", /SG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{43,}/],
+  [
+    "Datadog API Key",
+    /(DD|dd|datadog)[_-]?(API|api)?[_-]?(KEY|key)\s*[:=]\s*['"]?[0-9a-f]{32}['"]?/,
+  ],
 ];
 
 const BASE64_HEX_RE = /^[A-Za-z0-9+/=\-_]+$/;
