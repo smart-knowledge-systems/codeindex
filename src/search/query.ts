@@ -640,22 +640,29 @@ async function searchSqlite(
     )
     .all(embBuf, knnLimit, ...dirFilterParams) as (SqliteDirRow & { concat_distance: number })[];
 
-  // Enrich with summary distances where available
-  const dirRows: SqliteDirRow[] = dirConcatRows.map((row) => {
-    let summaryDistance: number | null = null;
+  // Batch load summary distances for all directories in a single query
+  const summaryByDirId = new Map<number, number>();
+  if (dirConcatRows.length > 0) {
+    const dirIds = dirConcatRows.map((r) => r.id);
+    const dirPlaceholders = dirIds.map(() => "?").join(",");
     try {
-      const summaryRow = db
+      const summaryRows = db
         .prepare(
-          `SELECT vec_distance_cosine(embedding, ?) AS distance
-           FROM dir_summary_embeddings WHERE dir_id = ?`,
+          `SELECT dir_id, vec_distance_cosine(embedding, ?) AS distance
+           FROM dir_summary_embeddings WHERE dir_id IN (${dirPlaceholders})`,
         )
-        .get(embBuf, row.id) as { distance: number } | null;
-      if (summaryRow) summaryDistance = summaryRow.distance;
+        .all(embBuf, ...dirIds) as { dir_id: number; distance: number }[];
+      for (const row of summaryRows) {
+        summaryByDirId.set(row.dir_id, row.distance);
+      }
     } catch {
-      // No summary embedding for this directory
+      // No summary embeddings table or empty
     }
-    return { ...row, summary_distance: summaryDistance };
-  });
+  }
+  const dirRows: SqliteDirRow[] = dirConcatRows.map((row) => ({
+    ...row,
+    summary_distance: summaryByDirId.get(row.id) ?? null,
+  }));
 
   // --- Commits (KNN via vec0 MATCH) ---
   let commitFilterSql = "";
@@ -898,7 +905,9 @@ async function resolveRepoIds(
       return { repoIds: repos.map((r) => parseInt(r.id)), currentRepoId };
     }
     if (Array.isArray(scope)) {
-      const filtered = repos.filter((r) => scope.includes(r.name)).map((r) => parseInt(r.id));
+      const filtered = repos
+        .filter((r) => scope.includes(r.name) || scope.includes(r.root_path))
+        .map((r) => parseInt(r.id));
       return { repoIds: filtered.length > 0 ? filtered : [currentRepoId], currentRepoId };
     }
     // "project" or undefined
@@ -914,7 +923,9 @@ async function resolveRepoIds(
       return { repoIds: repos.map((r) => r.id), currentRepoId };
     }
     if (Array.isArray(scope)) {
-      const filtered = repos.filter((r) => scope.includes(r.name)).map((r) => r.id);
+      const filtered = repos
+        .filter((r) => scope.includes(r.name) || scope.includes(r.root_path))
+        .map((r) => r.id);
       return { repoIds: filtered.length > 0 ? filtered : [currentRepoId], currentRepoId };
     }
     return { repoIds: currentRepoId !== -1 ? [currentRepoId] : [], currentRepoId };
@@ -1001,12 +1012,12 @@ export async function search(
 
   // Post-processing: attach snippets if requested
   if (resolvedOptions.includeSnippet) {
-    await attachSnippets(repoRoot, config, finalResults, query);
+    await attachSnippets(repoRoot, config, finalResults, query, currentRepoId);
   }
 
   // Post-processing: annotate with cross-repo edges if multi-repo
   if (repoIds.length > 1) {
-    await attachCrossRepoEdges(repoRoot, config, finalResults);
+    await attachCrossRepoEdges(repoRoot, config, finalResults, currentRepoId);
   }
 
   return finalResults;
@@ -1021,6 +1032,7 @@ async function attachSnippets(
   config: Awaited<ReturnType<typeof loadConfig>>,
   results: SearchResult[],
   query: string,
+  currentRepoId: number,
 ): Promise<void> {
   const queryWords = new Set(
     query
@@ -1030,39 +1042,55 @@ async function attachSnippets(
   );
 
   // Batch load skeleton_entries for all file results in a single query
+  // Include all repo IDs from results (not just current repo) for multi-repo support
   const fileResults = results.filter((r) => r.type !== "dir" && r.type !== "commit");
   const filePaths = fileResults.map((r) => r.filePath);
+  const resultRepoIds = [
+    ...new Set(
+      fileResults
+        .map((r) => (r.repoId ? parseInt(r.repoId) : currentRepoId))
+        .filter((id) => !isNaN(id)),
+    ),
+  ];
+  // Key by repo_id:file_path to avoid collisions across repos with identical relative paths
   const entriesMap = new Map<string, string>();
 
   if (filePaths.length > 0) {
     if (config.store === "pg") {
       const rows = (await pgUnsafe(
-        `SELECT file_path, skeleton_entries FROM files
-         WHERE repo_id IN (SELECT id FROM repos WHERE root_path = $1)
+        `SELECT repo_id, file_path, skeleton_entries FROM files
+         WHERE repo_id = ANY($1)
          AND file_path = ANY($2)`,
-        [repoRoot, filePaths],
-      )) as { file_path: string; skeleton_entries: string | null }[];
+        [resultRepoIds, filePaths],
+      )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
       for (const row of rows) {
-        if (row.skeleton_entries) entriesMap.set(row.file_path, row.skeleton_entries);
+        if (row.skeleton_entries)
+          entriesMap.set(`${row.repo_id}:${row.file_path}`, row.skeleton_entries);
       }
     } else {
       const db = await getSqlite(repoRoot);
-      const placeholders = filePaths.map(() => "?").join(",");
+      const pathPlaceholders = filePaths.map(() => "?").join(",");
+      const repoPlaceholders = resultRepoIds.map(() => "?").join(",");
       const rows = db
         .prepare(
-          `SELECT f.file_path, f.skeleton_entries FROM files f
-           JOIN repos r ON r.id = f.repo_id
-           WHERE r.root_path = ? AND f.file_path IN (${placeholders})`,
+          `SELECT f.repo_id, f.file_path, f.skeleton_entries FROM files f
+           WHERE f.repo_id IN (${repoPlaceholders}) AND f.file_path IN (${pathPlaceholders})`,
         )
-        .all(repoRoot, ...filePaths) as { file_path: string; skeleton_entries: string | null }[];
+        .all(...resultRepoIds, ...filePaths) as {
+        repo_id: number;
+        file_path: string;
+        skeleton_entries: string | null;
+      }[];
       for (const row of rows) {
-        if (row.skeleton_entries) entriesMap.set(row.file_path, row.skeleton_entries);
+        if (row.skeleton_entries)
+          entriesMap.set(`${row.repo_id}:${row.file_path}`, row.skeleton_entries);
       }
     }
   }
 
   for (const result of fileResults) {
-    const entriesJson = entriesMap.get(result.filePath);
+    const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
+    const entriesJson = entriesMap.get(`${repoId}:${result.filePath}`);
     if (!entriesJson) continue;
 
     let entries: SkeletonEntry[];
@@ -1129,6 +1157,7 @@ async function attachCrossRepoEdges(
   repoRoot: string,
   config: Awaited<ReturnType<typeof loadConfig>>,
   results: SearchResult[],
+  currentRepoId: number,
 ): Promise<void> {
   // Build repo name map
   const repoNameMap = new Map<number, string>();
@@ -1165,8 +1194,7 @@ async function attachCrossRepoEdges(
 
     for (const result of results) {
       if (result.type === "commit" || result.type === "dir") continue;
-      const repoId = result.repoId ? parseInt(result.repoId) : null;
-      if (!repoId) continue;
+      const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
       const edges = depsByRepo.get(repoId);
       if (edges && edges.length > 0) {
         result.crossRepoEdges = edges;
@@ -1208,8 +1236,7 @@ async function attachCrossRepoEdges(
 
     for (const result of results) {
       if (result.type === "commit" || result.type === "dir") continue;
-      const repoId = result.repoId ? parseInt(result.repoId) : null;
-      if (!repoId) continue;
+      const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
       const edges = depsByRepo.get(repoId);
       if (edges && edges.length > 0) {
         result.crossRepoEdges = edges;
