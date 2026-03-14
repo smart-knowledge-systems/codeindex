@@ -11,6 +11,7 @@ import { getSqlite } from "../db/sqlite";
 import { getCostSummary } from "../cost";
 import { runHealthCheck } from "../check/runner";
 import type { SearchResult } from "../search/types";
+import { validateRepoScope, type AuthSession } from "./auth";
 
 // ---------------------------------------------------------------------------
 // Status helper (shared with CLI but returns structured data)
@@ -200,7 +201,7 @@ async function enrichResults(
 // MCP Server creation
 // ---------------------------------------------------------------------------
 
-export function createMcpServer(defaultRepoRoot: string): McpServer {
+export function createMcpServer(defaultRepoRoot: string, session?: AuthSession): McpServer {
   const mcp = new McpServer(
     { name: "codeindex", version: "1.0.0" },
     { capabilities: { tools: {} } },
@@ -261,6 +262,16 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const markdown = await generateIntent(repoRoot);
 
@@ -280,6 +291,16 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
       agentsMdPath: z.string().optional().describe("Path to AGENTS.md (default: AGENTS.md)"),
     },
     async ({ repoPath, threshold, agentsMdPath }) => {
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const mdPath = agentsMdPath ?? path.join(repoRoot, "AGENTS.md");
 
@@ -305,6 +326,16 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
       cost: z.boolean().optional().describe("Include token usage and cost breakdown"),
     },
     async ({ repoPath, cost }) => {
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const status = await getStatus(repoRoot, cost ?? false);
 
@@ -327,6 +358,16 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const report = await runHealthCheck(repoRoot);
 

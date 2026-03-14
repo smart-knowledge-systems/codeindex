@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import path from "path";
-import { parseArgs, flag, hasFlag, type ParsedArgs } from "./cli";
+import { parseArgs, flag, hasFlag, warnUnknownFlags, type ParsedArgs } from "./cli";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
 import { getCurrentSchemaVersion, getLatestMigrationVersion } from "./db/migrate";
@@ -1790,13 +1790,17 @@ async function main() {
       case "serve": {
         const { createMcpServer } = await import("./mcp/server");
         const { startStdio, startSSE } = await import("./mcp/transport");
-        const mcpServer = createMcpServer(repoRoot);
         const transport = flag(parsed, "transport") ?? "stdio";
         if (transport === "sse") {
+          const mcpServer = createMcpServer(repoRoot);
           const portStr = flag(parsed, "port");
-          await startSSE(mcpServer, portStr ? parseInt(portStr) : 3100);
+          await startSSE(mcpServer, portStr ? parseInt(portStr) : 3100, repoRoot);
         } else {
-          await startStdio(mcpServer);
+          const { authenticateSession } = await import("./mcp/auth");
+          const token = process.env.CODEINDEX_TOKEN;
+          const session = await authenticateSession(repoRoot, token);
+          const mcpServer = createMcpServer(repoRoot, session ?? undefined);
+          await startStdio(mcpServer, repoRoot);
         }
         break;
       }
