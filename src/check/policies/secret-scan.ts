@@ -28,9 +28,9 @@ export const secretScanCoverage: HealthPolicy = {
 
     if (!hasEvents) {
       return {
-        passed: true,
-        message: "No embedding events found — repo may not be indexed yet",
-        details: { note: "Secret scanning runs as part of the reindex pipeline" },
+        passed: false,
+        message: "No embedding events found — repo has not been indexed",
+        details: { note: "Run `codeindex reindex` to index the repo with secret scanning" },
       };
     }
 
