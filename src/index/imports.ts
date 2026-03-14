@@ -68,7 +68,15 @@ function extractTsImports(content: string): ImportEdge[] {
       edges.push({ importedModule: match[1], language: "typescript" });
     }
   }
-  return edges;
+  // Deduplicate by importedModule — multiple import lines from the same package
+  // (e.g. `import { A } from 'lib'` and `import { B } from 'lib'`) must produce
+  // a single edge to avoid UNIQUE constraint failures in cross-repo discovery.
+  const seen = new Set<string>();
+  return edges.filter((e) => {
+    if (seen.has(e.importedModule)) return false;
+    seen.add(e.importedModule);
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------------------

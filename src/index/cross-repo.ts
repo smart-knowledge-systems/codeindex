@@ -181,7 +181,7 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
   );
 
   const insert = db.prepare(
-    `INSERT INTO cross_repo_edges (source_repo_id, target_repo_id, source_file_id, imported_module, target_file_id, language)
+    `INSERT OR IGNORE INTO cross_repo_edges (source_repo_id, target_repo_id, source_file_id, imported_module, target_file_id, language)
      VALUES (?, ?, ?, ?, ?, ?)`,
   );
 
