@@ -17,7 +17,31 @@ import { CodeindexError, formatError } from "../errors";
 import { validateRepoScope, type AuthSession } from "./auth";
 import { recordEvent } from "../telemetry";
 import { EmbeddingCache } from "./cache";
-import { reindexSingleFile } from "../index/reindex";
+import { reindexSingleFile, loadFileIndex } from "../index/reindex";
+
+// ---------------------------------------------------------------------------
+// Module-level reindex rate limiter (persists across SSE reconnections)
+// ---------------------------------------------------------------------------
+
+const REINDEX_RATE_LIMIT = 5;
+const REINDEX_RATE_WINDOW_MS = 60_000;
+// Keyed by repoRoot so rate limits are per-repo, not per-connection
+const reindexCallLogs = new Map<string, number[]>();
+
+function checkReindexRateLimit(repoRoot: string): boolean {
+  let log = reindexCallLogs.get(repoRoot);
+  if (!log) {
+    log = [];
+    reindexCallLogs.set(repoRoot, log);
+  }
+  const now = Date.now();
+  while (log.length > 0 && now - log[0] > REINDEX_RATE_WINDOW_MS) {
+    log.shift();
+  }
+  if (log.length >= REINDEX_RATE_LIMIT) return false;
+  log.push(now);
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Status helper (shared with CLI but returns structured data)
@@ -1203,11 +1227,6 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
   // --- reindexFiles tool ---
 
-  // Rate limiter: 5 calls/min
-  const reindexCallLog: number[] = [];
-  const REINDEX_RATE_LIMIT = 5;
-  const REINDEX_RATE_WINDOW_MS = 60_000;
-
   mcp.tool(
     "reindexFiles",
     "Re-index specific files. Extracts skeleton, embeds, and upserts into the index. Rate limited to 5 calls/min.",
@@ -1242,12 +1261,8 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           }
         }
 
-        // Rate limit check — trim stale entries first, then check count
-        const now = Date.now();
-        while (reindexCallLog.length > 0 && now - reindexCallLog[0] > REINDEX_RATE_WINDOW_MS) {
-          reindexCallLog.shift();
-        }
-        if (reindexCallLog.length >= REINDEX_RATE_LIMIT) {
+        // Rate limit check (module-level, persists across reconnections)
+        if (!checkReindexRateLimit(defaultRepoRoot)) {
           return {
             content: [
               {
@@ -1260,7 +1275,6 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             isError: true,
           };
         }
-        reindexCallLog.push(now);
 
         // Path traversal validation
         const repoRoot = defaultRepoRoot;
@@ -1331,10 +1345,13 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           repoId = repos[0].id;
         }
 
+        // Pre-load file index once for import resolution across the batch
+        const fileIndex = await loadFileIndex(repoRoot, repoId);
+
         const results: { path: string; indexed: boolean; error?: string }[] = [];
         for (const p of paths) {
           try {
-            const indexed = await reindexSingleFile(repoRoot, repoId, p);
+            const indexed = await reindexSingleFile(repoRoot, repoId, p, fileIndex);
             results.push({ path: p, indexed });
           } catch (err) {
             results.push({ path: p, indexed: false, error: formatError(err) });

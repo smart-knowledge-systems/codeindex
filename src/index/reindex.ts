@@ -10,14 +10,46 @@ import { embed } from "./embedder";
 import { updateAffectedDirectories } from "./directories";
 import { extractImports, resolveImport } from "./imports";
 
+/** Pre-built file index for import resolution, reusable across batch calls. */
+export interface FileIndex {
+  allFiles: Set<string>;
+  fileIdMap: Map<string, number>;
+}
+
+/** Load the file index for a repo. Call once and pass to reindexSingleFile in a batch. */
+export async function loadFileIndex(repoRoot: string, repoId: number): Promise<FileIndex> {
+  const config = await loadConfig(repoRoot);
+  if (config.store === "pg") {
+    const rows = (await pgUnsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
+      repoId,
+    ])) as { id: number; file_path: string }[];
+    return {
+      allFiles: new Set(rows.map((r) => r.file_path)),
+      fileIdMap: new Map(rows.map((r) => [r.file_path, r.id])),
+    };
+  } else {
+    const db = await getSqlite(repoRoot);
+    const rows = db.prepare("SELECT id, file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      id: number;
+      file_path: string;
+    }[];
+    return {
+      allFiles: new Set(rows.map((r) => r.file_path)),
+      fileIdMap: new Map(rows.map((r) => [r.file_path, r.id])),
+    };
+  }
+}
+
 /**
  * Reindex a single file: extract skeleton, embed, and upsert into the DB.
  * Returns true if the file was indexed, false if skipped (unchanged or secret).
+ * Pass a pre-built fileIndex to avoid loading the full file list on each call.
  */
 export async function reindexSingleFile(
   repoRoot: string,
   repoId: number,
   relPath: string,
+  fileIndex?: FileIndex,
 ): Promise<boolean> {
   const config = await loadConfig(repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
@@ -116,16 +148,11 @@ export async function reindexSingleFile(
       // Refresh file_imports for this file
       await tx.unsafe("DELETE FROM file_imports WHERE source_file_id = $1", [fileId]);
       if (importEdges.length > 0) {
-        // Build file lookup for import resolution
-        const allFileRows = (await tx.unsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
-          repoId,
-        ])) as { id: number; file_path: string }[];
-        const allFiles = new Set(allFileRows.map((r) => r.file_path));
-        const fileIdMap = new Map(allFileRows.map((r) => [r.file_path, r.id]));
+        const idx = fileIndex ?? (await loadFileIndex(repoRoot, repoId));
 
         for (const edge of importEdges) {
-          const resolved = resolveImport(edge.importedModule, relPath, edge.language, allFiles);
-          const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
+          const resolved = resolveImport(edge.importedModule, relPath, edge.language, idx.allFiles);
+          const resolvedId = resolved ? (idx.fileIdMap.get(resolved) ?? null) : null;
           await tx.unsafe(
             `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
              VALUES ($1, $2, $3, $4)`,
@@ -160,21 +187,31 @@ export async function reindexSingleFile(
       // Refresh file_imports for this file
       db.prepare("DELETE FROM file_imports WHERE source_file_id = ?").run(row.id);
       if (importEdges.length > 0) {
-        const allFileRows = db
-          .prepare("SELECT id, file_path FROM files WHERE repo_id = ?")
-          .all(repoId) as { id: number; file_path: string }[];
-        const allFiles = new Set(allFileRows.map((r: { file_path: string }) => r.file_path));
-        const fileIdMap = new Map(
-          allFileRows.map((r: { id: number; file_path: string }) => [r.file_path, r.id]),
-        );
+        const idx = fileIndex ?? {
+          allFiles: new Set(
+            (
+              db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+                file_path: string;
+              }[]
+            ).map((r) => r.file_path),
+          ),
+          fileIdMap: new Map(
+            (
+              db.prepare("SELECT id, file_path FROM files WHERE repo_id = ?").all(repoId) as {
+                id: number;
+                file_path: string;
+              }[]
+            ).map((r) => [r.file_path, r.id]),
+          ),
+        };
 
         const insertStmt = db.prepare(
           `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
            VALUES (?, ?, ?, ?)`,
         );
         for (const edge of importEdges) {
-          const resolved = resolveImport(edge.importedModule, relPath, edge.language, allFiles);
-          const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
+          const resolved = resolveImport(edge.importedModule, relPath, edge.language, idx.allFiles);
+          const resolvedId = resolved ? (idx.fileIdMap.get(resolved) ?? null) : null;
           insertStmt.run(row.id, edge.importedModule, resolvedId, edge.language);
         }
       }
