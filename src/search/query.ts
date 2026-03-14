@@ -1321,9 +1321,15 @@ function parseSinceTimestamp(since: string): Date {
       case "w":
         now.setDate(now.getDate() - n * 7);
         break;
-      case "m":
+      case "m": {
+        const day = now.getDate();
+        now.setDate(1); // pin to 1st to avoid overflow
         now.setMonth(now.getMonth() - n);
+        // Restore original day, clamped to end of target month
+        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        now.setDate(Math.min(day, lastDay));
         break;
+      }
     }
     return now;
   }
