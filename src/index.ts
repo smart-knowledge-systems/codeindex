@@ -30,6 +30,7 @@ import { discoverCrossRepoEdges } from "./index/cross-repo";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import type { SearchOptions } from "./search/types";
 import { logEvent } from "./logging";
+import { resetTelemetry } from "./telemetry";
 
 // ---------------------------------------------------------------------------
 // init command
@@ -1078,6 +1079,34 @@ async function cmdStatus(repoRoot: string, showCost = false) {
 }
 
 // ---------------------------------------------------------------------------
+// telemetry command
+// ---------------------------------------------------------------------------
+
+async function cmdTelemetry(parsed: ParsedArgs) {
+  if (hasFlag(parsed, "reset")) {
+    await resetTelemetry();
+    console.log("Telemetry data reset.");
+    return;
+  }
+  const telemetryFile = path.join(
+    process.env.HOME ?? "~",
+    ".config",
+    "codeindex",
+    "telemetry.jsonl",
+  );
+  try {
+    const content = await Bun.file(telemetryFile).text();
+    if (!content.trim()) {
+      console.log("No telemetry data recorded. Set CODEINDEX_TELEMETRY=1 to enable.");
+      return;
+    }
+    console.log(content);
+  } catch {
+    console.log("No telemetry data found. Set CODEINDEX_TELEMETRY=1 to enable.");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // manifest command
 // ---------------------------------------------------------------------------
 
@@ -1230,6 +1259,53 @@ async function cmdConfig(repoRoot: string, args: string[]) {
   const merged = { ...existing, ...updates };
   await Bun.write(localConfigPath, JSON.stringify(merged, null, 2) + "\n");
   console.log("Config saved to .codeindex.json");
+}
+
+// ---------------------------------------------------------------------------
+// config --list command
+// ---------------------------------------------------------------------------
+
+async function cmdConfigList(repoRoot: string) {
+  const config = await loadConfig(repoRoot);
+
+  // Flatten config into key-value pairs with source info
+  const entries: Array<{ key: string; value: unknown; source: string }> = [];
+
+  function flatten(obj: Record<string, unknown>, prefix: string) {
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k;
+      if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+        flatten(v as Record<string, unknown>, key);
+      } else {
+        entries.push({ key, value: v, source: "config" });
+      }
+    }
+  }
+
+  flatten(config as unknown as Record<string, unknown>, "");
+
+  // Check env var overrides
+  const envOverrides: Record<string, string | undefined> = {
+    "pg.host": process.env.PGHOST,
+    "pg.port": process.env.PGPORT,
+    "pg.database": process.env.PGDATABASE,
+    "pg.user": process.env.PGUSER,
+  };
+
+  for (const entry of entries) {
+    const envVal = envOverrides[entry.key];
+    if (envVal !== undefined) {
+      entry.source = "env";
+      entry.value = envVal;
+    }
+  }
+
+  // Print as aligned table
+  const maxKeyLen = Math.max(...entries.map((e) => e.key.length));
+  for (const e of entries) {
+    const val = JSON.stringify(e.value);
+    console.log(`${e.key.padEnd(maxKeyLen)}  ${val.padEnd(20)}  (${e.source})`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1623,7 +1699,11 @@ async function main() {
         break;
 
       case "config":
-        await cmdConfig(repoRoot, process.argv.slice(3));
+        if (hasFlag(parsed, "list")) {
+          await cmdConfigList(repoRoot);
+        } else {
+          await cmdConfig(repoRoot, process.argv.slice(3));
+        }
         break;
 
       case "manifest":
@@ -1763,6 +1843,10 @@ async function main() {
 
       case "status":
         await cmdStatus(repoRoot, hasFlag(parsed, "cost"));
+        break;
+
+      case "telemetry":
+        await cmdTelemetry(parsed);
         break;
 
       case "doctor":
