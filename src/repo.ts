@@ -87,6 +87,105 @@ export async function repoAdd(repoRoot: string, targetPath: string): Promise<voi
 }
 
 // ---------------------------------------------------------------------------
+// repoAddBulk
+// ---------------------------------------------------------------------------
+
+export interface BulkAddResult {
+  name: string;
+  path: string;
+  status: "added" | "exists" | "error";
+  error?: string;
+}
+
+export async function repoAddBulk(repoRoot: string, paths: string[]): Promise<BulkAddResult[]> {
+  const config = await loadConfig(repoRoot);
+  const results: BulkAddResult[] = [];
+
+  if (config.store === "pg") {
+    await ensurePgSchema();
+    const pg = await getPg();
+
+    for (const targetPath of paths) {
+      const absPath = path.resolve(targetPath);
+      try {
+        const gitHead = path.join(absPath, ".git", "HEAD");
+        if (!existsSync(gitHead)) {
+          results.push({
+            name: path.basename(absPath),
+            path: absPath,
+            status: "error",
+            error: "not a git repo",
+          });
+          continue;
+        }
+        const existing = await pg.unsafe("SELECT id FROM repos WHERE root_path = $1", [absPath]);
+        if (existing.length > 0) {
+          const repoName = await getRepoName(absPath);
+          results.push({ name: repoName, path: absPath, status: "exists" });
+          continue;
+        }
+        const originUrl = (await getRepoOrigin(absPath)) ?? "";
+        const name = await getRepoName(absPath);
+        await pg.unsafe("INSERT INTO repos (origin_url, root_path, name) VALUES ($1, $2, $3)", [
+          originUrl,
+          absPath,
+          name,
+        ]);
+        results.push({ name, path: absPath, status: "added" });
+      } catch (err) {
+        results.push({
+          name: path.basename(absPath),
+          path: absPath,
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } else {
+    await ensureSqliteSchema(repoRoot);
+    for (const targetPath of paths) {
+      const absPath = path.resolve(targetPath);
+      try {
+        const gitHead = path.join(absPath, ".git", "HEAD");
+        if (!existsSync(gitHead)) {
+          results.push({
+            name: path.basename(absPath),
+            path: absPath,
+            status: "error",
+            error: "not a git repo",
+          });
+          continue;
+        }
+        const db = await getSqlite(repoRoot);
+        const existing = db.prepare("SELECT id FROM repos WHERE root_path = ?").all(absPath);
+        if (existing.length > 0) {
+          const repoName = await getRepoName(absPath);
+          results.push({ name: repoName, path: absPath, status: "exists" });
+          continue;
+        }
+        const originUrl = (await getRepoOrigin(absPath)) ?? "";
+        const name = await getRepoName(absPath);
+        db.prepare("INSERT INTO repos (origin_url, root_path, name) VALUES (?, ?, ?)").run(
+          originUrl,
+          absPath,
+          name,
+        );
+        results.push({ name, path: absPath, status: "added" });
+      } catch (err) {
+        results.push({
+          name: path.basename(absPath),
+          path: absPath,
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // repoRemove
 // ---------------------------------------------------------------------------
 

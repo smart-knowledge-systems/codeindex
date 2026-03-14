@@ -31,6 +31,16 @@ const VALUE_FLAGS = new Set([
   "decay",
   "parent-boost-multiplier",
   "changed-since",
+  "scan",
+  "store",
+  "name",
+  "repos",
+  "expires",
+  "id",
+  "path",
+  "dataset",
+  "baseline",
+  "agents-md",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {

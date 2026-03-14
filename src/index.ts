@@ -1630,6 +1630,11 @@ async function cmdMcpConfig(parsed: ParsedArgs) {
 const HELP_TEXT = `codeindex — semantic code search
 
 Commands:
+  setup                Guided setup: database, repos, .indexignore, all in one
+    --scan <dir>       Scan directory for git repos (multi-repo mode)
+    --yes              Non-interactive, accept all defaults
+    --store <type>     Force store type: pg | sqlite
+    --dry-run          Show what would happen
   init                 Initialize codeindex in current repo
   reindex              Full reindex of current repo
     --dry-run          Report what would change and projected cost
@@ -1806,6 +1811,19 @@ async function main() {
     "parent-boost-multiplier",
     "changed-since",
     "force",
+    "scan",
+    "store",
+    "yes",
+    "single",
+    "skip-doctor",
+    "name",
+    "repos",
+    "expires",
+    "id",
+    "path",
+    "dataset",
+    "baseline",
+    "agents-md",
   ];
   warnUnknownFlags(parsed, GLOBAL_FLAGS);
 
@@ -1814,6 +1832,19 @@ async function main() {
       case "init":
         await cmdInit(repoRoot);
         break;
+
+      case "setup": {
+        const { cmdSetup } = await import("./setup");
+        await cmdSetup(repoRoot, {
+          scanDir: flag(parsed, "scan"),
+          single: hasFlag(parsed, "single"),
+          yes: hasFlag(parsed, "yes"),
+          store: flag(parsed, "store") as "pg" | "sqlite" | undefined,
+          skipDoctor: hasFlag(parsed, "skip-doctor"),
+          dryRun: hasFlag(parsed, "dry-run"),
+        });
+        break;
+      }
 
       case "reindex": {
         const budgetStr = flag(parsed, "budget");
