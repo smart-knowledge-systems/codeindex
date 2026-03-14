@@ -322,7 +322,7 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
   // --- check tool ---
   mcp.tool(
     "check",
-    "Run health policy checks against the index. Returns pass/fail for freshness, summary completeness, skeleton extraction, and secret scan coverage.",
+    "Run health policy checks against the index. Returns pass/fail for freshness, summary completeness, skeleton extraction, and reindex completion.",
     {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },

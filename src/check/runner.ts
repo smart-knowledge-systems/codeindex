@@ -5,13 +5,13 @@ import type { HealthPolicy, PolicyContext, CheckReport } from "./types";
 import { indexFreshness } from "./policies/index-freshness";
 import { summaryCompleteness } from "./policies/summary-completeness";
 import { skeletonFailures } from "./policies/skeleton-failures";
-import { secretScanCoverage } from "./policies/secret-scan";
+import { reindexCompleted } from "./policies/reindex-completed";
 
 const ALL_POLICIES: HealthPolicy[] = [
   indexFreshness,
   summaryCompleteness,
   skeletonFailures,
-  secretScanCoverage,
+  reindexCompleted,
 ];
 
 async function resolveRepoId(

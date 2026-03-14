@@ -18,7 +18,7 @@ async function hasEmbeddings(ctx: PolicyContext): Promise<boolean> {
   return row.cnt > 0;
 }
 
-export const secretScanCoverage: HealthPolicy = {
+export const reindexCompleted: HealthPolicy = {
   name: "reindex-completed",
   description: "Verify that the repo has been fully indexed (embedding events exist)",
   severity: "error",
