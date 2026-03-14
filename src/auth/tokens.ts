@@ -33,16 +33,23 @@ export async function createToken(
   const hash = hashToken(plaintext);
 
   if (config.store === "pg") {
-    const rows = (await pgUnsafe(
-      `INSERT INTO access_tokens (token_hash, name, expires_at) VALUES ($1, $2, $3) RETURNING id`,
-      [hash, name, expiresAt ?? null],
-    )) as { id: string }[];
-    const tokenId = parseInt(rows[0].id);
-    for (const repoId of repoIds) {
-      await pgUnsafe(`INSERT INTO token_repo_access (token_id, repo_id) VALUES ($1, $2)`, [
-        tokenId,
-        repoId,
-      ]);
+    await pgUnsafe("BEGIN");
+    try {
+      const rows = (await pgUnsafe(
+        `INSERT INTO access_tokens (token_hash, name, expires_at) VALUES ($1, $2, $3) RETURNING id`,
+        [hash, name, expiresAt ?? null],
+      )) as { id: string }[];
+      const tokenId = parseInt(rows[0].id);
+      for (const repoId of repoIds) {
+        await pgUnsafe(`INSERT INTO token_repo_access (token_id, repo_id) VALUES ($1, $2)`, [
+          tokenId,
+          repoId,
+        ]);
+      }
+      await pgUnsafe("COMMIT");
+    } catch (err) {
+      await pgUnsafe("ROLLBACK");
+      throw err;
     }
   } else {
     const db = await getSqlite(repoRoot);
@@ -132,7 +139,9 @@ export async function listTokens(repoRoot: string): Promise<TokenInfo[]> {
     }));
   } else {
     const db = await getSqlite(repoRoot);
-    const tokens = db.prepare(`SELECT * FROM access_tokens ORDER BY id`).all() as {
+    const tokens = db
+      .prepare(`SELECT id, name, created_at, expires_at, revoked FROM access_tokens ORDER BY id`)
+      .all() as {
       id: number;
       name: string;
       created_at: string;

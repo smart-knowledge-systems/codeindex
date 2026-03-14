@@ -25,11 +25,12 @@ export async function runQualityCheck(
 
   // Run eval
   const evalResults = await runEval(repoRoot, dataset);
-  const avgPrecision5 = evalResults.reduce((s, r) => s + r.precision5, 0) / evalResults.length;
-  const avgHitRate5 = evalResults.reduce((s, r) => s + r.hitRate5, 0) / evalResults.length;
-  const avgRecall = evalResults.reduce((s, r) => s + r.recall, 0) / evalResults.length;
-  const avgMrr = evalResults.reduce((s, r) => s + r.mrr, 0) / evalResults.length;
-  const avgNdcg = evalResults.reduce((s, r) => s + r.ndcg, 0) / evalResults.length;
+  const n = evalResults.length;
+  const avgPrecision5 = n > 0 ? evalResults.reduce((s, r) => s + r.precision5, 0) / n : 0;
+  const avgHitRate5 = n > 0 ? evalResults.reduce((s, r) => s + r.hitRate5, 0) / n : 0;
+  const avgRecall = n > 0 ? evalResults.reduce((s, r) => s + r.recall, 0) / n : 0;
+  const avgMrr = n > 0 ? evalResults.reduce((s, r) => s + r.mrr, 0) / n : 0;
+  const avgNdcg = n > 0 ? evalResults.reduce((s, r) => s + r.ndcg, 0) / n : 0;
 
   const summary: EvalSummary = {
     configName: "quality-check",
