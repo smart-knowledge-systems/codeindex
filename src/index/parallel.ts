@@ -1,7 +1,7 @@
 import path from "path";
 import { loadConfig } from "../config";
 import { ensurePgSchema } from "../db/schema";
-import { pgUnsafe } from "../db/pg";
+import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { withCostContext } from "../cost";
 import { walkRepo } from "./walker";
@@ -172,15 +172,18 @@ async function reindexOne(
     }
 
     process.stderr.write(`${tag} Embedding ${filesToEmbed.length} files...\n`);
-    const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
+    const embeddings = await embed(
+      filesToEmbed.map((f) => f.skeleton),
+      config,
+    );
 
     if (config.store === "pg") {
-      await pgUnsafe("BEGIN");
-      try {
+      const pg = await getPg();
+      await pg.begin(async (tx) => {
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          await pgUnsafe(
+          await tx.unsafe(
             `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
              VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
@@ -201,11 +204,7 @@ async function reindexOne(
             ],
           );
         }
-        await pgUnsafe("COMMIT");
-      } catch (err) {
-        await pgUnsafe("ROLLBACK");
-        throw err;
-      }
+      });
     } else {
       const db = await getSqlite(repoRoot);
       const insertAll = db.transaction(() => {
