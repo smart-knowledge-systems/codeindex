@@ -1027,7 +1027,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              JOIN repos tr ON tr.id = e.target_repo_id
              JOIN files sf ON sf.id = e.source_file_id
              JOIN files tf ON tf.id = e.target_file_id
-             WHERE e.source_repo_id = ANY($1::int[]) AND e.target_repo_id = ANY($1::int[])
+             WHERE (e.source_repo_id = ANY($1::int[]) OR e.target_repo_id = ANY($1::int[]))
              ORDER BY sr.name, tr.name`
           : `SELECT sr.name AS source_repo, tr.name AS target_repo,
                     sf.file_path AS source_file, tf.file_path AS target_file,
@@ -1055,7 +1055,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                JOIN repos tr ON tr.id = e.target_repo_id
                JOIN files sf ON sf.id = e.source_file_id
                JOIN files tf ON tf.id = e.target_file_id
-               WHERE e.source_repo_id IN (${placeholders}) AND e.target_repo_id IN (${placeholders})
+               WHERE (e.source_repo_id IN (${placeholders}) OR e.target_repo_id IN (${placeholders}))
                ORDER BY sr.name, tr.name`,
             )
             .all(...scopedRepoIds, ...scopedRepoIds);
@@ -1376,6 +1376,27 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           try {
             const indexed = await reindexSingleFile(repoRoot, repoId, p, fileIndex);
             results.push({ path: p, indexed });
+            // Keep fileIndex up-to-date so later files in the batch can resolve
+            // imports to files inserted earlier in the same batch
+            if (indexed) {
+              fileIndex.allFiles.add(p);
+              if (!fileIndex.fileIdMap.has(p)) {
+                // Fetch the newly inserted file's ID
+                if (config.store === "pg") {
+                  const rows = (await pgUnsafe(
+                    "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
+                    [repoId, p],
+                  )) as { id: number }[];
+                  if (rows.length > 0) fileIndex.fileIdMap.set(p, rows[0].id);
+                } else {
+                  const db = await getSqlite(repoRoot);
+                  const row = db
+                    .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
+                    .get(repoId, p) as { id: number } | undefined;
+                  if (row) fileIndex.fileIdMap.set(p, row.id);
+                }
+              }
+            }
           } catch (err) {
             results.push({ path: p, indexed: false, error: formatError(err) });
           }
