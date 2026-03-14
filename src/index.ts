@@ -1641,6 +1641,10 @@ async function main() {
               process.exit(1);
             }
             const expiresAt = flag(parsed, "expires");
+            if (expiresAt && isNaN(new Date(expiresAt).getTime())) {
+              console.error(`Error: --expires "${expiresAt}" is not a valid ISO date string`);
+              process.exit(1);
+            }
             const plaintext = await createToken(repoRoot, name, repoIds, expiresAt);
             console.log(`Token created: ${plaintext}`);
             console.log("Store this token securely — it cannot be retrieved again.");
