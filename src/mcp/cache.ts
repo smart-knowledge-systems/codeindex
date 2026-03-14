@@ -38,8 +38,11 @@ export class EmbeddingCache {
 
   set(text: string, embedding: number[]): void {
     const key = this.computeKey(text);
+    const exists = this.cache.has(key);
+    // Delete first to refresh LRU position (Map preserves insertion order)
+    if (exists) this.cache.delete(key);
     // Evict oldest if at capacity (only when adding a new key)
-    if (!this.cache.has(key) && this.cache.size >= MAX_ENTRIES) {
+    if (!exists && this.cache.size >= MAX_ENTRIES) {
       const oldest = this.cache.keys().next().value;
       if (oldest) this.cache.delete(oldest);
     }
