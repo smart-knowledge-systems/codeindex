@@ -150,19 +150,24 @@ export async function listTokens(repoRoot: string): Promise<TokenInfo[]> {
       expires_at: string | null;
       revoked: number;
     }[];
-    return tokens.map((t) => {
-      const accessRows = db
-        .prepare(`SELECT repo_id FROM token_repo_access WHERE token_id = ?`)
-        .all(t.id) as { repo_id: number }[];
-      return {
-        id: t.id,
-        name: t.name,
-        createdAt: t.created_at,
-        expiresAt: t.expires_at,
-        revoked: !!t.revoked,
-        repoIds: accessRows.map((r) => r.repo_id),
-      };
-    });
+    const allAccess = db.prepare(`SELECT token_id, repo_id FROM token_repo_access`).all() as {
+      token_id: number;
+      repo_id: number;
+    }[];
+    const accessByToken = new Map<number, number[]>();
+    for (const row of allAccess) {
+      const list = accessByToken.get(row.token_id) ?? [];
+      list.push(row.repo_id);
+      accessByToken.set(row.token_id, list);
+    }
+    return tokens.map((t) => ({
+      id: t.id,
+      name: t.name,
+      createdAt: t.created_at,
+      expiresAt: t.expires_at,
+      revoked: !!t.revoked,
+      repoIds: accessByToken.get(t.id) ?? [],
+    }));
   }
 }
 
