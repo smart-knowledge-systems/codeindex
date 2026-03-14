@@ -2155,7 +2155,7 @@ async function main() {
             process.exit(1);
           }
           const mcpServer = createMcpServer(repoRoot, session);
-          await startStdio(mcpServer, repoRoot);
+          await startStdio(mcpServer);
         }
         break;
       }

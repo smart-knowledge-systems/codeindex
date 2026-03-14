@@ -87,14 +87,9 @@ function removeRateBucket(sessionId: string): void {
  * Reads JSON-RPC from stdin and writes to stdout.
  * If CODEINDEX_TOKEN is set, validates it at startup.
  */
-export async function startStdio(server: McpServer, repoRoot: string): Promise<AuthSession | null> {
-  const token = process.env.CODEINDEX_TOKEN;
-  const session = await authenticateSession(repoRoot, token);
-
+export async function startStdio(server: McpServer): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-
-  return session;
 }
 
 /**
