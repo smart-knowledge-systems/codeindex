@@ -2193,7 +2193,7 @@ function collectEntries(root: Node): SkeletonEntry[] {
 }
 
 /** Extensions treated as prose/documentation — get a structured extractor instead of firstNLines. */
-const PROSE_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst", ".adoc"]);
+const PROSE_EXTENSIONS = new Set([".md", ".mdx"]);
 
 /** Maximum characters for prose skeleton — matches MAX_EMBED_CHARS in embedder.ts */
 const MAX_PROSE_CHARS = 4_000;

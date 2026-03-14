@@ -1,6 +1,45 @@
 import path from "path";
 import ignore from "ignore";
 
+// ---------------------------------------------------------------------------
+// Extension allowlist — only files we have real parsers for
+// ---------------------------------------------------------------------------
+
+/** Extensions with dedicated tree-sitter extractors or prose parsers. */
+export const INDEXABLE_EXTENSIONS = new Set([
+  // From EXT_TO_LANG (skeleton.ts)
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".py",
+  ".rs",
+  ".go",
+  ".java",
+  ".c",
+  ".cpp",
+  ".cc",
+  ".cxx",
+  ".hpp",
+  ".hxx",
+  ".h",
+  ".cs",
+  ".kt",
+  ".kts",
+  ".swift",
+  ".rb",
+  ".php",
+  ".lua",
+  ".scala",
+  ".sc",
+  // Markdown
+  ".md",
+  ".mdx",
+]);
+
+/** Skip files larger than 512 KB to avoid memory bloat and wasted embeddings. */
+export const MAX_FILE_SIZE = 524_288;
+
 // Hard-coded — cannot be overridden by .gitignore or .indexignore
 const HARD_IGNORED = [".git/", ".codeindex.db"];
 
@@ -72,8 +111,12 @@ export async function* walkRepo(repoRoot: string): AsyncGenerator<string> {
   const glob = new Bun.Glob("**/*");
 
   for await (const entry of glob.scan({ cwd: repoRoot, onlyFiles: true, followSymlinks: false })) {
-    if (!hardIg.ignores(entry) && !ig.ignores(entry)) {
-      yield entry;
-    }
+    if (hardIg.ignores(entry) || ig.ignores(entry)) continue;
+
+    // Extensionless files (Dockerfile, Makefile, etc.) pass through
+    const ext = path.extname(entry).toLowerCase();
+    if (ext && !INDEXABLE_EXTENSIONS.has(ext)) continue;
+
+    yield entry;
   }
 }

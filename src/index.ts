@@ -13,7 +13,7 @@ import {
 import { getPg, pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
-import { walkRepo } from "./index/walker";
+import { walkRepo, MAX_FILE_SIZE } from "./index/walker";
 import { extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
 import { scanForSecrets } from "./index/secrets";
@@ -301,7 +301,12 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   for await (const relPath of walkRepo(repoRoot)) {
     allFiles.push(relPath);
     const absPath = path.join(repoRoot, relPath);
-    const content = (await Bun.file(absPath).text()).replace(/\0/g, "");
+    const file = Bun.file(absPath);
+    if (file.size > MAX_FILE_SIZE) {
+      skipped++;
+      continue;
+    }
+    const content = (await file.text()).replace(/\0/g, "");
 
     const scan = scanForSecrets(content);
     if (scan.hasSecrets) {
@@ -664,6 +669,8 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
       }
       continue;
     }
+
+    if (file.size > MAX_FILE_SIZE) continue;
 
     const content = await file.text();
 

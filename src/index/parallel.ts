@@ -4,7 +4,7 @@ import { ensurePgSchema } from "../db/schema";
 import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { withCostContext } from "../cost";
-import { walkRepo } from "./walker";
+import { walkRepo, MAX_FILE_SIZE } from "./walker";
 import { extractSkeletonWithEntries, initParser } from "./skeleton";
 import { formatAndHash } from "./formatter";
 import { scanForSecrets } from "./secrets";
@@ -141,7 +141,12 @@ async function reindexOne(
     for await (const relPath of walkRepo(repoRoot)) {
       allFiles.push(relPath);
       const absPath = path.join(repoRoot, relPath);
-      const content = (await Bun.file(absPath).text()).replace(/\0/g, "");
+      const file = Bun.file(absPath);
+      if (file.size > MAX_FILE_SIZE) {
+        skipped++;
+        continue;
+      }
+      const content = (await file.text()).replace(/\0/g, "");
 
       const scan = scanForSecrets(content);
       if (scan.hasSecrets) {
