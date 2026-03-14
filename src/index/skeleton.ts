@@ -1702,16 +1702,17 @@ function extractScalaReturnType(node: Node): string {
 // Lua extractor
 // ---------------------------------------------------------------------------
 
-function skeletonLua(filename: string, root: Node): string {
+function skeletonLua(filename: string, root: Node, content: string): string {
   const lines: string[] = [`# ${filename} [Lua]`];
 
-  // Imports: scan for require() calls via regex on node text
+  // Imports: extract require() calls from raw source lines
+  // (tree-sitter node.text can be truncated when multiple WASM languages are loaded)
   const imports: string[] = [];
-  for (const node of descendantsOfType(root, [
-    "local_variable_declaration",
-    "variable_assignment",
-  ])) {
-    const reqMatch = node.text.match(/require\s*\(\s*["']([^"']+)["']\s*\)/);
+  const sourceLines = content.split("\n");
+  for (const node of root.namedChildren) {
+    if (node.type !== "local_variable_declaration" && node.type !== "variable_assignment") continue;
+    const line = sourceLines[node.startPosition.row] ?? "";
+    const reqMatch = line.match(/require\s*\(?["']([^"']+)["']\)?/);
     if (reqMatch) imports.push(reqMatch[1]);
   }
   if (imports.length > 0) lines.push(`imports: ${imports.join(", ")}`);
@@ -2832,7 +2833,7 @@ export async function extractSkeletonWithEntries(
         text = skeletonPhp(filename, root);
         break;
       case "lua":
-        text = skeletonLua(filename, root);
+        text = skeletonLua(filename, root, content);
         break;
       case "scala":
         text = skeletonScala(filename, root);

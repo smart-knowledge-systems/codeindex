@@ -12,8 +12,13 @@ export interface QueryRewriteContext {
  * - Short query + pronoun ("it", "that", "this") → prepend previous query context
  * - High term overlap with previous query → treat as refinement
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function rewriteQuery(query: string, _ctx: QueryRewriteContext, _opts?: SearchOptions): string {
+/* eslint-disable @typescript-eslint/no-unused-vars */
+export function rewriteQuery(
+  query: string,
+  _ctx: QueryRewriteContext,
+  _opts?: SearchOptions,
+): string {
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   // Passthrough — telemetry gate not met
   return query;
 }
