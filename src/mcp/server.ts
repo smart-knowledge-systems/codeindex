@@ -46,6 +46,7 @@ const REPO_CACHE_TTL_MS = 60_000; // refresh every 60 seconds
 export function invalidateRepoCache(): void {
   cachedAllRepoIds = null;
   cachedAllRepoIdsAt = 0;
+  inflightRepoIdsFetch = null;
 }
 
 async function withMcpScope<T>(
@@ -56,8 +57,8 @@ async function withMcpScope<T>(
     return withRepoScope(session.repoIds, fn);
   }
   // Full access — use cached repo IDs for FORCE RLS
-  const now = Date.now();
-  if (!cachedAllRepoIds || now - cachedAllRepoIdsAt > REPO_CACHE_TTL_MS) {
+  if (!cachedAllRepoIds || Date.now() - cachedAllRepoIdsAt > REPO_CACHE_TTL_MS) {
+    const stampBefore = cachedAllRepoIdsAt;
     if (!inflightRepoIdsFetch) {
       inflightRepoIdsFetch = pgUnsafe("SELECT id FROM repos")
         .then((rows) => rows.map((r: Record<string, unknown>) => Number(r.id)))
@@ -65,10 +66,17 @@ async function withMcpScope<T>(
           inflightRepoIdsFetch = null;
         });
     }
-    cachedAllRepoIds = await inflightRepoIdsFetch;
-    cachedAllRepoIdsAt = Date.now();
+    const freshIds = await inflightRepoIdsFetch;
+    // Only populate cache if it wasn't invalidated while we were awaiting
+    if (cachedAllRepoIdsAt === stampBefore && freshIds) {
+      cachedAllRepoIds = freshIds;
+      cachedAllRepoIdsAt = Date.now();
+    }
   }
-  const allRepoIds: number[] = cachedAllRepoIds!;
+  // If cache is still empty (invalidated during fetch), do a fresh uncached query
+  const allRepoIds: number[] =
+    cachedAllRepoIds ??
+    (await pgUnsafe("SELECT id FROM repos")).map((r: Record<string, unknown>) => Number(r.id));
   if (allRepoIds.length === 0) {
     // No repos at all — run in a plain transaction
     const pg = await getPg();
