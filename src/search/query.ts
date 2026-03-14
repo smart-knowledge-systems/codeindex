@@ -9,6 +9,8 @@ import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
 import { getScopedRepoIds } from "../auth/tokens";
 import { logEvent } from "../logging";
 import { recordEvent, hashQuery } from "../telemetry";
+import { rerank } from "./rerank";
+import { expandQuery } from "./query-expansion";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -119,6 +121,7 @@ const LANG_ALIASES: Record<string, string[]> = {
   ruby: [".rb"],
   rb: [".rb"],
   php: [".php"],
+  lua: [".lua"],
 };
 
 function resolveLangExtensions(langs: string[]): string[] {
@@ -974,9 +977,15 @@ export async function search(
   options?: SearchOptions,
 ): Promise<SearchResult[]> {
   const config = await loadConfig(repoRoot);
-  const scoring: ScoringConfig = options?.scoringOverrides
-    ? { ...config.scoring, ...options.scoringOverrides }
-    : config.scoring;
+
+  // Apply provider-specific scoring overrides for non-openai providers
+  const provider = config.embedding.provider;
+  const providerOverrides = config.providerProfiles?.[provider] ?? {};
+  const scoring: ScoringConfig = {
+    ...config.scoring,
+    ...providerOverrides,
+    ...(options?.scoringOverrides ?? {}),
+  };
 
   const resolvedOptions: Required<Omit<SearchOptions, "embeddingCache">> = {
     minScore: options?.minScore ?? scoring.minScore,
@@ -992,13 +1001,16 @@ export async function search(
     explain: options?.explain ?? false,
   };
 
+  // Expand query for local embedding providers to improve match quality
+  const effectiveQuery = provider !== "openai" ? expandQuery(query) : query;
+
   let queryEmbedding: number[];
-  const cached = options?.embeddingCache?.get(query);
+  const cached = options?.embeddingCache?.get(effectiveQuery);
   if (cached) {
     queryEmbedding = cached;
   } else {
-    queryEmbedding = await embedSingle(query);
-    options?.embeddingCache?.set(query, queryEmbedding);
+    queryEmbedding = await embedSingle(effectiveQuery);
+    options?.embeddingCache?.set(effectiveQuery, queryEmbedding);
   }
   const resolved = await resolveRepoIds(repoRoot, resolvedOptions.scope, config);
   let repoIds = resolved.repoIds;
@@ -1041,6 +1053,18 @@ export async function search(
   }
 
   results.sort((a, b) => b.finalScore - a.finalScore);
+
+  // Apply lightweight re-ranking if enabled
+  if (config.reranking?.enabled) {
+    const rerankCandidates = results.slice(0, 50);
+    const reranked = await rerank(rerankCandidates, {
+      store: config.store,
+      repoRoot,
+      repoIds,
+      reranking: config.reranking,
+    });
+    results = [...reranked, ...results.slice(50)];
+  }
 
   const finalResults = resolvedOptions.topN > 0 ? results.slice(0, resolvedOptions.topN) : results;
 

@@ -7,6 +7,7 @@ import {
   firstChildOfType,
   childrenOfType,
   descendantsOfType,
+  extractParamList,
 } from "./skeleton-utils";
 
 // ---------------------------------------------------------------------------
@@ -42,7 +43,9 @@ type SupportedLanguage =
   | "ruby"
   | "php"
   | "lua"
-  | "scala";
+  | "scala"
+  | "zig"
+  | "elixir";
 
 const EXT_TO_LANG: Record<string, SupportedLanguage> = {
   ".ts": "typescript",
@@ -69,6 +72,9 @@ const EXT_TO_LANG: Record<string, SupportedLanguage> = {
   ".lua": "lua",
   ".scala": "scala",
   ".sc": "scala",
+  ".zig": "zig",
+  ".ex": "elixir",
+  ".exs": "elixir",
 };
 
 const LANG_DISPLAY: Record<SupportedLanguage, string> = {
@@ -88,6 +94,8 @@ const LANG_DISPLAY: Record<SupportedLanguage, string> = {
   php: "PHP",
   lua: "Lua",
   scala: "Scala",
+  zig: "Zig",
+  elixir: "Elixir",
 };
 
 const WASM_DIR = path.join(import.meta.dir, "../../node_modules/tree-sitter-wasms/out");
@@ -1690,6 +1698,56 @@ function extractScalaReturnType(node: Node): string {
   return "";
 }
 
+// ---------------------------------------------------------------------------
+// Lua extractor
+// ---------------------------------------------------------------------------
+
+function skeletonLua(filename: string, root: Node): string {
+  const lines: string[] = [`# ${filename} [Lua]`];
+
+  // Imports: scan for require() calls via regex on node text
+  const imports: string[] = [];
+  for (const node of descendantsOfType(root, [
+    "local_variable_declaration",
+    "variable_assignment",
+  ])) {
+    const reqMatch = node.text.match(/require\s*\(\s*["']([^"']+)["']\s*\)/);
+    if (reqMatch) imports.push(reqMatch[1]);
+  }
+  if (imports.length > 0) lines.push(`imports: ${imports.join(", ")}`);
+  lines.push("");
+
+  function processNode(node: Node, indent = ""): void {
+    switch (node.type) {
+      case "function_definition_statement": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        const params = firstChildOfType(node, "parameter_list");
+        const paramStr = extractParamList(params, { paramTypes: ["identifier"] });
+        lines.push(`${indent}+ ${name}(${paramStr})`);
+        break;
+      }
+      case "local_function_definition_statement": {
+        const nameNode = firstChildOfType(node, "identifier");
+        const name = nameNode?.text ?? "(anonymous)";
+        const params = firstChildOfType(node, "parameter_list");
+        const paramStr = extractParamList(params, { paramTypes: ["identifier"] });
+        lines.push(`${indent}+ ${name}(${paramStr}) [local]`);
+        break;
+      }
+    }
+  }
+
+  for (const node of root.namedChildren) {
+    processNode(node);
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+// ---------------------------------------------------------------------------
+// Scala extractor
+// ---------------------------------------------------------------------------
+
 function skeletonScala(filename: string, root: Node): string {
   const lines: string[] = [`# ${filename} [Scala]`];
 
@@ -1777,6 +1835,173 @@ function skeletonScala(filename: string, root: Node): string {
   }
 
   return lines.join("\n").trimEnd();
+}
+
+// ---------------------------------------------------------------------------
+// Zig extractor
+// ---------------------------------------------------------------------------
+
+function skeletonZig(filename: string, root: Node): string {
+  const lines: string[] = [`# ${filename} [Zig]`];
+
+  // Imports: find @import() calls in top-level variable_declarations
+  const imports: string[] = [];
+  for (const node of root.namedChildren) {
+    if (node.type === "variable_declaration") {
+      const importModule = extractZigImportFromDecl(node);
+      if (importModule) imports.push(importModule);
+    }
+  }
+  if (imports.length > 0) lines.push(`imports: ${imports.join(", ")}`);
+  lines.push("");
+
+  for (const node of root.namedChildren) {
+    switch (node.type) {
+      case "variable_declaration": {
+        const name = firstChildOfType(node, "identifier")?.text;
+        if (!name) break;
+        const value = node.namedChildren.find(
+          (c) =>
+            c.type === "struct_declaration" ||
+            c.type === "enum_declaration" ||
+            c.type === "union_declaration" ||
+            c.type === "error_set_declaration",
+        );
+        if (!value) break;
+        const isPub = node.children.some((c) => c.type === "pub");
+        const vis = isPub ? "pub " : "";
+
+        switch (value.type) {
+          case "struct_declaration": {
+            lines.push(`${vis}struct ${name}`);
+            const fields = childrenOfType(value, "container_field").filter(
+              (f) => f.childForFieldName("type") != null,
+            );
+            for (const field of fields) {
+              const fName = childText(field, "name");
+              const fType = field.childForFieldName("type")?.text ?? "";
+              lines.push(`  ${fName}: ${fType}`);
+            }
+            for (const fn_ of childrenOfType(value, "function_declaration")) {
+              const fnName = childText(fn_, "name");
+              const params = fn_.childForFieldName("parameters");
+              const paramStr = extractZigParams(params);
+              const retStr = extractZigReturnType(fn_);
+              const fnPub = fn_.children.some((c) => c.type === "pub");
+              lines.push(`  ${fnPub ? "+" : "-"} ${fnName}(${paramStr})${retStr}`);
+            }
+            lines.push("");
+            break;
+          }
+          case "enum_declaration": {
+            lines.push(`${vis}enum ${name}`);
+            const variants = childrenOfType(value, "container_field").map((f) =>
+              childText(f, "name"),
+            );
+            if (variants.length > 0) lines.push(`  variants: ${variants.join(", ")}`);
+            for (const fn_ of childrenOfType(value, "function_declaration")) {
+              const fnName = childText(fn_, "name");
+              const params = fn_.childForFieldName("parameters");
+              const paramStr = extractZigParams(params);
+              const retStr = extractZigReturnType(fn_);
+              const fnPub = fn_.children.some((c) => c.type === "pub");
+              lines.push(`  ${fnPub ? "+" : "-"} ${fnName}(${paramStr})${retStr}`);
+            }
+            lines.push("");
+            break;
+          }
+          case "union_declaration": {
+            lines.push(`${vis}union ${name}`);
+            const variants = childrenOfType(value, "container_field").map((f) => {
+              const fName = childText(f, "name");
+              const fType = f.childForFieldName("type")?.text;
+              return fType ? `${fName}: ${fType}` : fName;
+            });
+            if (variants.length > 0) lines.push(`  variants: ${variants.join(", ")}`);
+            for (const fn_ of childrenOfType(value, "function_declaration")) {
+              const fnName = childText(fn_, "name");
+              const params = fn_.childForFieldName("parameters");
+              const paramStr = extractZigParams(params);
+              const retStr = extractZigReturnType(fn_);
+              const fnPub = fn_.children.some((c) => c.type === "pub");
+              lines.push(`  ${fnPub ? "+" : "-"} ${fnName}(${paramStr})${retStr}`);
+            }
+            lines.push("");
+            break;
+          }
+          case "error_set_declaration": {
+            const errors = childrenOfType(value, "identifier").map((id) => id.text);
+            lines.push(`${vis}error ${name}`);
+            if (errors.length > 0) lines.push(`  values: ${errors.join(", ")}`);
+            lines.push("");
+            break;
+          }
+        }
+        break;
+      }
+      case "function_declaration": {
+        const fnName = childText(node, "name");
+        const params = node.childForFieldName("parameters");
+        const paramStr = extractZigParams(params);
+        const retStr = extractZigReturnType(node);
+        const isPub = node.children.some((c) => c.type === "pub");
+        lines.push(`${isPub ? "pub " : ""}function ${fnName}(${paramStr})${retStr}`);
+        lines.push("");
+        break;
+      }
+      case "test_declaration": {
+        const strNode = firstChildOfType(node, "string");
+        const testName = strNode
+          ? strNode.namedChildren.find((c) => c.type === "string_content")?.text ?? "unnamed"
+          : "unnamed";
+        lines.push(`test "${testName}"`);
+        lines.push("");
+        break;
+      }
+    }
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+function extractZigImportFromDecl(node: Node): string | null {
+  const builtins = descendantsOfType(node, ["builtin_function"]);
+  for (const b of builtins) {
+    const id = firstChildOfType(b, "builtin_identifier");
+    if (id?.text === "@import") {
+      const args = firstChildOfType(b, "arguments");
+      if (args) {
+        const str = firstChildOfType(args, "string");
+        if (str) {
+          const content = str.namedChildren.find((c) => c.type === "string_content");
+          return content?.text ?? null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function extractZigParams(params: Node | null): string {
+  if (!params) return "";
+  const parts: string[] = [];
+  for (const p of params.namedChildren) {
+    if (p.type === "parameter") {
+      const name = childText(p, "name");
+      const type_ = p.childForFieldName("type")?.text;
+      const isComptime = p.children.some((c) => c.type === "comptime");
+      const prefix = isComptime ? "comptime " : "";
+      if (type_) parts.push(`${prefix}${name}: ${type_}`);
+      else parts.push(`${prefix}${name}`);
+    }
+  }
+  return parts.join(", ");
+}
+
+function extractZigReturnType(fn_: Node): string {
+  const retNode = fn_.childForFieldName("type");
+  if (!retNode) return "";
+  return ` -> ${retNode.text}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2136,6 +2361,14 @@ function collectEntries(root: Node): SkeletonEntry[] {
         return;
       }
 
+      // Lua functions
+      case "function_definition_statement":
+      case "local_function_definition_statement": {
+        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "function", startLine, endLine });
+        return;
+      }
+
       // PHP trait
       case "trait_declaration": {
         const name = node.childForFieldName("name")?.text ?? "(anonymous)";
@@ -2174,6 +2407,56 @@ function collectEntries(root: Node): SkeletonEntry[] {
       case "var_definition": {
         const name = firstChildOfType(node, "identifier")?.text ?? "(anonymous)";
         entries.push({ name, kind: "property", startLine, endLine });
+        return;
+      }
+
+      // Zig: variable_declaration wrapping struct/enum/union/error_set
+      case "variable_declaration": {
+        const zigName = firstChildOfType(node, "identifier")?.text;
+        if (!zigName) return;
+        const zigValue = node.namedChildren.find(
+          (c) =>
+            c.type === "struct_declaration" ||
+            c.type === "enum_declaration" ||
+            c.type === "union_declaration" ||
+            c.type === "error_set_declaration",
+        );
+        if (zigValue) {
+          const kindMap: Record<string, string> = {
+            struct_declaration: "struct",
+            enum_declaration: "enum",
+            union_declaration: "union",
+            error_set_declaration: "enum",
+          };
+          entries.push({
+            name: zigName,
+            kind: kindMap[zigValue.type] ?? "struct",
+            startLine,
+            endLine,
+          });
+          // Collect methods inside the container
+          for (const child of zigValue.namedChildren) {
+            if (child.type === "function_declaration") {
+              const mName = child.childForFieldName("name")?.text ?? "(anonymous)";
+              entries.push({
+                name: mName,
+                kind: "method",
+                startLine: child.startPosition.row + 1,
+                endLine: child.endPosition.row + 1,
+              });
+            }
+          }
+        }
+        return;
+      }
+
+      // Zig: test blocks
+      case "test_declaration": {
+        const strNode = firstChildOfType(node, "string");
+        const testName = strNode
+          ? strNode.namedChildren.find((c) => c.type === "string_content")?.text ?? "test"
+          : "test";
+        entries.push({ name: testName, kind: "function", startLine, endLine });
         return;
       }
     }
@@ -2336,8 +2619,14 @@ export async function extractSkeletonWithEntries(
       case "php":
         text = skeletonPhp(filename, root);
         break;
+      case "lua":
+        text = skeletonLua(filename, root);
+        break;
       case "scala":
         text = skeletonScala(filename, root);
+        break;
+      case "zig":
+        text = skeletonZig(filename, root);
         break;
       default:
         text = firstNLines(content, fallbackLines);

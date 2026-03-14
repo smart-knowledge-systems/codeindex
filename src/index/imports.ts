@@ -33,6 +33,8 @@ export function extractImports(filePath: string, content: string): ImportEdge[] 
       return extractRubyImports(content);
     case ".php":
       return extractPhpImports(content);
+    case ".lua":
+      return extractLuaImports(content);
     default:
       return [];
   }
@@ -203,6 +205,24 @@ function extractPhpImports(content: string): ImportEdge[] {
   const reqRe = /(?:require|include)(?:_once)?\s+["']([^"']+)["']/g;
   for (const match of content.matchAll(reqRe)) {
     edges.push({ importedModule: match[1], language: "php" });
+  }
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// Lua
+// ---------------------------------------------------------------------------
+
+function extractLuaImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  const requireRe = /require\s*\(\s*["']([^"']+)["']\s*\)/g;
+  for (const match of content.matchAll(requireRe)) {
+    edges.push({ importedModule: match[1], language: "lua" });
+  }
+  // require with single-quoted string without parens: require 'module'
+  const requireNoParenRe = /require\s+["']([^"']+)["']/g;
+  for (const match of content.matchAll(requireNoParenRe)) {
+    edges.push({ importedModule: match[1], language: "lua" });
   }
   return deduplicateEdges(edges);
 }

@@ -747,6 +747,52 @@ describe("Fallback (unsupported extension)", () => {
 // Entry line validation
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Lua
+// ---------------------------------------------------------------------------
+
+describe("Lua (.lua)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.lua");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text with [Lua] header", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Lua]");
+  });
+
+  it("extracts module functions", () => {
+    expect(hasEntry(entries, "M.new", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:getName", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:addItem", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:calculateDamage", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:takeDamage", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:isAlive", "function")).toBeDefined();
+  });
+
+  it("extracts local function", () => {
+    expect(hasEntry(entries, "clamp", "function")).toBeDefined();
+  });
+
+  it("extracts top-level function", () => {
+    expect(hasEntry(entries, "createGame", "function")).toBeDefined();
+  });
+
+  it("imports section contains required modules", () => {
+    expect(text).toContain("json");
+    expect(text).toContain("lib.utils");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Entry line numbers
+// ---------------------------------------------------------------------------
+
 describe("Entry line numbers", () => {
   it("all entries have valid startLine and endLine", async () => {
     const filePath = path.join(FIXTURES, "sample.ts");
