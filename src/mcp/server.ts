@@ -727,7 +727,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
       if (config.store === "pg") {
         const rows = await pgUnsafe(
-          `SELECT sf.file_path AS importer, fi.import_specifier
+          `SELECT sf.file_path AS importer, fi.imported_module
            FROM file_imports fi
            JOIN files tf ON tf.id = fi.resolved_file_id
            JOIN files sf ON sf.id = fi.source_file_id
@@ -740,7 +740,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         const db = await getSqlite(repoRoot);
         const rows = db
           .prepare(
-            `SELECT sf.file_path AS importer, fi.import_specifier
+            `SELECT sf.file_path AS importer, fi.imported_module
              FROM file_imports fi
              JOIN files tf ON tf.id = fi.resolved_file_id
              JOIN files sf ON sf.id = fi.source_file_id
@@ -782,7 +782,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
       if (config.store === "pg") {
         const rows = await pgUnsafe(
-          `SELECT tf.file_path AS dependency, fi.import_specifier
+          `SELECT tf.file_path AS dependency, fi.imported_module
            FROM file_imports fi
            JOIN files sf ON sf.id = fi.source_file_id
            LEFT JOIN files tf ON tf.id = fi.resolved_file_id
@@ -795,7 +795,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         const db = await getSqlite(repoRoot);
         const rows = db
           .prepare(
-            `SELECT tf.file_path AS dependency, fi.import_specifier
+            `SELECT tf.file_path AS dependency, fi.imported_module
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              LEFT JOIN files tf ON tf.id = fi.resolved_file_id
@@ -963,7 +963,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         const query = scopedRepoIds
           ? `SELECT sr.name AS source_repo, tr.name AS target_repo,
                     sf.file_path AS source_file, tf.file_path AS target_file,
-                    e.import_specifier
+                    e.imported_module
              FROM cross_repo_edges e
              JOIN repos sr ON sr.id = e.source_repo_id
              JOIN repos tr ON tr.id = e.target_repo_id
@@ -973,7 +973,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              ORDER BY sr.name, tr.name`
           : `SELECT sr.name AS source_repo, tr.name AS target_repo,
                     sf.file_path AS source_file, tf.file_path AS target_file,
-                    e.import_specifier
+                    e.imported_module
              FROM cross_repo_edges e
              JOIN repos sr ON sr.id = e.source_repo_id
              JOIN repos tr ON tr.id = e.target_repo_id
@@ -991,7 +991,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             .prepare(
               `SELECT sr.name AS source_repo, tr.name AS target_repo,
                       sf.file_path AS source_file, tf.file_path AS target_file,
-                      e.import_specifier
+                      e.imported_module
                FROM cross_repo_edges e
                JOIN repos sr ON sr.id = e.source_repo_id
                JOIN repos tr ON tr.id = e.target_repo_id
@@ -1007,7 +1007,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             .prepare(
               `SELECT sr.name AS source_repo, tr.name AS target_repo,
                       sf.file_path AS source_file, tf.file_path AS target_file,
-                      e.import_specifier
+                      e.imported_module
                FROM cross_repo_edges e
                JOIN repos sr ON sr.id = e.source_repo_id
                JOIN repos tr ON tr.id = e.target_repo_id
@@ -1133,18 +1133,18 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
       if (config.store === "pg") {
         const query = scopedRepoIds
-          ? `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+          ? `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              JOIN repos r ON r.id = sf.repo_id
-             WHERE fi.import_specifier LIKE $1
+             WHERE fi.imported_module LIKE $1
                AND r.id = ANY($2::int[])
              ORDER BY r.name, sf.file_path`
-          : `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+          : `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              JOIN repos r ON r.id = sf.repo_id
-             WHERE fi.import_specifier LIKE $1
+             WHERE fi.imported_module LIKE $1
              ORDER BY r.name, sf.file_path`;
         const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
         const rows = await pgUnsafe(query, params);
@@ -1155,11 +1155,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           const placeholders = scopedRepoIds.map(() => "?").join(",");
           const rows = db
             .prepare(
-              `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+              `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
                FROM file_imports fi
                JOIN files sf ON sf.id = fi.source_file_id
                JOIN repos r ON r.id = sf.repo_id
-               WHERE fi.import_specifier LIKE ?
+               WHERE fi.imported_module LIKE ?
                  AND r.id IN (${placeholders})
                ORDER BY r.name, sf.file_path`,
             )
@@ -1168,11 +1168,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         } else {
           const rows = db
             .prepare(
-              `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+              `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
                FROM file_imports fi
                JOIN files sf ON sf.id = fi.source_file_id
                JOIN repos r ON r.id = sf.repo_id
-               WHERE fi.import_specifier LIKE ?
+               WHERE fi.imported_module LIKE ?
                ORDER BY r.name, sf.file_path`,
             )
             .all(pattern);
