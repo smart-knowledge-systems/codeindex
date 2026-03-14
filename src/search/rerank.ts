@@ -187,7 +187,7 @@ async function getCrossRepoBoosts(
         `SELECT DISTINCT target_file_id AS fid FROM cross_repo_edges WHERE source_file_id IN (${placeholders}) AND target_file_id IS NOT NULL
          UNION
          SELECT DISTINCT source_file_id AS fid FROM cross_repo_edges WHERE target_file_id IN (${placeholders})`,
-        [...topFileIds, ...topFileIds],
+        topFileIds,
       )) as Array<{ fid: string }>;
 
       for (const row of rows) {
