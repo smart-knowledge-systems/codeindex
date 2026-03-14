@@ -1,3 +1,4 @@
+import fs from "fs/promises";
 import path from "path";
 import { loadConfig } from "../config";
 import { pgUnsafe } from "../db/pg";
@@ -72,10 +73,23 @@ async function discoverPg(edges: CrossRepoEdge[]): Promise<void> {
     filesByRepo.set(repoId, list);
   }
 
+  // Load package.json names for TS/JS bare specifier matching
+  const repos = (await pgUnsafe(`SELECT id, root_path FROM repos`)) as {
+    id: string;
+    root_path: string;
+  }[];
+  const packageNames = await loadPackageNames(
+    repos.map((r) => ({ id: parseInt(r.id), rootPath: r.root_path })),
+  );
+
   // Wrap DELETE + INSERT in a transaction for atomicity
   await pgUnsafe("BEGIN");
   try {
-    await pgUnsafe("DELETE FROM cross_repo_edges");
+    // Scope delete to repos with unresolved imports, not full-table wipe
+    const sourceRepoIds = [...new Set(unresolved.map((u) => parseInt(u.source_repo_id)))];
+    for (const repoId of sourceRepoIds) {
+      await pgUnsafe("DELETE FROM cross_repo_edges WHERE source_repo_id = $1", [repoId]);
+    }
 
     for (const imp of unresolved) {
       const sourceRepoId = parseInt(imp.source_repo_id);
@@ -85,6 +99,7 @@ async function discoverPg(edges: CrossRepoEdge[]): Promise<void> {
         imp.source_file_path,
         sourceRepoId,
         filesByRepo,
+        packageNames,
       );
 
       if (match) {
@@ -156,6 +171,15 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
     filesByRepo.set(f.repo_id, list);
   }
 
+  // Load package.json names for TS/JS bare specifier matching
+  const repos = db.prepare(`SELECT id, root_path FROM repos`).all() as {
+    id: number;
+    root_path: string;
+  }[];
+  const packageNames = await loadPackageNames(
+    repos.map((r) => ({ id: r.id, rootPath: r.root_path })),
+  );
+
   const insert = db.prepare(
     `INSERT INTO cross_repo_edges (source_repo_id, target_repo_id, source_file_id, imported_module, target_file_id, language)
      VALUES (?, ?, ?, ?, ?, ?)`,
@@ -163,7 +187,12 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
 
   // Wrap DELETE + INSERT in a transaction for atomicity
   const replaceEdges = db.transaction(() => {
-    db.prepare("DELETE FROM cross_repo_edges").run();
+    // Scope delete to repos with unresolved imports, not full-table wipe
+    const sourceRepoIds = [...new Set(unresolved.map((u) => u.source_repo_id))];
+    const delStmt = db.prepare("DELETE FROM cross_repo_edges WHERE source_repo_id = ?");
+    for (const repoId of sourceRepoIds) {
+      delStmt.run(repoId);
+    }
 
     for (const imp of unresolved) {
       const match = tryResolveAcrossRepos(
@@ -172,6 +201,7 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
         imp.source_file_path,
         imp.source_repo_id,
         filesByRepo,
+        packageNames,
       );
 
       if (match) {
@@ -199,6 +229,29 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
 }
 
 /**
+ * Load the package.json "name" field for each repo, keyed by repo ID.
+ */
+async function loadPackageNames(
+  repos: { id: number; rootPath: string }[],
+): Promise<Map<number, string>> {
+  const names = new Map<number, string>();
+  await Promise.all(
+    repos.map(async (repo) => {
+      try {
+        const raw = await fs.readFile(path.join(repo.rootPath, "package.json"), "utf-8");
+        const pkg = JSON.parse(raw);
+        if (typeof pkg.name === "string" && pkg.name.length > 0) {
+          names.set(repo.id, pkg.name);
+        }
+      } catch {
+        // No package.json or unreadable — skip
+      }
+    }),
+  );
+  return names;
+}
+
+/**
  * Try to resolve an import against files in other repos.
  */
 function tryResolveAcrossRepos(
@@ -207,12 +260,13 @@ function tryResolveAcrossRepos(
   sourceFilePath: string,
   sourceRepoId: number,
   filesByRepo: Map<number, RepoFile[]>,
+  packageNames: Map<number, string>,
 ): RepoFile | null {
   for (const [repoId, files] of filesByRepo) {
     if (repoId === sourceRepoId) continue;
 
     if (language === "typescript" || language === "javascript") {
-      const match = resolveTsAcrossRepo(importedModule, files);
+      const match = resolveTsAcrossRepo(importedModule, files, packageNames.get(repoId));
       if (match) return match;
     } else if (language === "python") {
       const match = resolvePythonAcrossRepo(importedModule, files);
@@ -222,30 +276,54 @@ function tryResolveAcrossRepos(
   return null;
 }
 
-function resolveTsAcrossRepo(module: string, files: RepoFile[]): RepoFile | null {
+function resolveTsAcrossRepo(
+  module: string,
+  files: RepoFile[],
+  packageName?: string,
+): RepoFile | null {
   // Skip relative imports — those are intra-repo
   if (module.startsWith(".") || module.startsWith("/")) return null;
 
-  // Try matching against file paths that look like the module
-  // e.g., "lodash/merge" → find "src/merge.ts" in a repo named "lodash"
+  // Match bare specifier against package.json name.
+  // e.g., import { foo } from "my-utils" matches repo with package.json name "my-utils"
+  // Also handles scoped subpath: "my-utils/sub" where root segment matches the package name
+  if (packageName) {
+    const rootSegment = module.includes("/") ? module.split("/")[0] : module;
+    // Handle scoped packages: "@scope/pkg" → compare full scoped name
+    const specifierRoot = module.startsWith("@")
+      ? module.split("/").slice(0, 2).join("/")
+      : rootSegment;
+    const subpath = module.startsWith("@")
+      ? module.split("/").slice(2).join("/")
+      : module.includes("/")
+        ? module.split("/").slice(1).join("/")
+        : null;
+
+    if (specifierRoot === packageName) {
+      // Exact package match — resolve to entry point or subpath
+      if (subpath) {
+        return resolveSubpath(subpath, files);
+      }
+      // Look for index/main entry point
+      return resolveEntryPoint(files);
+    }
+  }
+
+  // Fall back to file-path heuristics
   const extensions = [".ts", ".tsx", ".js", ".jsx"];
 
-  // Check if any file matches module/index or module directly
   for (const file of files) {
     const basename = path.basename(file.filePath, path.extname(file.filePath));
     const dirname = path.dirname(file.filePath);
 
-    // Direct match: module === basename at root level
     if (basename === module && (dirname === "." || dirname === "src")) {
       return file;
     }
 
-    // Module path match: "module/sub" → "src/sub.ts" etc.
     for (const ext of extensions) {
       if (file.filePath === `${module}${ext}` || file.filePath === `src/${module}${ext}`) {
         return file;
       }
-      // Index file match
       if (
         file.filePath === `${module}/index${ext}` ||
         file.filePath === `src/${module}/index${ext}`
@@ -255,6 +333,35 @@ function resolveTsAcrossRepo(module: string, files: RepoFile[]): RepoFile | null
     }
   }
 
+  return null;
+}
+
+function resolveSubpath(subpath: string, files: RepoFile[]): RepoFile | null {
+  const extensions = [".ts", ".tsx", ".js", ".jsx"];
+  for (const ext of extensions) {
+    for (const file of files) {
+      if (
+        file.filePath === `${subpath}${ext}` ||
+        file.filePath === `src/${subpath}${ext}` ||
+        file.filePath === `${subpath}/index${ext}` ||
+        file.filePath === `src/${subpath}/index${ext}`
+      ) {
+        return file;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveEntryPoint(files: RepoFile[]): RepoFile | null {
+  const extensions = [".ts", ".tsx", ".js", ".jsx"];
+  for (const ext of extensions) {
+    for (const file of files) {
+      if (file.filePath === `index${ext}` || file.filePath === `src/index${ext}`) {
+        return file;
+      }
+    }
+  }
   return null;
 }
 
