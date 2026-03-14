@@ -162,9 +162,7 @@ export async function generateIntent(repoRoot: string, outPath?: string): Promis
 
   if (outPath) {
     writeFileSync(outPath, output, "utf-8");
-    console.log(`Wrote AGENTS.md to ${outPath}`);
-  } else {
-    process.stdout.write(output);
+    process.stderr.write(`Wrote AGENTS.md to ${outPath}\n`);
   }
 
   return output;
