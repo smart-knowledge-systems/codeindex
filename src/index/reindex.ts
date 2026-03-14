@@ -1,6 +1,6 @@
 import path from "path";
 import { loadConfig, detectFormatter } from "../config";
-import { pgUnsafe } from "../db/pg";
+import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import { extractSkeletonWithEntries, initParser } from "./skeleton";
@@ -26,15 +26,18 @@ export async function reindexSingleFile(
   if (!(await file.exists())) {
     // File was deleted — remove from index
     if (config.store === "pg") {
-      const rows = (await pgUnsafe("SELECT id FROM files WHERE repo_id = $1 AND file_path = $2", [
-        repoId,
-        relPath,
-      ])) as { id: number }[];
-      if (rows.length > 0) {
-        await pgUnsafe("DELETE FROM file_commits WHERE file_id = $1", [rows[0].id]);
-        await pgUnsafe("DELETE FROM file_imports WHERE source_file_id = $1", [rows[0].id]);
-        await pgUnsafe("DELETE FROM files WHERE id = $1", [rows[0].id]);
-      }
+      const pg = await getPg();
+      await pg.begin(async (tx) => {
+        const rows = (await tx.unsafe(
+          "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
+          [repoId, relPath],
+        )) as { id: number }[];
+        if (rows.length > 0) {
+          await tx.unsafe("DELETE FROM file_commits WHERE file_id = $1", [rows[0].id]);
+          await tx.unsafe("DELETE FROM file_imports WHERE source_file_id = $1", [rows[0].id]);
+          await tx.unsafe("DELETE FROM files WHERE id = $1", [rows[0].id]);
+        }
+      });
     } else {
       const db = await getSqlite(repoRoot);
       const rows = db
