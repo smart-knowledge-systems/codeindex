@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import * as sqliteVec from "sqlite-vec";
 import ignore from "ignore";
 import { getPg } from "./pg";
+import { loadConfig } from "../config";
 
 export interface ExportOptions {
   redactEmbeddings?: boolean;
@@ -45,6 +46,8 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
   const redactEmbeddings = opts.redactEmbeddings ?? EXPORT_DEFAULTS.redactEmbeddings;
   const redactCommits = opts.redactCommits ?? EXPORT_DEFAULTS.redactCommits;
   const excludePatterns = opts.excludePatterns ?? [];
+  const config = opts.repoRoot ? await loadConfig(opts.repoRoot) : null;
+  const dims = config?.embedding?.dimensions ?? 1536;
 
   // Build exclude filter from .indexignore + explicit patterns
   const indexignorePatterns = opts.repoRoot
@@ -83,13 +86,13 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
   if (!redactEmbeddings) {
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS file_embeddings USING vec0(
-        file_id integer PRIMARY KEY, embedding float[1536]
+        file_id integer PRIMARY KEY, embedding float[${dims}]
       );
       CREATE VIRTUAL TABLE IF NOT EXISTS dir_concat_embeddings USING vec0(
-        dir_id integer PRIMARY KEY, embedding float[1536]
+        dir_id integer PRIMARY KEY, embedding float[${dims}]
       );
       CREATE VIRTUAL TABLE IF NOT EXISTS dir_summary_embeddings USING vec0(
-        dir_id integer PRIMARY KEY, embedding float[1536]
+        dir_id integer PRIMARY KEY, embedding float[${dims}]
       );
     `);
   }
@@ -109,7 +112,7 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
     if (!redactEmbeddings) {
       db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS commit_embeddings USING vec0(
-          commit_id integer PRIMARY KEY, embedding float[1536]
+          commit_id integer PRIMARY KEY, embedding float[${dims}]
         );
       `);
     }
