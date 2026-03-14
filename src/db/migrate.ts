@@ -140,8 +140,7 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
       )
       .filter((s) => s.length > 0);
 
-    db.exec("BEGIN");
-    try {
+    const runMigration = db.transaction(() => {
       for (const stmt of statements) {
         db.exec(stmt);
       }
@@ -153,11 +152,12 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
           "INSERT OR REPLACE INTO migration_checksums (version, filename, checksum) VALUES (?, ?, ?)",
         ).run(m.version, m.filename, sha256(m.sql));
       }
+    });
 
-      db.exec("COMMIT");
+    try {
+      runMigration();
       applied.push(m.version);
     } catch (err) {
-      db.exec("ROLLBACK");
       throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
     }
   }
