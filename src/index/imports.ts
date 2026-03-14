@@ -290,6 +290,24 @@ function resolvePythonImport(module: string, allFiles: Set<string>): string | nu
  * For example, if go.mod declares "module github.com/user/project" and the
  * import is "github.com/user/project/pkg/foo", resolves to "pkg/foo/*.go".
  */
+// Pre-built index mapping directory paths to a representative .go file
+let goDirIndex: Map<string, string> | null = null;
+let goDirIndexSource: Set<string> | null = null;
+
+function getGoDirIndex(allFiles: Set<string>): Map<string, string> {
+  if (goDirIndex && goDirIndexSource === allFiles) return goDirIndex;
+  goDirIndex = new Map();
+  goDirIndexSource = allFiles;
+  for (const file of allFiles) {
+    if (!file.endsWith(".go")) continue;
+    const dir = path.dirname(file);
+    if (!goDirIndex.has(dir)) {
+      goDirIndex.set(dir, file);
+    }
+  }
+  return goDirIndex;
+}
+
 function resolveGoImport(
   importPath: string,
   sourceFile: string,
@@ -299,18 +317,14 @@ function resolveGoImport(
   const firstSegment = importPath.split("/")[0];
   if (!firstSegment.includes(".")) return null;
 
-  // Try to find the go.mod module path by scanning indexed files
-  // Look for the import path suffix in indexed .go files
+  const dirIndex = getGoDirIndex(allFiles);
   const segments = importPath.split("/");
 
   // Try progressively shorter suffixes of the import path as directory paths
   for (let i = 0; i < segments.length; i++) {
     const dirSuffix = segments.slice(i).join("/");
 
-    // Look for .go files in this directory
-    for (const file of allFiles) {
-      if (!file.endsWith(".go")) continue;
-      const dir = path.dirname(file);
+    for (const [dir, file] of dirIndex) {
       if (dir === dirSuffix || dir.endsWith("/" + dirSuffix)) {
         return file;
       }
