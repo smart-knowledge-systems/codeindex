@@ -68,6 +68,10 @@ export async function reindexSingleFile(
         if (rows.length > 0) {
           await tx.unsafe("DELETE FROM file_commits WHERE file_id = $1", [rows[0].id]);
           await tx.unsafe("DELETE FROM file_imports WHERE source_file_id = $1", [rows[0].id]);
+          await tx.unsafe(
+            "UPDATE file_imports SET resolved_file_id = NULL WHERE resolved_file_id = $1",
+            [rows[0].id],
+          );
           await tx.unsafe("DELETE FROM files WHERE id = $1", [rows[0].id]);
         }
       });
@@ -81,6 +85,9 @@ export async function reindexSingleFile(
           db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(rows[0].id);
           db.prepare("DELETE FROM file_commits WHERE file_id = ?").run(rows[0].id);
           db.prepare("DELETE FROM file_imports WHERE source_file_id = ?").run(rows[0].id);
+          db.prepare(
+            "UPDATE file_imports SET resolved_file_id = NULL WHERE resolved_file_id = ?",
+          ).run(rows[0].id);
           db.prepare("DELETE FROM files WHERE id = ?").run(rows[0].id);
         })();
       }
