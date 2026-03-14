@@ -10,7 +10,9 @@ import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { getCostSummary } from "../cost";
 import { runHealthCheck } from "../check/runner";
+import { getCurrentSchemaVersion } from "../db/migrate";
 import type { SearchResult } from "../search/types";
+import { CodeindexError, formatError } from "../errors";
 import { validateRepoScope, type AuthSession } from "./auth";
 import { recordEvent } from "../telemetry";
 
@@ -385,6 +387,88 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           },
         ],
       };
+    },
+  );
+
+  // --- health tool ---
+  mcp.tool(
+    "health",
+    "Returns system health: schema version, DB connectivity, repo/file counts, and last reindex timestamp.",
+    {
+      repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
+    },
+    async ({ repoPath }) => {
+      const repoRoot = repoPath ?? defaultRepoRoot;
+      const config = await loadConfig(repoRoot);
+      const backend = config.store;
+
+      try {
+        const schemaVersion = await getCurrentSchemaVersion(backend, repoRoot);
+        let repoCount = 0;
+        let fileCount = 0;
+        let lastReindexAt: string | null = null;
+
+        if (backend === "pg") {
+          const repos = await pgUnsafe("SELECT count(*) as cnt FROM repos");
+          repoCount = Number(repos[0].cnt);
+          const files = await pgUnsafe("SELECT count(*) as cnt FROM files");
+          fileCount = Number(files[0].cnt);
+          const lastIdx = await pgUnsafe("SELECT max(indexed_at)::text as last FROM files");
+          lastReindexAt = lastIdx[0].last ?? null;
+        } else {
+          const db = await getSqlite(repoRoot);
+          const repos = db.prepare("SELECT count(*) as cnt FROM repos").get() as {
+            cnt: number;
+          };
+          repoCount = repos.cnt;
+          const files = db.prepare("SELECT count(*) as cnt FROM files").get() as {
+            cnt: number;
+          };
+          fileCount = files.cnt;
+          const lastIdx = db.prepare("SELECT max(indexed_at) as last FROM files").get() as {
+            last: string | null;
+          };
+          lastReindexAt = lastIdx.last ?? null;
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  schemaVersion,
+                  connectionOk: true,
+                  repoCount,
+                  fileCount,
+                  lastReindexAt,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  schemaVersion: 0,
+                  connectionOk: false,
+                  repoCount: 0,
+                  fileCount: 0,
+                  lastReindexAt: null,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
     },
   );
 
