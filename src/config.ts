@@ -15,6 +15,7 @@ const DEFAULTS: CodeindexConfig = {
   embedding: {
     model: "text-embedding-3-small",
     dimensions: 1536,
+    provider: "openai",
   },
   scoring: {
     commitDecay: 0.2,
@@ -23,9 +24,13 @@ const DEFAULTS: CodeindexConfig = {
     beta: 0.2,
     gamma: 0.1,
     minScore: 0.3,
+    parentBoostMultiplier: 0.3,
+    hybridWeight: 0.3,
+    lengthPenaltyWeight: 0.1,
   },
   formatter: null,
   skeletonFallbackLines: 50,
+  costCap: { maxCostPerReindex: null, warnAt: null },
 };
 
 const GLOBAL_CONFIG_PATH = path.join(

@@ -1,59 +1,56 @@
-import OpenAI from "openai";
+import type { EmbeddingProvider } from "./embedding-provider";
+import type { CodeindexConfig } from "../search/types";
+import { OpenAIEmbeddingProvider } from "./providers/openai";
+import { OllamaEmbeddingProvider } from "./providers/ollama";
 
-const MODEL = "text-embedding-3-small";
-const DIMENSIONS = 1536;
-const BATCH_SIZE = 2048;
-const MAX_RETRIES = 3;
-
-let client: OpenAI | null = null;
-
-function getClient(): OpenAI {
-  if (!client) {
-    client = new OpenAI();
-  }
-  return client;
-}
+const MAX_EMBED_CHARS = 4_000; // ~8000 tokens max; code averages ~2 tokens/char
 
 function sanitize(text: string): string {
-  return text.length === 0 ? " " : text;
+  if (text.length === 0) return " ";
+  return text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
 }
 
-async function embedBatch(texts: string[], attempt = 0): Promise<number[][]> {
-  try {
-    const response = await getClient().embeddings.create({
-      model: MODEL,
-      dimensions: DIMENSIONS,
-      input: texts,
-    });
-    return response.data.sort((a, b) => a.index - b.index).map((item) => item.embedding);
-  } catch (err) {
-    const isRateLimit = err instanceof OpenAI.APIError && err.status === 429;
-    if (isRateLimit && attempt < MAX_RETRIES) {
-      const delay = 1000 * Math.pow(2, attempt);
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      return embedBatch(texts, attempt + 1);
-    }
-    throw err;
+const _providers = new Map<string, EmbeddingProvider>();
+const DEFAULT_KEY = "openai:text-embedding-3-small:1536:";
+
+/** Get or create the configured embedding provider. */
+export function getProvider(config?: CodeindexConfig): EmbeddingProvider {
+  if (!config) {
+    const cached = _providers.get(DEFAULT_KEY);
+    if (cached) return cached;
+    const p = new OpenAIEmbeddingProvider();
+    _providers.set(DEFAULT_KEY, p);
+    return p;
   }
+
+  const { provider, model, dimensions, ollamaUrl } = config.embedding;
+  const key = `${provider}:${model}:${dimensions}:${ollamaUrl ?? ""}`;
+
+  const cached = _providers.get(key);
+  if (cached) return cached;
+
+  const p =
+    provider === "ollama"
+      ? new OllamaEmbeddingProvider(model, dimensions, ollamaUrl)
+      : new OpenAIEmbeddingProvider(model, dimensions);
+  _providers.set(key, p);
+
+  return p;
 }
 
-export async function embed(texts: string | string[]): Promise<number[][]> {
+/** Reset all cached providers. */
+export function resetProvider(): void {
+  _providers.clear();
+}
+
+export async function embed(
+  texts: string | string[],
+  config?: CodeindexConfig,
+): Promise<number[][]> {
   const input = (Array.isArray(texts) ? texts : [texts]).map(sanitize);
-
-  if (input.length <= BATCH_SIZE) {
-    return embedBatch(input);
-  }
-
-  const results: number[][] = [];
-  for (let i = 0; i < input.length; i += BATCH_SIZE) {
-    const chunk = input.slice(i, i + BATCH_SIZE);
-    const chunkResults = await embedBatch(chunk);
-    results.push(...chunkResults);
-  }
-  return results;
+  return getProvider(config).embed(input);
 }
 
-export async function embedSingle(text: string): Promise<number[]> {
-  const results = await embed(text);
-  return results[0];
+export async function embedSingle(text: string, config?: CodeindexConfig): Promise<number[]> {
+  return getProvider(config).embedSingle(sanitize(text));
 }

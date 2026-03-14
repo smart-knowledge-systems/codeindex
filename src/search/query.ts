@@ -1,10 +1,11 @@
 import path from "path";
 import { loadConfig } from "../config";
 import { embedSingle } from "../index/embedder";
-import { pgUnsafe } from "../db/pg";
+import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
-import type { SearchOptions, SearchResult, ScoringConfig } from "./types";
+import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
+import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -46,6 +47,7 @@ interface PgFileLinkRow {
 interface PgRepoRow {
   id: string;
   root_path: string;
+  name: string;
 }
 
 interface SqliteFileRow {
@@ -84,6 +86,64 @@ interface SqliteFileLinkRow {
 interface SqliteRepoRow {
   id: number;
   root_path: string;
+  name: string;
+}
+
+// ---------------------------------------------------------------------------
+// Scope filtering helpers
+// ---------------------------------------------------------------------------
+
+const LANG_ALIASES: Record<string, string[]> = {
+  ts: [".ts", ".tsx"],
+  typescript: [".ts", ".tsx"],
+  js: [".js", ".jsx"],
+  javascript: [".js", ".jsx"],
+  python: [".py"],
+  py: [".py"],
+  rust: [".rs"],
+  rs: [".rs"],
+  go: [".go"],
+  java: [".java"],
+  c: [".c", ".h"],
+  cpp: [".cpp", ".hpp", ".cc", ".cxx", ".hh"],
+  "c++": [".cpp", ".hpp", ".cc", ".cxx", ".hh"],
+  csharp: [".cs"],
+  "c#": [".cs"],
+  cs: [".cs"],
+};
+
+function resolveLangExtensions(langs: string[]): string[] {
+  const exts = new Set<string>();
+  for (const lang of langs) {
+    const key = lang.toLowerCase();
+    const mapped = LANG_ALIASES[key];
+    if (mapped) {
+      for (const e of mapped) exts.add(e);
+    } else {
+      // Treat as raw extension: ".foo" or "foo" -> ".foo"
+      exts.add(key.startsWith(".") ? key : `.${key}`);
+    }
+  }
+  return [...exts];
+}
+
+function parseSince(since: string): Date {
+  const match = since.match(/^(\d+)([dwm])$/);
+  if (match) {
+    const n = parseInt(match[1]);
+    const unit = match[2];
+    const now = new Date();
+    if (unit === "d") now.setDate(now.getDate() - n);
+    else if (unit === "w") now.setDate(now.getDate() - n * 7);
+    else if (unit === "m") now.setMonth(now.getMonth() - n);
+    return now;
+  }
+  // Try ISO date
+  const d = new Date(since);
+  if (isNaN(d.getTime())) {
+    throw new Error(`Invalid --since value: "${since}". Use Nd, Nw, Nm, or ISO date.`);
+  }
+  return d;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,22 +171,105 @@ async function searchPg(
   repoIds: number[],
   currentRepoId: number,
   queryEmbedding: number[],
+  query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
 ): Promise<SearchResult[]> {
+  const pg = await getPg();
+
+  // Use pg.begin() to pin to a single connection so SET LOCAL hnsw.ef_search
+  // applies to all queries in the transaction
+  return pg.begin(async (tx) => {
+    return await searchPgInTransaction(
+      tx,
+      repoIds,
+      currentRepoId,
+      queryEmbedding,
+      query,
+      options,
+      scoring,
+    );
+  });
+}
+
+async function searchPgInTransaction(
+  pg: InstanceType<typeof import("bun").SQL>,
+  repoIds: number[],
+  currentRepoId: number,
+  queryEmbedding: number[],
+  query: string,
+  options: Required<SearchOptions>,
+  scoring: ScoringConfig,
+): Promise<SearchResult[]> {
+  await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
   const repoIdList = repoIds.join(",");
 
+  // Resolve scope filters
+  const langExts =
+    options.lang && options.lang.length > 0 ? resolveLangExtensions(options.lang) : null;
+  const dirFilters = options.dir && options.dir.length > 0 ? options.dir : null;
+  const sinceDate = options.since ? parseSince(options.since) : null;
+
+  // --- Repo info map ---
+  const repoInfoRows = (await pg.unsafe(
+    `SELECT id, root_path, name FROM repos WHERE id IN (${repoIdList})`,
+  )) as PgRepoRow[];
+  const repoInfoMap = new Map<number, { name: string; rootPath: string }>();
+  for (const r of repoInfoRows) {
+    repoInfoMap.set(parseInt(r.id), { name: r.name, rootPath: r.root_path });
+  }
+
   // --- Files ---
-  const fileRows = (await pgUnsafe(
+  let fileFilterSql = "";
+  const fileFilterParams: string[] = [];
+  let paramIdx = 1;
+
+  if (langExts) {
+    fileFilterSql += ` AND file_type IN (${langExts.map(() => `$${paramIdx++}`).join(",")})`;
+    fileFilterParams.push(...langExts);
+  }
+  if (dirFilters) {
+    const dirConds = dirFilters.map(() => `file_path LIKE $${paramIdx++}`).join(" OR ");
+    fileFilterSql += ` AND (${dirConds})`;
+    fileFilterParams.push(...dirFilters.map((d) => `${d.replace(/\/$/, "")}/%`));
+  }
+  if (sinceDate) {
+    fileFilterSql += ` AND id IN (SELECT fc.file_id FROM file_commits fc JOIN commits c ON c.id = fc.commit_id WHERE c.authored_at >= $${paramIdx++})`;
+    fileFilterParams.push(sinceDate.toISOString());
+  }
+
+  const fileRows = (await pg.unsafe(
     `SELECT id, repo_id, file_path, skeleton, file_type,
             1 - (embedding <=> ${vecLiteral}) AS similarity
      FROM files
-     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL`,
+     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL${fileFilterSql}`,
+    fileFilterParams.length > 0 ? (fileFilterParams as never[]) : undefined,
   )) as PgFileRow[];
 
   // --- Directories ---
-  const dirRows = (await pgUnsafe(
+  let dirFilterSql = "";
+  const dirFilterParams: unknown[] = [];
+  let dirParamIdx = 1;
+
+  if (dirFilters) {
+    const dirConds = dirFilters
+      .map(() => {
+        const p1 = `$${dirParamIdx++}`;
+        const p2 = `$${dirParamIdx++}`;
+        return `(dir_path LIKE ${p1} OR dir_path = ${p2})`;
+      })
+      .join(" OR ");
+    dirFilterSql += ` AND (${dirConds})`;
+    dirFilterParams.push(
+      ...dirFilters.flatMap((d) => {
+        const clean = d.replace(/\/$/, "");
+        return [`${clean}/%`, clean];
+      }),
+    );
+  }
+
+  const dirRows = (await pg.unsafe(
     `SELECT id, repo_id, dir_path, summary,
             1 - (concat_embedding <=> ${vecLiteral}) AS concat_sim,
             CASE WHEN summary_embedding IS NOT NULL
@@ -134,19 +277,29 @@ async function searchPg(
                  ELSE 0
             END AS summary_sim
      FROM directories
-     WHERE repo_id IN (${repoIdList}) AND concat_embedding IS NOT NULL`,
+     WHERE repo_id IN (${repoIdList}) AND concat_embedding IS NOT NULL${dirFilterSql}`,
+    dirFilterParams.length > 0 ? (dirFilterParams as never[]) : undefined,
   )) as PgDirRow[];
 
   // --- Commits ---
-  const commitRows = (await pgUnsafe(
+  let commitFilterSql = "";
+  const commitFilterParams: unknown[] = [];
+
+  if (sinceDate) {
+    commitFilterSql += ` AND authored_at >= $1`;
+    commitFilterParams.push(sinceDate.toISOString());
+  }
+
+  const commitRows = (await pg.unsafe(
     `SELECT id, repo_id, commit_hash, message,
             1 - (embedding <=> ${vecLiteral}) AS similarity
      FROM commits
-     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL`,
+     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL${commitFilterSql}`,
+    commitFilterParams.length > 0 ? (commitFilterParams as never[]) : undefined,
   )) as PgCommitRow[];
 
   // --- File–commit links for boost (limited to commitDepth) ---
-  const linkRows = (await pgUnsafe(
+  const linkRows = (await pg.unsafe(
     `SELECT fc.file_id, fc.commit_id, fc.recency,
             1 - (c.embedding <=> ${vecLiteral}) AS similarity
      FROM file_commits fc
@@ -156,7 +309,7 @@ async function searchPg(
      )
      AND fc.recency <= $1
      AND c.embedding IS NOT NULL`,
-    [scoring.commitDepth],
+    [scoring.commitDepth] as never[],
   )) as PgFileLinkRow[];
 
   // Build dir similarity map: dir_path -> similarity
@@ -197,6 +350,24 @@ async function searchPg(
   // Collect child file scores per directory for child-to-parent propagation
   const childScoresByDir = new Map<string, number[]>();
 
+  // --- BM25 hybrid scoring ---
+  const { hybridWeight, lengthPenaltyWeight } = scoring;
+  const bm25Docs = fileRows.filter((r) => r.skeleton).map((r) => ({ id: r.id, text: r.skeleton! }));
+  const bm25Index = bm25Docs.length > 0 ? buildBM25Index(bm25Docs) : null;
+  const bm25Scores = bm25Index ? scoreBM25(bm25Index, query) : new Map<string, number>();
+  const maxBM25 = bm25Scores.size > 0 ? Math.max(...bm25Scores.values()) : 1;
+
+  // Average skeleton token count for length normalization (approximate: chars / 4)
+  let totalTokenCount = 0;
+  let skeletonCount = 0;
+  for (const row of fileRows) {
+    if (row.skeleton) {
+      totalTokenCount += row.skeleton.length / 4;
+      skeletonCount++;
+    }
+  }
+  const avgTokenCount = skeletonCount > 0 ? totalTokenCount / skeletonCount : 1;
+
   // --- File results ---
   for (const row of fileRows) {
     const fileId = parseInt(row.id);
@@ -208,28 +379,59 @@ async function searchPg(
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? 0.3 * dirSim : 0;
+    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
-    const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
+    // Length normalization penalty (token-approximated skeleton length)
+    const tokenCount = (row.skeleton?.length ?? 0) / 4;
+    const lengthPenalty =
+      tokenCount > 0 ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight : 0;
+
+    // Semantic score with length penalty
+    const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
+
+    // BM25 keyword score
+    const rawBM25 = bm25Scores.get(row.id) ?? 0;
+    const normalizedBM25 = maxBM25 > 0 ? rawBM25 / maxBM25 : 0;
+
+    // Hybrid fusion
+    const finalScore =
+      hybridWeight > 0
+        ? (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
+        : semanticScore;
+
     if (finalScore >= minScore) {
-      // Track child scores for parent directory boosting
       const scores = childScoresByDir.get(dirKey) ?? [];
       scores.push(finalScore);
       childScoresByDir.set(dirKey, scores);
     }
     if (finalScore < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(repoId);
     const result: SearchResult = {
       filePath: row.file_path,
       cosineSimilarity: fileSim,
       finalScore,
       type: row.file_type,
       inProject: repoId === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
+    if (normalizedBM25 > 0) result.keywordScore = normalizedBM25;
     if (repoId !== currentRepoId) result.repoId = row.repo_id;
     if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
     const commitIds = commitIdsByFileId.get(fileId);
     if (commitIds && commitIds.length > 0) result.commitIds = commitIds;
+    if (options.explain) {
+      result.explanation = {
+        cosineSimilarity: fileSim,
+        commitBoost,
+        parentBoost,
+        keywordScore: normalizedBM25,
+        lengthPenalty,
+        weights: { alpha, beta, gamma },
+        formula: `(1-${hybridWeight})*[${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} - ${lengthPenalty.toFixed(3)}] + ${hybridWeight}*${normalizedBM25.toFixed(3)} = ${finalScore.toFixed(3)}`,
+      };
+    }
     results.push(result);
   }
 
@@ -251,15 +453,30 @@ async function searchPg(
 
     if (finalScore < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(repoId);
     const result: SearchResult = {
       filePath: row.dir_path,
       cosineSimilarity: Math.max(concatSim, summarySim),
       finalScore,
       type: "dir",
       inProject: repoId === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (repoId !== currentRepoId) result.repoId = row.repo_id;
     if (includeSummary && row.summary) result.summary = row.summary;
+    if (options.explain) {
+      const baseSim = Math.max(concatSim, summarySim);
+      const childBoost = finalScore - baseSim;
+      result.explanation = {
+        cosineSimilarity: baseSim,
+        commitBoost: 0,
+        parentBoost: 0,
+        childBoost,
+        weights: { alpha, beta, gamma },
+        formula: `${baseSim.toFixed(3)} + γ*childAvg = ${finalScore.toFixed(3)}`,
+      };
+    }
     results.push(result);
   }
 
@@ -269,12 +486,15 @@ async function searchPg(
     const similarity = parseFloat(row.similarity);
     if (similarity < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(repoId);
     const result: SearchResult = {
       filePath: row.commit_hash,
       cosineSimilarity: similarity,
       finalScore: similarity,
       type: "commit",
       inProject: repoId === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (repoId !== currentRepoId) result.repoId = row.repo_id;
     results.push(result);
@@ -292,52 +512,123 @@ async function searchSqlite(
   currentRepoId: number,
   repoRoot: string,
   queryEmbedding: number[],
+  query: string,
   options: Required<SearchOptions>,
   scoring: ScoringConfig,
 ): Promise<SearchResult[]> {
   const db = await getSqlite(repoRoot);
   const embBuf = serializeEmbedding(queryEmbedding);
   const repoIdList = repoIds.join(",");
+  // Resolve scope filters
+  const langExts =
+    options.lang && options.lang.length > 0 ? resolveLangExtensions(options.lang) : null;
+  const dirFilters = options.dir && options.dir.length > 0 ? options.dir : null;
+  const sinceDate = options.since ? parseSince(options.since) : null;
 
-  // --- Files ---
+  // Increase KNN over-fetch when scope filters are active to avoid under-returning
+  const hasFilters = !!(langExts || dirFilters || sinceDate);
+  const knnLimit = Math.max((options.topN || 50) * (hasFilters ? 10 : 3), hasFilters ? 500 : 200);
+
+  // --- Repo info map ---
+  const repoInfoRows = db
+    .prepare(`SELECT id, root_path, name FROM repos WHERE id IN (${repoIdList})`)
+    .all() as SqliteRepoRow[];
+  const repoInfoMap = new Map<number, { name: string; rootPath: string }>();
+  for (const r of repoInfoRows) {
+    repoInfoMap.set(r.id, { name: r.name, rootPath: r.root_path });
+  }
+
+  // --- Files (KNN via vec0 MATCH) ---
+  // KNN queries in sqlite-vec don't support arbitrary WHERE; post-filter instead
+  let fileFilterSql = "";
+  const fileFilterParams: string[] = [];
+  if (langExts) {
+    fileFilterSql += ` AND f.file_type IN (${langExts.map(() => "?").join(",")})`;
+    fileFilterParams.push(...langExts);
+  }
+  if (dirFilters) {
+    const dirConds = dirFilters.map(() => "f.file_path LIKE ?").join(" OR ");
+    fileFilterSql += ` AND (${dirConds})`;
+    fileFilterParams.push(...dirFilters.map((d) => `${d.replace(/\/$/, "")}/%`));
+  }
+  if (sinceDate) {
+    fileFilterSql += ` AND f.id IN (SELECT fc.file_id FROM file_commits fc JOIN commits c ON c.id = fc.commit_id WHERE c.authored_at >= ?)`;
+    fileFilterParams.push(sinceDate.toISOString());
+  }
+
   const fileRows = db
     .prepare(
       `SELECT f.id, f.repo_id, f.file_path, f.skeleton, f.file_type,
-              vec_distance_cosine(fe.embedding, ?) AS distance
-       FROM files f
-       JOIN file_embeddings fe ON f.id = fe.file_id
-       WHERE f.repo_id IN (${repoIdList})`,
+              fe.distance
+       FROM file_embeddings fe
+       JOIN files f ON f.id = fe.file_id
+       WHERE fe.embedding MATCH ? AND fe.k = ?
+         AND f.repo_id IN (${repoIdList})${fileFilterSql}`,
     )
-    .all(embBuf) as SqliteFileRow[];
+    .all(embBuf, knnLimit, ...fileFilterParams) as SqliteFileRow[];
 
-  // --- Directories ---
-  const dirRows = db
+  // --- Directories (KNN via vec0 MATCH for concat, then point lookup for summary) ---
+  let dirFilterSql = "";
+  const dirFilterParams: string[] = [];
+  if (dirFilters) {
+    const dirConds = dirFilters.map(() => "(d.dir_path LIKE ? OR d.dir_path = ?)").join(" OR ");
+    dirFilterSql += ` AND (${dirConds})`;
+    dirFilterParams.push(
+      ...dirFilters.flatMap((d) => {
+        const clean = d.replace(/\/$/, "");
+        return [`${clean}/%`, clean];
+      }),
+    );
+  }
+
+  const dirConcatRows = db
     .prepare(
       `SELECT d.id, d.repo_id, d.dir_path, d.summary,
-              vec_distance_cosine(dce.embedding, ?) AS concat_distance,
-              CASE WHEN dse.embedding IS NOT NULL
-                   THEN vec_distance_cosine(dse.embedding, ?)
-                   ELSE NULL
-              END AS summary_distance
-       FROM directories d
-       LEFT JOIN dir_concat_embeddings dce ON d.id = dce.dir_id
-       LEFT JOIN dir_summary_embeddings dse ON d.id = dse.dir_id
-       WHERE d.repo_id IN (${repoIdList}) AND dce.embedding IS NOT NULL`,
+              dce.distance AS concat_distance
+       FROM dir_concat_embeddings dce
+       JOIN directories d ON d.id = dce.dir_id
+       WHERE dce.embedding MATCH ? AND dce.k = ?
+         AND d.repo_id IN (${repoIdList})${dirFilterSql}`,
     )
-    .all(embBuf, embBuf) as SqliteDirRow[];
+    .all(embBuf, knnLimit, ...dirFilterParams) as (SqliteDirRow & { concat_distance: number })[];
 
-  // --- Commits ---
+  // Enrich with summary distances where available
+  const dirRows: SqliteDirRow[] = dirConcatRows.map((row) => {
+    let summaryDistance: number | null = null;
+    try {
+      const summaryRow = db
+        .prepare(
+          `SELECT vec_distance_cosine(embedding, ?) AS distance
+           FROM dir_summary_embeddings WHERE dir_id = ?`,
+        )
+        .get(embBuf, row.id) as { distance: number } | null;
+      if (summaryRow) summaryDistance = summaryRow.distance;
+    } catch {
+      // No summary embedding for this directory
+    }
+    return { ...row, summary_distance: summaryDistance };
+  });
+
+  // --- Commits (KNN via vec0 MATCH) ---
+  let commitFilterSql = "";
+  const commitFilterParams: string[] = [];
+  if (sinceDate) {
+    commitFilterSql += ` AND c.authored_at >= ?`;
+    commitFilterParams.push(sinceDate.toISOString());
+  }
+
   const commitRows = db
     .prepare(
       `SELECT c.id, c.repo_id, c.commit_hash, c.message,
-              vec_distance_cosine(ce.embedding, ?) AS distance
-       FROM commits c
-       JOIN commit_embeddings ce ON c.id = ce.commit_id
-       WHERE c.repo_id IN (${repoIdList})`,
+              ce.distance
+       FROM commit_embeddings ce
+       JOIN commits c ON c.id = ce.commit_id
+       WHERE ce.embedding MATCH ? AND ce.k = ?
+         AND c.repo_id IN (${repoIdList})${commitFilterSql}`,
     )
-    .all(embBuf) as SqliteCommitRow[];
+    .all(embBuf, knnLimit, ...commitFilterParams) as SqliteCommitRow[];
 
-  // --- File–commit links ---
+  // --- File–commit links (point-to-point distance, not KNN) ---
   const linkRows = db
     .prepare(
       `SELECT fc.file_id, fc.commit_id, fc.recency,
@@ -381,6 +672,29 @@ async function searchSqlite(
   // Collect child file scores per directory for child-to-parent propagation
   const childScoresByDir = new Map<string, number[]>();
 
+  // --- BM25 hybrid scoring ---
+  const { hybridWeight, lengthPenaltyWeight } = scoring;
+  const bm25DocsSqlite = fileRows
+    .filter((r) => r.skeleton)
+    .map((r) => ({ id: String(r.id), text: r.skeleton! }));
+  const bm25IndexSqlite = bm25DocsSqlite.length > 0 ? buildBM25Index(bm25DocsSqlite) : null;
+  const bm25ScoresSqlite = bm25IndexSqlite
+    ? scoreBM25(bm25IndexSqlite, query)
+    : new Map<string, number>();
+  const maxBM25Sqlite = bm25ScoresSqlite.size > 0 ? Math.max(...bm25ScoresSqlite.values()) : 1;
+
+  // Average skeleton token count for length normalization (approximate: chars / 4)
+  let totalTokenCountSqlite = 0;
+  let skeletonCountSqlite = 0;
+  for (const row of fileRows) {
+    if (row.skeleton) {
+      totalTokenCountSqlite += row.skeleton.length / 4;
+      skeletonCountSqlite++;
+    }
+  }
+  const avgTokenCountSqlite =
+    skeletonCountSqlite > 0 ? totalTokenCountSqlite / skeletonCountSqlite : 1;
+
   // --- File results ---
   for (const row of fileRows) {
     const fileSim = 1 - row.distance;
@@ -390,9 +704,28 @@ async function searchSqlite(
     const parentDir = path.dirname(row.file_path);
     const dirKey = `${row.repo_id}:${parentDir}`;
     const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? 0.3 * dirSim : 0;
+    const parentBoost = dirSim > minScore ? scoring.parentBoostMultiplier * dirSim : 0;
 
-    const finalScore = fileSim + alpha * commitBoost + beta * parentBoost;
+    // Length normalization penalty (token-approximated skeleton length)
+    const tokenCount = (row.skeleton?.length ?? 0) / 4;
+    const lengthPenalty =
+      tokenCount > 0
+        ? Math.max(0, Math.log(tokenCount / avgTokenCountSqlite)) * lengthPenaltyWeight
+        : 0;
+
+    // Semantic score with length penalty
+    const semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty;
+
+    // BM25 keyword score
+    const rawBM25 = bm25ScoresSqlite.get(String(row.id)) ?? 0;
+    const normalizedBM25 = maxBM25Sqlite > 0 ? rawBM25 / maxBM25Sqlite : 0;
+
+    // Hybrid fusion
+    const finalScore =
+      hybridWeight > 0
+        ? (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
+        : semanticScore;
+
     if (finalScore >= minScore) {
       const scores = childScoresByDir.get(dirKey) ?? [];
       scores.push(finalScore);
@@ -400,17 +733,32 @@ async function searchSqlite(
     }
     if (finalScore < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(row.repo_id);
     const result: SearchResult = {
       filePath: row.file_path,
       cosineSimilarity: fileSim,
       finalScore,
       type: row.file_type,
       inProject: row.repo_id === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
+    if (normalizedBM25 > 0) result.keywordScore = normalizedBM25;
     if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
     if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
     const commitIds = commitIdsByFileId.get(row.id);
     if (commitIds && commitIds.length > 0) result.commitIds = commitIds;
+    if (options.explain) {
+      result.explanation = {
+        cosineSimilarity: fileSim,
+        commitBoost,
+        parentBoost,
+        keywordScore: normalizedBM25,
+        lengthPenalty,
+        weights: { alpha, beta, gamma },
+        formula: `(1-${hybridWeight})*[${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} - ${lengthPenalty.toFixed(3)}] + ${hybridWeight}*${normalizedBM25.toFixed(3)} = ${finalScore.toFixed(3)}`,
+      };
+    }
     results.push(result);
   }
 
@@ -431,15 +779,30 @@ async function searchSqlite(
 
     if (finalScore < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(row.repo_id);
     const result: SearchResult = {
       filePath: row.dir_path,
       cosineSimilarity: Math.max(concatSim, summarySim),
       finalScore,
       type: "dir",
       inProject: row.repo_id === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
     if (includeSummary && row.summary) result.summary = row.summary;
+    if (options.explain) {
+      const baseSim = Math.max(concatSim, summarySim);
+      const childBoost = finalScore - baseSim;
+      result.explanation = {
+        cosineSimilarity: baseSim,
+        commitBoost: 0,
+        parentBoost: 0,
+        childBoost,
+        weights: { alpha, beta, gamma },
+        formula: `${baseSim.toFixed(3)} + γ*childAvg = ${finalScore.toFixed(3)}`,
+      };
+    }
     results.push(result);
   }
 
@@ -448,12 +811,15 @@ async function searchSqlite(
     const similarity = 1 - row.distance;
     if (similarity < minScore) continue;
 
+    const repoInfo = repoInfoMap.get(row.repo_id);
     const result: SearchResult = {
       filePath: row.commit_hash,
       cosineSimilarity: similarity,
       finalScore: similarity,
       type: "commit",
       inProject: row.repo_id === currentRepoId,
+      repoName: repoInfo?.name,
+      repoPath: repoInfo?.rootPath,
     };
     if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
     results.push(result);
@@ -472,7 +838,7 @@ async function resolveRepoIds(
   config: Awaited<ReturnType<typeof loadConfig>>,
 ): Promise<{ repoIds: number[]; currentRepoId: number }> {
   if (config.store === "pg") {
-    const repos = (await pgUnsafe(`SELECT id, root_path FROM repos`)) as PgRepoRow[];
+    const repos = (await pgUnsafe(`SELECT id, root_path, name FROM repos`)) as PgRepoRow[];
 
     const currentRepo = repos.find((r) => r.root_path === repoRoot);
     const currentRepoId = currentRepo ? parseInt(currentRepo.id) : -1;
@@ -481,14 +847,14 @@ async function resolveRepoIds(
       return { repoIds: repos.map((r) => parseInt(r.id)), currentRepoId };
     }
     if (Array.isArray(scope)) {
-      const filtered = repos.filter((r) => scope.includes(r.root_path)).map((r) => parseInt(r.id));
+      const filtered = repos.filter((r) => scope.includes(r.name)).map((r) => parseInt(r.id));
       return { repoIds: filtered.length > 0 ? filtered : [currentRepoId], currentRepoId };
     }
     // "project" or undefined
     return { repoIds: currentRepoId !== -1 ? [currentRepoId] : [], currentRepoId };
   } else {
     const db = await getSqlite(repoRoot);
-    const repos = db.prepare(`SELECT id, root_path FROM repos`).all() as SqliteRepoRow[];
+    const repos = db.prepare(`SELECT id, root_path, name FROM repos`).all() as SqliteRepoRow[];
 
     const currentRepo = repos.find((r) => r.root_path === repoRoot);
     const currentRepoId = currentRepo ? currentRepo.id : -1;
@@ -497,7 +863,7 @@ async function resolveRepoIds(
       return { repoIds: repos.map((r) => r.id), currentRepoId };
     }
     if (Array.isArray(scope)) {
-      const filtered = repos.filter((r) => scope.includes(r.root_path)).map((r) => r.id);
+      const filtered = repos.filter((r) => scope.includes(r.name)).map((r) => r.id);
       return { repoIds: filtered.length > 0 ? filtered : [currentRepoId], currentRepoId };
     }
     return { repoIds: currentRepoId !== -1 ? [currentRepoId] : [], currentRepoId };
@@ -519,7 +885,9 @@ export async function search(
   options?: SearchOptions,
 ): Promise<SearchResult[]> {
   const config = await loadConfig(repoRoot);
-  const scoring = config.scoring;
+  const scoring: ScoringConfig = options?.scoringOverrides
+    ? { ...config.scoring, ...options.scoringOverrides }
+    : config.scoring;
 
   const resolvedOptions: Required<SearchOptions> = {
     minScore: options?.minScore ?? scoring.minScore,
@@ -527,6 +895,12 @@ export async function search(
     scope: options?.scope ?? "project",
     includeSkeleton: options?.includeSkeleton ?? false,
     includeSummary: options?.includeSummary ?? false,
+    includeSnippet: options?.includeSnippet ?? false,
+    scoringOverrides: options?.scoringOverrides ?? {},
+    lang: options?.lang ?? [],
+    dir: options?.dir ?? [],
+    since: options?.since ?? "",
+    explain: options?.explain ?? false,
   };
 
   const queryEmbedding = await embedSingle(query);
@@ -539,13 +913,21 @@ export async function search(
   let results: SearchResult[];
 
   if (config.store === "pg") {
-    results = await searchPg(repoIds, currentRepoId, queryEmbedding, resolvedOptions, scoring);
+    results = await searchPg(
+      repoIds,
+      currentRepoId,
+      queryEmbedding,
+      query,
+      resolvedOptions,
+      scoring,
+    );
   } else {
     results = await searchSqlite(
       repoIds,
       currentRepoId,
       repoRoot,
       queryEmbedding,
+      query,
       resolvedOptions,
       scoring,
     );
@@ -553,10 +935,112 @@ export async function search(
 
   results.sort((a, b) => b.finalScore - a.finalScore);
 
-  if (resolvedOptions.topN > 0) {
-    return results.slice(0, resolvedOptions.topN);
+  const finalResults = resolvedOptions.topN > 0 ? results.slice(0, resolvedOptions.topN) : results;
+
+  // Post-processing: attach snippets if requested
+  if (resolvedOptions.includeSnippet) {
+    await attachSnippets(repoRoot, config, finalResults, query);
   }
-  return results;
+
+  return finalResults;
+}
+
+// ---------------------------------------------------------------------------
+// Snippet post-processing
+// ---------------------------------------------------------------------------
+
+async function attachSnippets(
+  repoRoot: string,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+  results: SearchResult[],
+  query: string,
+): Promise<void> {
+  const queryWords = new Set(
+    query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 2),
+  );
+
+  for (const result of results) {
+    if (result.type === "dir" || result.type === "commit") continue;
+
+    // Load skeleton_entries from DB
+    let entriesJson: string | null = null;
+    if (config.store === "pg") {
+      const rows = await pgUnsafe(
+        "SELECT skeleton_entries FROM files WHERE repo_id IN (SELECT id FROM repos WHERE root_path = $1) AND file_path = $2",
+        [repoRoot, result.filePath],
+      );
+      if (rows.length > 0) entriesJson = rows[0].skeleton_entries as string | null;
+    } else {
+      const db = await getSqlite(repoRoot);
+      const rows = db
+        .prepare(
+          `SELECT f.skeleton_entries FROM files f
+           JOIN repos r ON r.id = f.repo_id
+           WHERE r.root_path = ? AND f.file_path = ?`,
+        )
+        .all(repoRoot, result.filePath) as { skeleton_entries: string | null }[];
+      if (rows.length > 0) entriesJson = rows[0].skeleton_entries;
+    }
+
+    if (!entriesJson) continue;
+
+    let entries: SkeletonEntry[];
+    try {
+      entries = JSON.parse(entriesJson);
+    } catch {
+      continue;
+    }
+    if (!entries || entries.length === 0) continue;
+
+    // Find best-matching entry via word-intersection score
+    let bestEntry: SkeletonEntry | null = null;
+    let bestScore = -1;
+    for (const entry of entries) {
+      const nameWords = entry.name
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 2);
+      const kindWords = entry.kind
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length > 2);
+      const allWords = [...nameWords, ...kindWords];
+      let score = 0;
+      for (const w of allWords) {
+        if (queryWords.has(w)) score++;
+        // Partial match bonus
+        for (const qw of queryWords) {
+          if (w.includes(qw) || qw.includes(w)) score += 0.5;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestEntry = entry;
+      }
+    }
+
+    // Fallback to first entry if no match
+    if (!bestEntry) bestEntry = entries[0];
+
+    result.lineStart = bestEntry.startLine;
+    result.lineEnd = bestEntry.endLine;
+
+    // Read source file and extract lines (cap at 20)
+    try {
+      const absPath = `${repoRoot}/${result.filePath}`;
+      const content = await Bun.file(absPath).text();
+      const lines = content.split("\n");
+      const start = bestEntry.startLine - 1; // 0-indexed
+      const maxLines = 20;
+      const end = Math.min(bestEntry.endLine, start + maxLines);
+      result.snippet = lines.slice(start, end).join("\n");
+    } catch {
+      // File might not exist on disk
+    }
+  }
 }
 
 /**

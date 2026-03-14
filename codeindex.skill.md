@@ -34,10 +34,13 @@ codeindex search "authentication middleware" --include-summary
 # Step 3: If you want to see code structure
 codeindex search "authentication middleware" --include-skeleton
 
-# Step 4: Read the actual files using the Read tool (never cat/head/tail)
+# Step 4: If you want code snippets with line numbers
+codeindex search "authentication middleware" --include-snippet
+
+# Step 5: Read the actual files using the Read tool (never cat/head/tail)
 # Example: Read("src/middleware/rateLimiter.ts")
 
-# Step 5: Follow up with Grep tool (never shell grep) for keyword search
+# Step 6: Follow up with Grep tool (never shell grep) for keyword search
 # Example: Grep("rateLimiter", path="src/middleware/")
 ```
 
@@ -46,9 +49,15 @@ codeindex search "authentication middleware" --include-skeleton
 - `--min-score <f>` — Filter threshold (default 0.3). Raise to reduce noise, lower to cast a wider net
 - `--top-n <n>` — Cap the number of results
 - `--scope <s>` — `project` (default), `all` (every indexed repo), or `repo1,repo2`
+- `--lang <l>` — Filter by language: `ts`, `python`, `rust`, `go`, `java`, `c`, `cpp`, `cs` (comma-separated)
+- `--dir <d>` — Filter by directory prefix: `src/api,lib` (comma-separated)
+- `--since <t>` — Filter by time: `30d`, `2w`, `3m`, or ISO date
 - `--include-skeleton` — Attach AST skeletons (imports, class/function signatures)
 - `--include-summary` — Attach Haiku-generated directory summaries
-- `--pretty` — Human-readable ranked output instead of JSON
+- `--include-snippet` — Attach source code snippets with line numbers (best-matching entry, up to 20 lines)
+- `--explain` — Show per-result score breakdown (cosine, commit boost, parent boost, BM25 keyword score, length penalty)
+- `--format <f>` — Output format: `json` (default), `pretty` (human-readable), `compact` (filePath:lineStart:score per line)
+- `--pretty` — Alias for `--format pretty`
 
 ### Interpreting results
 
@@ -59,8 +68,37 @@ Results are JSON by default. Each result has:
 - `type` — file extension (`.ts`, `.py`), `"dir"`, or `"commit"`
 - `inProject` — `true` if from the current repo, `false` if cross-repo
 - `repoId` — which repo (only present for cross-repo results)
+- `lineStart`, `lineEnd` — source line range (when `--include-snippet` is used)
+- `snippet` — source code excerpt (when `--include-snippet` is used)
 
 A `finalScore` above 0.5 is usually a strong match. Between 0.3-0.5 is worth investigating. Below 0.3 is filtered by default.
+
+## Intent Layer
+
+Generate and monitor an AGENTS.md file that maps directory structure to purpose:
+
+```bash
+# Generate AGENTS.md from indexed directory summaries
+codeindex intent --out AGENTS.md
+
+# Detect stale summaries by comparing AGENTS.md against current DB embeddings
+codeindex drift --threshold 0.3
+
+# Drift outputs fresh/stale/missing status per directory
+codeindex drift --out drift-report.json
+```
+
+## Repo management
+
+Manage multiple indexed repositories (requires PostgreSQL for cross-repo search):
+
+```bash
+codeindex repo add /path/to/repo    # Register a repo
+codeindex repo list                  # List all registered repos
+codeindex repo status my-repo        # Show detailed repo stats
+codeindex repo remove my-repo        # Remove repo and all indexed data
+codeindex repo purge my-repo --force # Remove without confirmation prompt
+```
 
 ## Other CLI commands
 
@@ -72,6 +110,7 @@ codeindex install-hook               # Install git post-commit hook
 codeindex config                     # Show current config
 codeindex config --gamma 0.15        # Tune scoring parameters
 codeindex status                     # Index stats (file count, last indexed, etc.)
+codeindex status --cost              # Show token usage and cost breakdown
 ```
 
 ## Custom queries via code
@@ -82,11 +121,14 @@ When the CLI doesn't cover your query, write code against the codeindex database
 
 ```sql
 repos          (id, origin_url, root_path, name, formatter_cmd)
-files          (id, repo_id, file_path, content_hash, skeleton, file_type, embedding, indexed_at)
+files          (id, repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding, indexed_at)
 directories    (id, repo_id, dir_path, concat_skeleton, concat_embedding, summary, summary_embedding)
 commits        (id, repo_id, commit_hash, message, embedding, authored_at)
 file_commits   (file_id, commit_id, recency)   -- recency 1 = most recent
+cost_events    (id, repo_id, operation, model, tokens_in, tokens_out, cost_usd, created_at)
 ```
+
+`skeleton_entries` stores JSON array of `{ name, kind, startLine, endLine }` for AST-extracted code entities.
 
 Embeddings are 1536-dimensional vectors (`text-embedding-3-small`). PostgreSQL uses pgvector; SQLite uses sqlite-vec.
 
@@ -123,13 +165,17 @@ The built-in search functions (`search`, `searchFiles`, `searchDirectories`, `se
 
 ## Scoring (for tuning)
 
-The scoring formula combines embedding similarity with commit-recency and directory-hierarchy signals:
+The scoring formula uses hybrid semantic+keyword fusion with length normalization:
 
 ```
-finalScore = fileSim + alpha * commitBoost + beta * parentBoost
+semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty
+finalScore = (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
 ```
 
-Directory results also get a child-to-parent boost when multiple child files score highly.
+- BM25 keyword scoring operates on skeleton text for keyword-heavy queries
+- Length normalization penalizes oversized skeletons (log-scale, weight 0.05)
+- Directory results get a child-to-parent boost when multiple child files score highly
+- Use `--explain` to see the full score breakdown for each result
 
 Tune via `codeindex config`:
 - `--alpha <f>` — Commit boost weight (default 0.15)
@@ -137,3 +183,13 @@ Tune via `codeindex config`:
 - `--gamma <f>` — Child-to-parent boost weight (default 0.1)
 - `--decay <f>` — Commit recency decay (default 0.2)
 - `--min-score <f>` — Global filter threshold (default 0.3)
+- `--parent-boost-multiplier <f>` — Parent boost multiplier (default 0.3)
+
+## Programmatic API
+
+For agent or library use, import from `src/api.ts`:
+
+```typescript
+import { search, searchFiles, loadConfig } from "./src/api";
+const results = await search("/path/to/repo", "authentication middleware", { topN: 5, explain: true });
+```

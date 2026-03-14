@@ -1,0 +1,191 @@
+[
+  {
+    "id": "embedding-vector-search",
+    "query": "embedding and vector similarity search",
+    "expectedFiles": ["src/search/query.ts", "src/index/embedder.ts"],
+    "description": "Core search pipeline: embedding generation and cosine similarity ranking",
+    "tags": ["core"]
+  },
+  {
+    "id": "tree-sitter-skeleton",
+    "query": "tree-sitter AST skeleton extraction",
+    "expectedFiles": ["src/index/skeleton.ts"],
+    "description": "Tree-sitter based code skeleton generation",
+    "tags": ["core"]
+  },
+  {
+    "id": "git-commit-recency",
+    "query": "git commit history and recency",
+    "expectedFiles": ["src/index/commits.ts"],
+    "description": "Commit indexing with recency tracking for boost scoring",
+    "tags": ["core"]
+  },
+  {
+    "id": "database-schema",
+    "query": "database schema creation",
+    "expectedFiles": ["src/db/schema.ts"],
+    "description": "Schema definitions for files, directories, commits tables",
+    "tags": ["core"]
+  },
+  {
+    "id": "file-walking-gitignore",
+    "query": "file walking and gitignore",
+    "expectedFiles": ["src/index/walker.ts"],
+    "description": "File system traversal with ignore pattern support",
+    "tags": ["core"]
+  },
+  {
+    "id": "directory-summary",
+    "query": "directory summary generation",
+    "expectedFiles": ["src/index/directories.ts"],
+    "description": "LLM-based directory summarization pipeline",
+    "tags": ["core"]
+  },
+  {
+    "id": "config-loading",
+    "query": "configuration loading",
+    "expectedFiles": ["src/config.ts"],
+    "description": "Config file discovery and loading logic",
+    "tags": ["core"]
+  },
+  {
+    "id": "cli-args",
+    "query": "CLI argument parsing",
+    "expectedFiles": ["src/cli.ts"],
+    "description": "Command-line interface and argument handling",
+    "tags": ["core"]
+  },
+  {
+    "id": "secret-detection",
+    "query": "secret detection in files",
+    "expectedFiles": ["src/index/secrets.ts"],
+    "description": "Detecting secrets and sensitive content before indexing",
+    "tags": ["core"]
+  },
+  {
+    "id": "postgres-vector",
+    "query": "PostgreSQL vector search",
+    "expectedFiles": ["src/db/pg.ts", "src/search/query.ts"],
+    "description": "pgvector-based similarity search implementation",
+    "tags": ["cross-file"]
+  },
+  {
+    "id": "sqlite-vec0",
+    "query": "SQLite connection and vec0",
+    "expectedFiles": ["src/db/sqlite.ts"],
+    "description": "SQLite database with sqlite-vec extension for vector ops",
+    "tags": ["core"]
+  },
+  {
+    "id": "content-formatting",
+    "query": "content formatting and hashing",
+    "expectedFiles": ["src/index/formatter.ts"],
+    "description": "File content normalization and content hash computation",
+    "tags": ["core"]
+  },
+  {
+    "id": "post-commit-hook",
+    "query": "post-commit hook installation",
+    "expectedFiles": ["src/hooks/post-commit.ts"],
+    "description": "Git hook that triggers incremental re-indexing on commit",
+    "tags": ["core"]
+  },
+  {
+    "id": "export-snapshot",
+    "query": "export database snapshot",
+    "expectedFiles": ["src/db/export.ts"],
+    "description": "Database export functionality for snapshots",
+    "tags": ["core"]
+  },
+  {
+    "id": "scoring-commit-boost",
+    "query": "scoring formula with commit boost",
+    "expectedFiles": ["src/search/query.ts"],
+    "description": "The commit-boost term in the scoring formula",
+    "tags": ["core"]
+  },
+  {
+    "id": "parent-dir-boost",
+    "query": "parent directory boost propagation",
+    "expectedFiles": ["src/search/query.ts"],
+    "description": "Parent directory similarity boost in file scoring",
+    "tags": ["core"]
+  },
+  {
+    "id": "indexignore-override",
+    "query": "indexignore override patterns",
+    "expectedFiles": ["src/index/walker.ts"],
+    "description": ".indexignore file support with ! negation override",
+    "tags": ["core"]
+  },
+  {
+    "id": "negative-kubernetes",
+    "query": "kubernetes deployment",
+    "expectedFiles": [],
+    "description": "Negative test: no Kubernetes content exists in this codebase",
+    "tags": ["negative"]
+  },
+  {
+    "id": "ambiguous-types",
+    "query": "types and interfaces",
+    "expectedFiles": ["src/search/types.ts", "src/cli.ts"],
+    "description": "Ambiguous query that should surface multiple type definition files",
+    "tags": ["ambiguous"]
+  },
+  {
+    "id": "cross-file-embedding-pipeline",
+    "query": "how files get embedded end to end",
+    "expectedFiles": ["src/index.ts", "src/index/embedder.ts", "src/index/skeleton.ts"],
+    "description": "Cross-file query spanning the full indexing pipeline",
+    "tags": ["cross-file"]
+  },
+  {
+    "id": "prose-roadmap-milestones",
+    "query": "project roadmap and milestones",
+    "expectedFiles": ["ROADMAP.md"],
+    "description": "Conceptual query that should find the project roadmap document",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-schema-versioning-plan",
+    "query": "schema versioning and migration plan",
+    "expectedFiles": ["ROADMAP.md", "src/db/schema.ts"],
+    "description": "Conceptual query spanning prose documentation and code",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-design-principles",
+    "query": "design principles and steering decisions",
+    "expectedFiles": ["STEERING.md"],
+    "description": "Conceptual query about project design philosophy",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-mcp-server-plan",
+    "query": "MCP server mode for agent integration",
+    "expectedFiles": ["ROADMAP.md"],
+    "description": "Conceptual query about planned MCP server feature",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-cost-tracking",
+    "query": "embedding cost tracking and budget controls",
+    "expectedFiles": ["src/cost.ts", "ROADMAP.md"],
+    "description": "Query spanning cost implementation and planned budget features",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-local-embeddings",
+    "query": "local embedding models and Ollama support",
+    "expectedFiles": ["ROADMAP.md"],
+    "description": "Conceptual query about planned local embedding feature",
+    "tags": ["prose"]
+  },
+  {
+    "id": "prose-intent-layer",
+    "query": "intent nodes and AGENTS.md generation",
+    "expectedFiles": ["src/intent.ts", "src/drift.ts"],
+    "description": "Query about the intent layer feature",
+    "tags": ["prose"]
+  }
+]

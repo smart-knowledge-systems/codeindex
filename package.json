@@ -10,6 +10,7 @@
     "typecheck": "bunx tsc --noEmit --incremental --tsBuildInfoFile node_modules/tsconfig.tsbuildinfo",
     "lint": "bunx eslint --cache --cache-location node_modules/.eslintcache src/",
     "format": "bunx prettier -l --cache --cache-location node_modules/.prettiercache --write src/",
+    "test": "bun test",
     "check": "bun run typecheck && bun run lint && bunx prettier --cache --cache-location node_modules/.prettiercache --check src/"
   },
   "devDependencies": {
@@ -22,10 +23,14 @@
     "typescript-eslint": "^8.56.1"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "ignore": "^7.0.5",
     "openai": "^6.27.0",
     "sqlite-vec": "^0.1.7-alpha.2",
-    "tree-sitter-wasms": "^0.1.13",
-    "web-tree-sitter": "^0.26.6"
+    "tree-sitter-wasms": "0.1.13",
+    "web-tree-sitter": "0.25.3"
+  },
+  "patchedDependencies": {
+    "web-tree-sitter@0.25.3": "patches/web-tree-sitter@0.25.3.patch"
   }
 }

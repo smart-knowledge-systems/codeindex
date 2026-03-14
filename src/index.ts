@@ -4,19 +4,25 @@ import path from "path";
 import { parseArgs, flag, hasFlag } from "./cli";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
+import { getCurrentSchemaVersion, getLatestMigrationVersion } from "./db/migrate";
 import { pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
 import { walkRepo } from "./index/walker";
-import { extractSkeleton, initParser } from "./index/skeleton";
+import { extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
 import { scanForSecrets } from "./index/secrets";
-import { embed, embedSingle } from "./index/embedder";
+import { embed, embedSingle, getProvider } from "./index/embedder";
 import { getRepoOrigin, getRepoName, getFileCommits, getChangedFiles } from "./index/commits";
 import { buildDirectoryIndex, updateAffectedDirectories } from "./index/directories";
 import { search } from "./search/query";
 import { installHook } from "./hooks/post-commit";
-import { exportToSqlite } from "./db/export";
+import { exportToSqlite, type ExportOptions } from "./db/export";
+import { setCurrentRepo, getProjectedCost, checkCostCap } from "./cost";
+import { generateIntent } from "./intent";
+import { detectDrift } from "./drift";
+import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
+import { parallelReindex } from "./index/parallel";
 import type { SearchOptions } from "./search/types";
 
 // ---------------------------------------------------------------------------
@@ -98,9 +104,69 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 // reindex command
 // ---------------------------------------------------------------------------
 
-async function cmdReindex(repoRoot: string, dryRun = false) {
+async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, force = false) {
   const config = await loadConfig(repoRoot);
+  if (budget != null) {
+    config.costCap = { ...config.costCap, maxCostPerReindex: budget };
+  }
+
+  // Initialize embedding provider from config
+  getProvider(config);
+
   const repoId = await ensureRepo(repoRoot);
+  setCurrentRepo(repoId, repoRoot, config.store);
+
+  // Check for embedding provider mismatch
+  const currentProvider = config.embedding.provider ?? "openai";
+  let existingProvider: string | null = null;
+  if (config.store === "pg") {
+    try {
+      const rows = await pgUnsafe("SELECT embedding_provider FROM repos WHERE id = $1", [repoId]);
+      if (rows.length > 0) existingProvider = rows[0].embedding_provider as string | null;
+    } catch {
+      /* column may not exist yet */
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    try {
+      const row = db.prepare("SELECT embedding_provider FROM repos WHERE id = ?").get(repoId) as {
+        embedding_provider: string | null;
+      } | null;
+      if (row) existingProvider = row.embedding_provider;
+    } catch {
+      /* column may not exist yet */
+    }
+  }
+
+  if (existingProvider && existingProvider !== currentProvider && !force) {
+    console.error(
+      `Error: Embedding provider changed from "${existingProvider}" to "${currentProvider}".`,
+    );
+    console.error("All existing embeddings must be regenerated. Use --force to proceed.");
+    process.exit(1);
+  }
+
+  // Update repo with current embedding metadata
+  if (config.store === "pg") {
+    try {
+      await pgUnsafe(
+        "UPDATE repos SET embedding_provider = $1, embedding_dimensions = $2 WHERE id = $3",
+        [currentProvider, config.embedding.dimensions, repoId],
+      );
+    } catch {
+      /* column may not exist yet */
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    try {
+      db.prepare(
+        "UPDATE repos SET embedding_provider = ?, embedding_dimensions = ? WHERE id = ?",
+      ).run(currentProvider, config.embedding.dimensions, repoId);
+    } catch {
+      /* column may not exist yet */
+    }
+  }
+
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   console.log(`Indexing ${repoRoot} (repo_id=${repoId}, store=${config.store})`);
@@ -113,7 +179,13 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
   let skipped = 0;
 
   // Collect all files first for batch embedding
-  const filesToEmbed: { filePath: string; skeleton: string; hash: string; fileType: string }[] = [];
+  const filesToEmbed: {
+    filePath: string;
+    skeleton: string;
+    skeletonEntries: string | null;
+    hash: string;
+    fileType: string;
+  }[] = [];
 
   for await (const relPath of walkRepo(repoRoot)) {
     allFiles.push(relPath);
@@ -152,8 +224,13 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
       }
     }
 
-    const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
-    filesToEmbed.push({ filePath: relPath, skeleton, hash, fileType: ext });
+    const { text: skeleton, entries } = await extractSkeletonWithEntries(
+      relPath,
+      content,
+      config.skeletonFallbackLines,
+    );
+    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
+    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
   }
 
   if (dryRun) {
@@ -161,12 +238,23 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
     for (const f of filesToEmbed) {
       console.log(`  ${f.filePath} (${f.fileType})`);
     }
+    const projected = getProjectedCost(filesToEmbed.length, filesToEmbed.length * 3);
+    console.log(`\nProjected cost:`);
+    console.log(`  Embeddings: $${projected.embeddingCost.toFixed(4)}`);
+    console.log(`  Summaries:  $${projected.summaryCost.toFixed(4)}`);
+    console.log(`  Total:      $${projected.totalCost.toFixed(4)}`);
+    if (config.costCap.maxCostPerReindex != null) {
+      console.log(`  Budget:     $${config.costCap.maxCostPerReindex.toFixed(4)}`);
+      if (projected.totalCost > config.costCap.maxCostPerReindex) {
+        console.log(`  WARNING: projected cost exceeds budget`);
+      }
+    }
     return;
   }
 
   // Batch embed all skeletons
   if (filesToEmbed.length > 0) {
-    console.log(`Embedding ${filesToEmbed.length} files...`);
+    process.stderr.write(`Indexing: 0/${filesToEmbed.length} files...`);
     const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
 
     if (config.store === "pg") {
@@ -176,17 +264,29 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
           await pgUnsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6::vector)
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
                content_hash = EXCLUDED.content_hash,
                skeleton = EXCLUDED.skeleton,
+               skeleton_entries = EXCLUDED.skeleton_entries,
                file_type = EXCLUDED.file_type,
                embedding = EXCLUDED.embedding,
                indexed_at = now()`,
-            [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
+            [
+              repoId,
+              f.filePath,
+              f.hash,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              `[${embedding.join(",")}]`,
+            ],
           );
           indexed++;
+          if (indexed % 10 === 0 || indexed === filesToEmbed.length) {
+            process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
+          }
         }
         await pgUnsafe("COMMIT");
       } catch (err) {
@@ -196,11 +296,12 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
     } else {
       const db = await getSqlite(repoRoot);
       const insertFile = db.prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, file_path) DO UPDATE SET
            content_hash = excluded.content_hash,
            skeleton = excluded.skeleton,
+           skeleton_entries = excluded.skeleton_entries,
            file_type = excluded.file_type,
            indexed_at = datetime('now')
          RETURNING id`,
@@ -213,18 +314,45 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as {
+          const row = insertFile.get(
+            repoId,
+            f.filePath,
+            f.hash,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+          ) as {
             id: number;
           };
           deleteEmb.run(row.id);
           insertEmb.run(row.id, serializeEmbedding(embedding));
           indexed++;
+          if (indexed % 10 === 0 || indexed === filesToEmbed.length) {
+            process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
+          }
         }
       })();
     }
+    process.stderr.write("\n");
   }
 
   console.log(`Files: ${indexed} indexed, ${skipped} skipped (unchanged)`);
+
+  // Check cost cap after embedding batch
+  if (config.costCap.maxCostPerReindex != null) {
+    const cap = await checkCostCap(repoRoot, repoId);
+    if (cap.current >= (config.costCap.warnAt ?? Infinity)) {
+      console.warn(
+        `Cost warning: $${cap.current.toFixed(4)} spent (limit: $${cap.limit?.toFixed(4)})`,
+      );
+    }
+    if (cap.exceeded) {
+      console.error(
+        `Cost cap exceeded: $${cap.current.toFixed(4)} >= $${cap.limit?.toFixed(4)}. Aborting reindex.`,
+      );
+      return;
+    }
+  }
 
   // Index commits for each file
   console.log("Indexing commits...");
@@ -382,6 +510,7 @@ async function cmdReindex(repoRoot: string, dryRun = false) {
 async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string) {
   const config = await loadConfig(repoRoot);
   const repoId = await ensureRepo(repoRoot);
+  setCurrentRepo(repoId, repoRoot, config.store);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   await initParser();
@@ -389,7 +518,13 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
   const changedFiles = files.length > 0 ? files : await getChangedFiles(repoRoot, commitHash);
 
   // Process changed files
-  const filesToEmbed: { filePath: string; skeleton: string; hash: string; fileType: string }[] = [];
+  const filesToEmbed: {
+    filePath: string;
+    skeleton: string;
+    skeletonEntries: string | null;
+    hash: string;
+    fileType: string;
+  }[] = [];
 
   for (const relPath of changedFiles) {
     const absPath = path.join(repoRoot, relPath);
@@ -407,9 +542,11 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
           .all(repoId, relPath) as { id: number }[];
         if (rows.length > 0) {
-          db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(rows[0].id);
-          db.prepare("DELETE FROM file_commits WHERE file_id = ?").run(rows[0].id);
-          db.prepare("DELETE FROM files WHERE id = ?").run(rows[0].id);
+          db.transaction(() => {
+            db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(rows[0].id);
+            db.prepare("DELETE FROM file_commits WHERE file_id = ?").run(rows[0].id);
+            db.prepare("DELETE FROM files WHERE id = ?").run(rows[0].id);
+          })();
         }
       }
       continue;
@@ -440,8 +577,13 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
       if (existing.length > 0) continue;
     }
 
-    const skeleton = await extractSkeleton(relPath, content, config.skeletonFallbackLines);
-    filesToEmbed.push({ filePath: relPath, skeleton, hash, fileType: ext });
+    const { text: skeleton, entries } = await extractSkeletonWithEntries(
+      relPath,
+      content,
+      config.skeletonFallbackLines,
+    );
+    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
+    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
   }
 
   if (filesToEmbed.length > 0) {
@@ -454,15 +596,24 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
           await pgUnsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6::vector)
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
                content_hash = EXCLUDED.content_hash,
                skeleton = EXCLUDED.skeleton,
+               skeleton_entries = EXCLUDED.skeleton_entries,
                file_type = EXCLUDED.file_type,
                embedding = EXCLUDED.embedding,
                indexed_at = now()`,
-            [repoId, f.filePath, f.hash, f.skeleton, f.fileType, `[${embedding.join(",")}]`],
+            [
+              repoId,
+              f.filePath,
+              f.hash,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              `[${embedding.join(",")}]`,
+            ],
           );
         }
         await pgUnsafe("COMMIT");
@@ -473,11 +624,12 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     } else {
       const db = await getSqlite(repoRoot);
       const insertFile = db.prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, file_type)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (repo_id, file_path) DO UPDATE SET
            content_hash = excluded.content_hash,
            skeleton = excluded.skeleton,
+           skeleton_entries = excluded.skeleton_entries,
            file_type = excluded.file_type,
            indexed_at = datetime('now')
          RETURNING id`,
@@ -490,7 +642,14 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          const row = insertFile.get(repoId, f.filePath, f.hash, f.skeleton, f.fileType) as {
+          const row = insertFile.get(
+            repoId,
+            f.filePath,
+            f.hash,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+          ) as {
             id: number;
           };
           deleteEmb2.run(row.id);
@@ -610,8 +769,14 @@ async function cmdSearch(
     scope?: string;
     includeSkeleton?: boolean;
     includeSummary?: boolean;
+    includeSnippet?: boolean;
+    format?: string;
     json?: boolean;
     pretty?: boolean;
+    lang?: string[];
+    dir?: string[];
+    since?: string;
+    explain?: boolean;
   },
 ) {
   const searchOpts: SearchOptions = {
@@ -619,6 +784,11 @@ async function cmdSearch(
     topN: opts.topN,
     includeSkeleton: opts.includeSkeleton,
     includeSummary: opts.includeSummary,
+    includeSnippet: opts.includeSnippet,
+    lang: opts.lang,
+    dir: opts.dir,
+    since: opts.since,
+    explain: opts.explain,
   };
 
   if (opts.scope === "all") {
@@ -629,26 +799,63 @@ async function cmdSearch(
 
   const results = await search(repoRoot, query, searchOpts);
 
-  if (opts.pretty) {
+  // Resolve output format: --format takes precedence over --pretty/--json
+  const format = opts.format ?? (opts.pretty ? "pretty" : "json");
+
+  if (format === "compact") {
+    for (const r of results) {
+      const line = r.lineStart != null ? `:${r.lineStart}` : "";
+      console.log(`${r.filePath}${line}:${r.finalScore.toFixed(3)}`);
+    }
+  } else if (format === "pretty") {
     if (results.length === 0) {
       console.log("No results found.");
-      return;
-    }
-    for (const r of results) {
-      const prefix = r.inProject ? "" : `[${r.repoId}] `;
-      console.log(
-        `${prefix}${r.filePath}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
-      );
-      if (r.skeleton) {
-        const preview = r.skeleton.split("\n").slice(0, 5).join("\n");
-        console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
-      }
-      if (r.summary) {
-        console.log(`  ${r.summary}`);
+    } else {
+      const multiRepo = new Set(results.map((r) => r.repoName ?? r.repoId)).size > 1;
+      for (const r of results) {
+        const prefix = multiRepo && r.repoName ? `[${r.repoName}] ` : "";
+        const lineInfo = r.lineStart != null ? ` L${r.lineStart}-L${r.lineEnd}` : "";
+        console.log(
+          `${prefix}${r.filePath}${lineInfo}  (${r.type})  score=${r.finalScore.toFixed(3)}  sim=${r.cosineSimilarity.toFixed(3)}`,
+        );
+        if (r.snippet) {
+          const preview = r.snippet.split("\n").slice(0, 10).join("\n");
+          console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
+        } else if (r.skeleton) {
+          const preview = r.skeleton.split("\n").slice(0, 5).join("\n");
+          console.log(`  ${preview.replace(/\n/g, "\n  ")}`);
+        }
+        if (r.summary) {
+          console.log(`  ${r.summary}`);
+        }
+        if (r.explanation) {
+          const e = r.explanation;
+          console.log(`  [explain] ${e.formula}`);
+          console.log(
+            `    cosine=${e.cosineSimilarity.toFixed(3)} commit=${e.commitBoost.toFixed(3)} parent=${e.parentBoost.toFixed(3)}${e.childBoost != null ? ` child=${e.childBoost.toFixed(3)}` : ""}${e.keywordScore != null ? ` bm25=${e.keywordScore.toFixed(3)}` : ""}${e.lengthPenalty != null ? ` lenPen=${e.lengthPenalty.toFixed(3)}` : ""}`,
+          );
+        }
       }
     }
   } else {
+    // json (default)
     console.log(JSON.stringify(results, null, 2));
+  }
+
+  // Zero-result diagnostics
+  if (results.length === 0) {
+    const words = query
+      .split(/\s+/)
+      .filter((w) => w.length > 2)
+      .map((w) => `"${w}"`)
+      .join(" ");
+    console.error("\nNo results found. Suggestions:");
+    console.error("  - Try broader or different search terms");
+    console.error("  - Check index status: codeindex status");
+    console.error("  - Validate environment: codeindex doctor");
+    if (words) {
+      console.error(`  - Try keyword search: rg -i ${words}`);
+    }
   }
 }
 
@@ -656,10 +863,17 @@ async function cmdSearch(
 // export command
 // ---------------------------------------------------------------------------
 
-async function cmdExport(repoRoot: string, outPath: string) {
+async function cmdExport(repoRoot: string, outPath: string, opts: ExportOptions = {}) {
   const repoId = await ensureRepo(repoRoot);
+  const exportOpts: ExportOptions = { ...opts, repoRoot };
+  const redactions: string[] = [];
+  if (exportOpts.redactEmbeddings !== false) redactions.push("embeddings");
+  if (exportOpts.redactCommits) redactions.push("commits");
+  if (exportOpts.excludePatterns?.length)
+    redactions.push(`exclude(${exportOpts.excludePatterns.length} patterns)`);
   console.log(`Exporting repo_id=${repoId} to ${outPath}...`);
-  await exportToSqlite(repoId, outPath);
+  if (redactions.length > 0) console.log(`Redacting: ${redactions.join(", ")}`);
+  await exportToSqlite(repoId, outPath, exportOpts);
   console.log("Export complete.");
 }
 
@@ -667,7 +881,7 @@ async function cmdExport(repoRoot: string, outPath: string) {
 // status command
 // ---------------------------------------------------------------------------
 
-async function cmdStatus(repoRoot: string) {
+async function cmdStatus(repoRoot: string, showCost = false) {
   const config = await loadConfig(repoRoot);
 
   if (config.store === "pg") {
@@ -732,6 +946,134 @@ async function cmdStatus(repoRoot: string) {
     console.log(`Last indexed: ${lastIndexed.last ?? "never"}`);
     console.log(`Formatter: ${repos[0].formatter_cmd ?? "auto-detect"}`);
   }
+
+  // Cost tracking output
+  if (showCost) {
+    const { getCostSummary } = await import("./cost");
+    const costRows = await getCostSummary(repoRoot);
+    if (costRows.length === 0) {
+      console.log("\nCost: no cost events recorded");
+    } else {
+      console.log("\nCost breakdown:");
+      console.log("  Operation       Model                  Tokens In   Tokens Out   Cost (USD)");
+      console.log("  " + "-".repeat(75));
+      let totalCost = 0;
+      for (const row of costRows) {
+        const op = row.operation.padEnd(15);
+        const model = row.model.padEnd(22);
+        const tokIn = String(row.totalTokensIn).padStart(10);
+        const tokOut = String(row.totalTokensOut).padStart(12);
+        const cost = `$${row.totalCostUsd.toFixed(4)}`.padStart(11);
+        console.log(`  ${op} ${model} ${tokIn} ${tokOut} ${cost}`);
+        totalCost += row.totalCostUsd;
+      }
+      console.log("  " + "-".repeat(75));
+      console.log(`  Total: $${totalCost.toFixed(4)}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// manifest command
+// ---------------------------------------------------------------------------
+
+async function cmdManifest(repoRoot: string) {
+  const config = await loadConfig(repoRoot);
+
+  // --- Indexed data from DB ---
+  const dbStats = await (async () => {
+    if (config.store === "pg") {
+      const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
+      if (repos.length === 0) return null;
+      const repoId = repos[0].id;
+      const fc = await pgUnsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [repoId]);
+      const fp = (await pgUnsafe(
+        "SELECT file_path FROM files WHERE repo_id = $1 ORDER BY file_path",
+        [repoId],
+      )) as { file_path: string }[];
+      const dc = await pgUnsafe("SELECT count(*) as cnt FROM directories WHERE repo_id = $1", [
+        repoId,
+      ]);
+      const cc = await pgUnsafe("SELECT count(*) as cnt FROM commits WHERE repo_id = $1", [repoId]);
+      return {
+        fileCount: parseInt(fc[0].cnt as string),
+        filePaths: fp.map((r) => r.file_path),
+        dirCount: parseInt(dc[0].cnt as string),
+        commitCount: parseInt(cc[0].cnt as string),
+      };
+    } else {
+      const db = await getSqlite(repoRoot);
+      const repos = db.prepare("SELECT id FROM repos WHERE root_path = ?").all(repoRoot) as {
+        id: number;
+      }[];
+      if (repos.length === 0) return null;
+      const repoId = repos[0].id;
+      const fc = db.prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?").get(repoId) as {
+        cnt: number;
+      };
+      const fp = db
+        .prepare("SELECT file_path FROM files WHERE repo_id = ? ORDER BY file_path")
+        .all(repoId) as { file_path: string }[];
+      const dc = db
+        .prepare("SELECT count(*) as cnt FROM directories WHERE repo_id = ?")
+        .get(repoId) as { cnt: number };
+      const cc = db
+        .prepare("SELECT count(*) as cnt FROM commits WHERE repo_id = ?")
+        .get(repoId) as { cnt: number };
+      return {
+        fileCount: fc.cnt,
+        filePaths: fp.map((r) => r.file_path),
+        dirCount: dc.cnt,
+        commitCount: cc.cnt,
+      };
+    }
+  })();
+
+  if (!dbStats) {
+    console.log(JSON.stringify({ error: "Not indexed yet. Run: codeindex reindex" }));
+    return;
+  }
+
+  const { fileCount, filePaths, dirCount, commitCount } = dbStats;
+
+  // --- Walk repo to find skipped files and secret flags ---
+  const indexedSet = new Set(filePaths);
+  const skippedFiles: { path: string; reason: string }[] = [];
+  const secretFlags: { path: string; patterns: string[] }[] = [];
+
+  for await (const relPath of walkRepo(repoRoot)) {
+    if (indexedSet.has(relPath)) continue;
+
+    // Check if skipped due to secrets
+    const absPath = path.join(repoRoot, relPath);
+    try {
+      const content = await Bun.file(absPath).text();
+      const scan = scanForSecrets(content);
+      if (scan.hasSecrets) {
+        skippedFiles.push({ path: relPath, reason: `secrets: ${scan.patterns.join(", ")}` });
+        secretFlags.push({ path: relPath, patterns: scan.patterns });
+        continue;
+      }
+    } catch {
+      // File unreadable
+    }
+
+    skippedFiles.push({ path: relPath, reason: "not indexed (unchanged or new)" });
+  }
+
+  const manifest = {
+    repoRoot,
+    store: config.store,
+    indexed: {
+      files: { count: fileCount, paths: filePaths },
+      directories: dirCount,
+      commits: commitCount,
+    },
+    skipped: skippedFiles,
+    secretFlags,
+  };
+
+  console.log(JSON.stringify(manifest, null, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +1107,11 @@ async function cmdConfig(repoRoot: string, args: string[]) {
       updates.scoring = { ...((updates.scoring as object) ?? {}), gamma: parseFloat(value) };
     else if (key === "min-score")
       updates.scoring = { ...((updates.scoring as object) ?? {}), minScore: parseFloat(value) };
+    else if (key === "parent-boost-multiplier")
+      updates.scoring = {
+        ...((updates.scoring as object) ?? {}),
+        parentBoostMultiplier: parseFloat(value),
+      };
   }
 
   const localConfigPath = path.join(repoRoot, ".codeindex.json");
@@ -795,7 +1142,7 @@ async function cmdDoctor(repoRoot: string) {
   };
 
   // 1. Git repo
-  const gitExists = await Bun.file(path.join(repoRoot, ".git")).exists();
+  const gitExists = await Bun.file(path.join(repoRoot, ".git", "HEAD")).exists();
   check("Git repository", gitExists, "Run `git init` to initialize a repository.");
 
   // 2. OPENAI_API_KEY
@@ -867,6 +1214,19 @@ async function cmdDoctor(repoRoot: string) {
         check("Schema created", false, "Run `codeindex init` or `codeindex reindex`.");
       }
     }
+
+    // Schema version check
+    try {
+      const current = await getCurrentSchemaVersion(config.store, repoRoot);
+      const latest = await getLatestMigrationVersion(config.store);
+      check(
+        `Schema version (${current}/${latest})`,
+        current >= latest,
+        "Run `codeindex init` to apply pending migrations.",
+      );
+    } catch {
+      check("Schema version", false, "Could not determine schema version.");
+    }
   }
 
   // 5. claude CLI available
@@ -882,6 +1242,18 @@ async function cmdDoctor(repoRoot: string) {
     check("claude CLI available", false, "Install claude CLI for directory summaries (optional).");
   }
 
+  // 6. Ollama check (if configured)
+  if (config && config.embedding.provider === "ollama") {
+    const { OllamaEmbeddingProvider } = await import("./index/providers/ollama");
+    const ollama = new OllamaEmbeddingProvider(
+      config.embedding.model,
+      config.embedding.dimensions,
+      config.embedding.ollamaUrl,
+    );
+    const { available, error } = await ollama.checkAvailability();
+    check("Ollama server reachable", available, error);
+  }
+
   console.log(ok ? "\nAll checks passed." : "\nSome checks failed — see above.");
 }
 
@@ -894,7 +1266,10 @@ const HELP_TEXT = `codeindex — semantic code search
 Commands:
   init                 Initialize codeindex in current repo
   reindex              Full reindex of current repo
-    --dry-run          Report what would change without writing
+    --dry-run          Report what would change and projected cost
+    --budget <usd>     Set cost cap for this reindex (USD)
+    --scope all        Reindex all registered repos in parallel
+    --workers <n>      Number of parallel workers (default 3, with --scope all)
   update               Incremental update (called by hook)
     --files <paths>    Files to re-index
     --commit <hash>    Commit to embed and link
@@ -902,22 +1277,67 @@ Commands:
     --min-score <f>    Minimum score (default 0.3)
     --top-n <n>        Max results
     --scope <s>        project|all|name1,name2
+    --lang <l>         Filter by language (ts,python,rust,go,java,c,cpp,cs)
+    --dir <d>          Filter by directory prefix (src/api,lib)
+    --since <t>        Filter by time (30d, 2w, 3m, or ISO date)
     --include-skeleton Include skeleton text
     --include-summary  Include directory summaries
-    --pretty           Human-readable output
+    --include-snippet  Include code snippets with line numbers
+    --explain          Show per-result score breakdown
+    --format <f>       Output format: json (default), pretty, compact
+    --pretty           Alias for --format pretty
+    --json             Alias for --format json
+  intent               Generate AGENTS.md from directory summaries
+    --out <path>       Output path (default: stdout)
+  drift                Detect stale Intent Nodes in AGENTS.md
+    --threshold <f>    Drift threshold (default 0.3)
+    --agents-md <path> Path to AGENTS.md (default: AGENTS.md)
+    --out <path>       Output JSON path (default: stdout)
+  repo <sub>           Manage repositories (add|remove|list|status|purge)
   export               Export pg to sqlite
     --out <path>       Output path (default .codeindex.db)
+    --include-embeddings  Include embedding vectors (redacted by default)
+    --redact-commits   Exclude commit data from export
+    --exclude <globs>  Comma-separated glob patterns to exclude files
   install-hook         Install post-commit git hook
   config               Show/set configuration
+  manifest             Audit trail: indexed files, skipped files, secret flags
   status               Show index stats
+    --cost             Show token usage and cost breakdown
+  serve                Start MCP server for AI agent integration
+    --transport <t>    stdio (default) or sse
+    --port <n>         Port for SSE transport (default 3100)
   doctor               Check environment and configuration
 
 Options:
-  --path <dir>         Repo root (default: cwd)`;
+  --path <dir>         Repo root (default: cwd)
+  --read-only          Block write operations (init, reindex, update)`;
+
+const WRITE_COMMANDS = new Set(["init", "reindex", "update", "install-hook"]);
 
 async function main() {
   const parsed = parseArgs(process.argv);
   const repoRoot = flag(parsed, "path") ? path.resolve(flag(parsed, "path")!) : process.cwd();
+
+  // Read-only guard: block write operations when --read-only flag or config is set
+  if (WRITE_COMMANDS.has(parsed.command)) {
+    const isReadOnlyFlag = hasFlag(parsed, "read-only");
+    let isReadOnlyConfig = false;
+    try {
+      const cfg = await loadConfig(repoRoot);
+      isReadOnlyConfig = cfg.readOnly === true;
+    } catch {
+      // config may not exist yet (e.g. during init)
+    }
+    if (isReadOnlyFlag || isReadOnlyConfig) {
+      console.error(
+        `Error: write operation "${parsed.command}" is blocked in read-only mode.\n` +
+          "Read-only mode is intended for CI/CD environments where the index should not be modified.\n" +
+          "Remove --read-only flag or set readOnly: false in .codeindex.json to allow writes.",
+      );
+      process.exit(1);
+    }
+  }
 
   try {
     switch (parsed.command) {
@@ -925,9 +1345,47 @@ async function main() {
         await cmdInit(repoRoot);
         break;
 
-      case "reindex":
-        await cmdReindex(repoRoot, hasFlag(parsed, "dry-run"));
+      case "reindex": {
+        const budgetStr = flag(parsed, "budget");
+        const scope = flag(parsed, "scope");
+
+        if (scope === "all") {
+          const allRepos = await repoGetAll(repoRoot);
+          if (allRepos.length === 0) {
+            console.error("No repos registered. Use `codeindex repo add <path>` first.");
+            process.exit(1);
+          }
+          const workersStr = flag(parsed, "workers");
+          const workers = workersStr ? parseInt(workersStr) : 3;
+          const budget = budgetStr ? parseFloat(budgetStr) : 0;
+
+          const results = await parallelReindex(
+            allRepos.map((r) => ({ root: r.root_path, name: r.name })),
+            workers,
+            budget,
+          );
+
+          // Print summary
+          console.log("\nReindex Summary:");
+          for (const r of results) {
+            const icon = r.status === "ok" ? "OK" : "FAIL";
+            console.log(`  [${icon}] ${r.repo}${r.error ? `: ${r.error}` : ""}`);
+          }
+          const ok = results.filter((r) => r.status === "ok").length;
+          const fail = results.filter((r) => r.status === "error").length;
+          console.log(`\n${ok} succeeded, ${fail} failed`);
+
+          if (fail > 0) process.exit(1);
+        } else {
+          await cmdReindex(
+            repoRoot,
+            hasFlag(parsed, "dry-run"),
+            budgetStr ? parseFloat(budgetStr) : undefined,
+            hasFlag(parsed, "force"),
+          );
+        }
         break;
+      }
 
       case "update": {
         const filesRaw = flag(parsed, "files");
@@ -944,21 +1402,35 @@ async function main() {
         }
         const minScoreStr = flag(parsed, "min-score");
         const topNStr = flag(parsed, "top-n");
+        const langRaw = flag(parsed, "lang");
+        const dirRaw = flag(parsed, "dir");
         await cmdSearch(repoRoot, query, {
           minScore: minScoreStr ? parseFloat(minScoreStr) : undefined,
           topN: topNStr ? parseInt(topNStr) : undefined,
           scope: flag(parsed, "scope"),
           includeSkeleton: hasFlag(parsed, "include-skeleton"),
           includeSummary: hasFlag(parsed, "include-summary"),
-          json: !hasFlag(parsed, "pretty"),
+          includeSnippet: hasFlag(parsed, "include-snippet"),
+          format: flag(parsed, "format"),
+          json: hasFlag(parsed, "json"),
           pretty: hasFlag(parsed, "pretty"),
+          lang: langRaw ? langRaw.split(",") : undefined,
+          dir: dirRaw ? dirRaw.split(",") : undefined,
+          since: flag(parsed, "since"),
+          explain: hasFlag(parsed, "explain"),
         });
         break;
       }
 
-      case "export":
-        await cmdExport(repoRoot, flag(parsed, "out") ?? ".codeindex.db");
+      case "export": {
+        const excludeRaw = flag(parsed, "exclude");
+        await cmdExport(repoRoot, flag(parsed, "out") ?? ".codeindex.db", {
+          redactEmbeddings: !hasFlag(parsed, "include-embeddings"),
+          redactCommits: hasFlag(parsed, "redact-commits"),
+          excludePatterns: excludeRaw ? excludeRaw.split(",") : undefined,
+        });
         break;
+      }
 
       case "install-hook":
         await installHook(repoRoot);
@@ -969,13 +1441,80 @@ async function main() {
         await cmdConfig(repoRoot, process.argv.slice(3));
         break;
 
+      case "manifest":
+        await cmdManifest(repoRoot);
+        break;
+
       case "status":
-        await cmdStatus(repoRoot);
+        await cmdStatus(repoRoot, hasFlag(parsed, "cost"));
         break;
 
       case "doctor":
         await cmdDoctor(repoRoot);
         break;
+
+      case "intent":
+        await generateIntent(repoRoot, flag(parsed, "out"));
+        break;
+
+      case "drift": {
+        const agentsMdPath = flag(parsed, "agents-md") ?? "AGENTS.md";
+        const thresholdStr = flag(parsed, "threshold");
+        await detectDrift(
+          repoRoot,
+          agentsMdPath,
+          thresholdStr ? parseFloat(thresholdStr) : undefined,
+          flag(parsed, "out"),
+        );
+        break;
+      }
+
+      case "repo": {
+        const subCmd = parsed.positional[0];
+        switch (subCmd) {
+          case "add":
+            await repoAdd(repoRoot, parsed.positional[1] ?? repoRoot);
+            break;
+          case "remove":
+            if (!parsed.positional[1]) {
+              console.error("Usage: codeindex repo remove <name>");
+              process.exit(1);
+            }
+            await repoRemove(repoRoot, parsed.positional[1]);
+            break;
+          case "list":
+            await repoList(repoRoot);
+            break;
+          case "status":
+            await repoStatus(repoRoot, parsed.positional[1]);
+            break;
+          case "purge":
+            if (!parsed.positional[1]) {
+              console.error("Usage: codeindex repo purge <name> [--force]");
+              process.exit(1);
+            }
+            await repoPurge(repoRoot, parsed.positional[1], hasFlag(parsed, "force"));
+            break;
+          default:
+            console.error("Usage: codeindex repo <add|remove|list|status|purge>");
+            process.exit(1);
+        }
+        break;
+      }
+
+      case "serve": {
+        const { createMcpServer } = await import("./mcp/server");
+        const { startStdio, startSSE } = await import("./mcp/transport");
+        const mcpServer = createMcpServer(repoRoot);
+        const transport = flag(parsed, "transport") ?? "stdio";
+        if (transport === "sse") {
+          const portStr = flag(parsed, "port");
+          await startSSE(mcpServer, portStr ? parseInt(portStr) : 3100);
+        } else {
+          await startStdio(mcpServer);
+        }
+        break;
+      }
 
       case "":
       case "help":
