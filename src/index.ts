@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import path from "path";
+import os from "os";
 import { parseArgs, flag, hasFlag, warnUnknownFlags, type ParsedArgs } from "./cli";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
@@ -1118,7 +1119,7 @@ async function cmdTelemetry(parsed: ParsedArgs) {
     return;
   }
   const telemetryFile = path.join(
-    process.env.HOME ?? "~",
+    process.env.HOME ?? os.homedir(),
     ".config",
     "codeindex",
     "telemetry.jsonl",

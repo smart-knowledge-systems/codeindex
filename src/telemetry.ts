@@ -1,8 +1,9 @@
 import path from "path";
 import { appendFile, mkdir } from "fs/promises";
 import crypto from "crypto";
+import os from "os";
 
-const TELEMETRY_DIR = path.join(process.env.HOME ?? "~", ".config", "codeindex");
+const TELEMETRY_DIR = path.join(process.env.HOME ?? os.homedir(), ".config", "codeindex");
 const TELEMETRY_FILE = path.join(TELEMETRY_DIR, "telemetry.jsonl");
 const ENABLED = process.env.CODEINDEX_TELEMETRY === "1";
 
