@@ -227,8 +227,15 @@ export function resolveImport(
   if (language === "python") {
     return resolvePythonImport(importedModule, allFiles);
   }
-  // Go, Rust, Java: module resolution is package-based and harder to resolve
-  // without knowing the module/package structure. Return null for now.
+  if (language === "go") {
+    return resolveGoImport(importedModule, sourceFile, allFiles);
+  }
+  if (language === "ruby") {
+    return resolveRubyImport(importedModule, sourceFile, allFiles);
+  }
+  if (language === "kotlin" || language === "java") {
+    return resolveJvmImport(importedModule, allFiles);
+  }
   return null;
 }
 
@@ -269,6 +276,130 @@ function resolvePythonImport(module: string, allFiles: Set<string>): string | nu
   // Try as a package __init__.py
   const initPy = path.join(filePath, "__init__.py");
   if (allFiles.has(initPy)) return initPy;
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Go resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a Go import path to a file in the indexed file list.
+ * Uses go.mod module path to map import paths to local directories.
+ * For example, if go.mod declares "module github.com/user/project" and the
+ * import is "github.com/user/project/pkg/foo", resolves to "pkg/foo/*.go".
+ */
+function resolveGoImport(
+  importPath: string,
+  sourceFile: string,
+  allFiles: Set<string>,
+): string | null {
+  // Standard library imports (no dots in first segment) — skip
+  const firstSegment = importPath.split("/")[0];
+  if (!firstSegment.includes(".")) return null;
+
+  // Try to find the go.mod module path by scanning indexed files
+  // Look for the import path suffix in indexed .go files
+  const segments = importPath.split("/");
+
+  // Try progressively shorter suffixes of the import path as directory paths
+  for (let i = 0; i < segments.length; i++) {
+    const dirSuffix = segments.slice(i).join("/");
+
+    // Look for .go files in this directory
+    for (const file of allFiles) {
+      if (!file.endsWith(".go")) continue;
+      const dir = path.dirname(file);
+      if (dir === dirSuffix || dir.endsWith("/" + dirSuffix)) {
+        return file;
+      }
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Ruby resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a Ruby require/require_relative to a file path.
+ * - require_relative: resolved relative to the source file
+ * - require: checks lib/ directory convention
+ */
+function resolveRubyImport(
+  module: string,
+  sourceFile: string,
+  allFiles: Set<string>,
+): string | null {
+  // require_relative: resolve relative to source file
+  if (!module.startsWith("/")) {
+    const dir = path.dirname(sourceFile);
+    const relative = path.normalize(path.join(dir, module));
+
+    // Try with .rb extension
+    const withRb = relative + ".rb";
+    if (allFiles.has(withRb)) return withRb;
+
+    // Try exact match
+    if (allFiles.has(relative)) return relative;
+  }
+
+  // require: check lib/ directory convention
+  const libPath = path.join("lib", module);
+  const withRb = libPath + ".rb";
+  if (allFiles.has(withRb)) return withRb;
+  if (allFiles.has(libPath)) return libPath;
+
+  // Try as direct path with .rb
+  const directWithRb = module + ".rb";
+  if (allFiles.has(directWithRb)) return directWithRb;
+  if (allFiles.has(module)) return module;
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Kotlin / Java resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a Kotlin/Java dotted package import to a file path.
+ * Maps dotted package (e.g., com.example.MyClass) to directory path
+ * and checks src/main/java/ and src/main/kotlin/ convention directories.
+ */
+function resolveJvmImport(importPath: string, allFiles: Set<string>): string | null {
+  // Convert dots to path separators
+  const filePath = importPath.replace(/\./g, "/");
+
+  // Strip wildcard imports (com.example.*)
+  const cleanPath = filePath.replace(/\/\*$/, "");
+
+  // Convention directories to check
+  const prefixes = ["src/main/java/", "src/main/kotlin/", "src/", ""];
+
+  // File extensions to try
+  const extensions = [".kt", ".java", ".kts"];
+
+  for (const prefix of prefixes) {
+    for (const ext of extensions) {
+      const candidate = prefix + cleanPath + ext;
+      if (allFiles.has(candidate)) return candidate;
+    }
+
+    // Also try as a directory (package-level import)
+    for (const ext of extensions) {
+      // Look for any file in the package directory
+      const dirPrefix = prefix + cleanPath + "/";
+      for (const file of allFiles) {
+        if (file.startsWith(dirPrefix) && file.endsWith(ext)) {
+          return file;
+        }
+      }
+    }
+  }
 
   return null;
 }
