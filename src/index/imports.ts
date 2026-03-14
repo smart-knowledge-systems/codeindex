@@ -33,6 +33,13 @@ export function extractImports(filePath: string, content: string): ImportEdge[] 
       return extractRubyImports(content);
     case ".php":
       return extractPhpImports(content);
+    case ".lua":
+      return extractLuaImports(content);
+    case ".zig":
+      return extractZigImports(content);
+    case ".ex":
+    case ".exs":
+      return extractElixirImports(content);
     default:
       return [];
   }
@@ -203,6 +210,77 @@ function extractPhpImports(content: string): ImportEdge[] {
   const reqRe = /(?:require|include)(?:_once)?\s+["']([^"']+)["']/g;
   for (const match of content.matchAll(reqRe)) {
     edges.push({ importedModule: match[1], language: "php" });
+  }
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// Lua
+// ---------------------------------------------------------------------------
+
+function extractLuaImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  const requireRe = /require\s*\(\s*["']([^"']+)["']\s*\)/g;
+  for (const match of content.matchAll(requireRe)) {
+    edges.push({ importedModule: match[1], language: "lua" });
+  }
+  // require without parens: require 'module' (negative lookahead excludes paren variant)
+  const requireNoParenRe = /require\s+(?!\()["']([^"']+)["']/g;
+  for (const match of content.matchAll(requireNoParenRe)) {
+    edges.push({ importedModule: match[1], language: "lua" });
+  }
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// Zig
+// ---------------------------------------------------------------------------
+
+function extractZigImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  // @import("module")
+  const importRe = /@import\s*\(\s*"([^"]+)"\s*\)/g;
+  for (const match of content.matchAll(importRe)) {
+    edges.push({ importedModule: match[1], language: "zig" });
+  }
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// Elixir
+// ---------------------------------------------------------------------------
+
+function extractElixirImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  // alias Module.Name
+  const aliasRe = /alias\s+([\w.]+)(?!\.\{)/g;
+  for (const match of content.matchAll(aliasRe)) {
+    const mod = match[1].replace(/\.$/, ""); // strip trailing dot from destructuring prefix
+    if (mod) edges.push({ importedModule: mod, language: "elixir" });
+  }
+  // alias Module.{A, B} — expand destructured aliases
+  const aliasDestructRe = /alias\s+([\w.]+)\.\{([^}]+)\}/g;
+  for (const match of content.matchAll(aliasDestructRe)) {
+    const prefix = match[1];
+    const members = match[2].split(",").map((s) => s.trim());
+    for (const member of members) {
+      if (member) edges.push({ importedModule: `${prefix}.${member}`, language: "elixir" });
+    }
+  }
+  // import Module
+  const importRe = /import\s+([\w.]+)/g;
+  for (const match of content.matchAll(importRe)) {
+    edges.push({ importedModule: match[1], language: "elixir" });
+  }
+  // use Module
+  const useRe = /use\s+([\w.]+)/g;
+  for (const match of content.matchAll(useRe)) {
+    edges.push({ importedModule: match[1], language: "elixir" });
+  }
+  // require Module
+  const requireRe = /require\s+([\w.]+)/g;
+  for (const match of content.matchAll(requireRe)) {
+    edges.push({ importedModule: match[1], language: "elixir" });
   }
   return deduplicateEdges(edges);
 }

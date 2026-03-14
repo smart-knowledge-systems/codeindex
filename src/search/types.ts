@@ -30,6 +30,8 @@ export interface SearchResult {
     repoName: string;
     direction: "depends-on" | "depended-by";
   }>;
+  cluster?: string;
+  clusterLabel?: string;
 }
 
 export interface EmbeddingCacheLike {
@@ -59,6 +61,13 @@ export interface SkeletonEntry {
   endLine: number;
 }
 
+export interface RerankingConfig {
+  enabled: boolean;
+  importProximityWeight: number;
+  crossRepoWeight: number;
+  coChangeWeight: number;
+}
+
 export interface CodeindexConfig {
   store: "pg" | "sqlite";
   pg: {
@@ -85,6 +94,8 @@ export interface CodeindexConfig {
   };
   readOnly?: boolean;
   languageProfiles?: Record<string, Partial<ScoringConfig>>;
+  reranking?: RerankingConfig;
+  providerProfiles?: Record<string, Partial<ScoringConfig>>;
 }
 
 export interface ScoringConfig {

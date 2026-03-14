@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server";
 
 describe("MCP server", () => {
-  it("lists all four tools", async () => {
+  it("lists all registered tools", async () => {
     const mcpServer = createMcpServer(process.cwd());
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -16,7 +16,15 @@ describe("MCP server", () => {
     const { tools } = await client.listTools();
     const toolNames = tools.map((t) => t.name).sort();
 
-    expect(toolNames).toEqual(["drift", "intent", "search", "status"]);
+    // Core tools always present
+    expect(toolNames).toContain("search");
+    expect(toolNames).toContain("status");
+    expect(toolNames).toContain("drift");
+    expect(toolNames).toContain("intent");
+    // M5 architecture intelligence tools
+    expect(toolNames).toContain("findCallers");
+    expect(toolNames).toContain("traceImportChain");
+    expect(toolNames.length).toBeGreaterThanOrEqual(15);
 
     await client.close();
     await mcpServer.close();

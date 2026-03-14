@@ -37,6 +37,15 @@ const DEFAULTS: CodeindexConfig = {
     kotlin: { beta: 0.1, parentBoostMultiplier: 0.15 },
     python: { beta: 0.25 },
   },
+  reranking: {
+    enabled: false,
+    importProximityWeight: 0.05,
+    crossRepoWeight: 0.03,
+    coChangeWeight: 0.04,
+  },
+  providerProfiles: {
+    ollama: { hybridWeight: 0.45, alpha: 0.2 },
+  },
 };
 
 const GLOBAL_CONFIG_PATH = path.join(

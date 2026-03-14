@@ -728,6 +728,82 @@ describe("Scala (.scala)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Elixir
+// ---------------------------------------------------------------------------
+
+describe("Elixir (.ex)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.ex");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Elixir]");
+  });
+
+  it("extracts Animals.Dog module", () => {
+    expect(hasEntry(entries, "Animals.Dog", "class")).toBeDefined();
+  });
+
+  it("extracts def functions", () => {
+    expect(hasEntry(entries, "new", "function")).toBeDefined();
+    expect(hasEntry(entries, "speak", "function")).toBeDefined();
+  });
+
+  it("extracts defp functions", () => {
+    expect(hasEntry(entries, "validate", "function")).toBeDefined();
+  });
+
+  it("extracts defmacro", () => {
+    expect(hasEntry(entries, "define_greeting", "function")).toBeDefined();
+  });
+
+  it("extracts defprotocol as interface", () => {
+    expect(hasEntry(entries, "Describable", "interface")).toBeDefined();
+  });
+
+  it("extracts defimpl", () => {
+    expect(hasEntry(entries, "Describable", "impl")).toBeDefined();
+  });
+
+  it("extracts Animals.Cat module", () => {
+    expect(hasEntry(entries, "Animals.Cat", "class")).toBeDefined();
+  });
+
+  it("skeleton text includes defmodule", () => {
+    expect(text).toContain("defmodule Animals.Dog");
+    expect(text).toContain("defmodule Animals.Cat");
+  });
+
+  it("skeleton text includes function signatures", () => {
+    expect(text).toContain("def new(name, age)");
+    expect(text).toContain("defp validate(dog)");
+  });
+
+  it("skeleton text includes defstruct", () => {
+    expect(text).toContain("defstruct");
+  });
+
+  it("skeleton text includes defprotocol", () => {
+    expect(text).toContain("defprotocol Describable");
+  });
+
+  it("skeleton text includes defimpl", () => {
+    expect(text).toContain("defimpl Describable, for: Animals.Dog");
+  });
+
+  it("skeleton text includes imports", () => {
+    expect(text).toContain("imports:");
+    expect(text).toContain("use GenServer");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fallback for unsupported extension
 // ---------------------------------------------------------------------------
 
@@ -745,6 +821,156 @@ describe("Fallback (unsupported extension)", () => {
 
 // ---------------------------------------------------------------------------
 // Entry line validation
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Lua
+// ---------------------------------------------------------------------------
+
+describe("Lua (.lua)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.lua");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text with [Lua] header", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Lua]");
+  });
+
+  it("extracts module functions", () => {
+    expect(hasEntry(entries, "M.new", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:getName", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:addItem", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:calculateDamage", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:takeDamage", "function")).toBeDefined();
+    expect(hasEntry(entries, "M:isAlive", "function")).toBeDefined();
+  });
+
+  it("extracts local function", () => {
+    expect(hasEntry(entries, "clamp", "function")).toBeDefined();
+  });
+
+  it("extracts top-level function", () => {
+    expect(hasEntry(entries, "createGame", "function")).toBeDefined();
+  });
+
+  it("imports section contains required modules", () => {
+    expect(text).toContain("json");
+    expect(text).toContain("lib.utils");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Zig
+// ---------------------------------------------------------------------------
+
+describe("Zig (.zig)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.zig");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text with [Zig] header", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Zig]");
+  });
+
+  it("extracts Point struct", () => {
+    expect(hasEntry(entries, "Point", "struct")).toBeDefined();
+  });
+
+  it("extracts struct methods", () => {
+    expect(hasEntry(entries, "init", "method")).toBeDefined();
+    expect(hasEntry(entries, "distance", "method")).toBeDefined();
+  });
+
+  it("extracts Direction enum", () => {
+    expect(hasEntry(entries, "Direction", "enum")).toBeDefined();
+  });
+
+  it("extracts enum methods", () => {
+    expect(hasEntry(entries, "opposite", "method")).toBeDefined();
+  });
+
+  it("extracts Value tagged union", () => {
+    expect(hasEntry(entries, "Value", "union")).toBeDefined();
+  });
+
+  it("extracts union methods", () => {
+    expect(hasEntry(entries, "isNumeric", "method")).toBeDefined();
+  });
+
+  it("extracts ParseError error set", () => {
+    expect(hasEntry(entries, "ParseError", "enum")).toBeDefined();
+  });
+
+  it("extracts top-level functions", () => {
+    expect(hasEntry(entries, "parseInt", "function")).toBeDefined();
+    expect(hasEntry(entries, "helperFunction", "function")).toBeDefined();
+    expect(hasEntry(entries, "maxValue", "function")).toBeDefined();
+  });
+
+  it("extracts test declarations", () => {
+    expect(hasEntry(entries, "Point distance", "function")).toBeDefined();
+    expect(hasEntry(entries, "Direction opposite", "function")).toBeDefined();
+  });
+
+  it("skeleton text includes imports", () => {
+    expect(text).toContain("imports:");
+    expect(text).toContain("std");
+  });
+
+  it("skeleton text includes struct with fields", () => {
+    expect(text).toContain("struct Point");
+    expect(text).toContain("x: f64");
+  });
+
+  it("skeleton text includes enum with variants", () => {
+    expect(text).toContain("enum Direction");
+    expect(text).toContain("variants:");
+    expect(text).toContain("north");
+  });
+
+  it("skeleton text includes union with variants", () => {
+    expect(text).toContain("union Value");
+    expect(text).toContain("integer: i64");
+  });
+
+  it("skeleton text includes error set", () => {
+    expect(text).toContain("error ParseError");
+    expect(text).toContain("InvalidSyntax");
+  });
+
+  it("skeleton text includes pub/private visibility", () => {
+    expect(text).toContain("pub struct Point");
+    expect(text).toContain("pub function parseInt");
+  });
+
+  it("skeleton text includes comptime parameter", () => {
+    expect(text).toContain("comptime T: type");
+  });
+
+  it("skeleton text includes error union return type", () => {
+    expect(text).toContain("ParseError!i64");
+  });
+
+  it("skeleton text includes test blocks", () => {
+    expect(text).toContain('test "Point distance"');
+    expect(text).toContain('test "Direction opposite"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Entry line numbers
 // ---------------------------------------------------------------------------
 
 describe("Entry line numbers", () => {

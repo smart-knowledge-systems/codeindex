@@ -30,6 +30,25 @@ import type { TransactionSQL } from "bun";
  * For scoped sessions: uses session.repoIds.
  * For full-access / no session: queries all repo IDs so RLS passes.
  */
+/**
+ * Cached full-access repo IDs — avoids SELECT id FROM repos on every tool call.
+ *
+ * Note: newly indexed repos will not appear in search results until this cache
+ * refreshes (up to 60 s). Call `invalidateRepoCache()` after repo creation to
+ * avoid the visibility delay.
+ */
+let cachedAllRepoIds: number[] | null = null;
+let cachedAllRepoIdsAt = 0;
+let inflightRepoIdsFetch: Promise<number[]> | null = null;
+const REPO_CACHE_TTL_MS = 60_000; // refresh every 60 seconds
+
+/** Invalidate the full-access repo ID cache so newly indexed repos are visible immediately. */
+export function invalidateRepoCache(): void {
+  cachedAllRepoIds = null;
+  cachedAllRepoIdsAt = 0;
+  inflightRepoIdsFetch = null;
+}
+
 async function withMcpScope<T>(
   session: AuthSession | undefined,
   fn: (tx: TransactionSQL) => Promise<T>,
@@ -37,9 +56,27 @@ async function withMcpScope<T>(
   if (session?.repoIds) {
     return withRepoScope(session.repoIds, fn);
   }
-  // Full access — need all repo IDs for FORCE RLS
-  const allRepos = await pgUnsafe("SELECT id FROM repos");
-  const allRepoIds = allRepos.map((r: Record<string, unknown>) => Number(r.id));
+  // Full access — use cached repo IDs for FORCE RLS
+  if (!cachedAllRepoIds || Date.now() - cachedAllRepoIdsAt > REPO_CACHE_TTL_MS) {
+    const stampBefore = cachedAllRepoIdsAt;
+    if (!inflightRepoIdsFetch) {
+      inflightRepoIdsFetch = pgUnsafe("SELECT id FROM repos")
+        .then((rows) => rows.map((r: Record<string, unknown>) => Number(r.id)))
+        .finally(() => {
+          inflightRepoIdsFetch = null;
+        });
+    }
+    const freshIds = await inflightRepoIdsFetch;
+    // Only populate cache if it wasn't invalidated while we were awaiting
+    if (cachedAllRepoIdsAt === stampBefore && freshIds) {
+      cachedAllRepoIds = freshIds;
+      cachedAllRepoIdsAt = Date.now();
+    }
+  }
+  // If cache is still empty (invalidated during fetch), do a fresh uncached query
+  const allRepoIds: number[] =
+    cachedAllRepoIds ??
+    (await pgUnsafe("SELECT id FROM repos")).map((r: Record<string, unknown>) => Number(r.id));
   if (allRepoIds.length === 0) {
     // No repos at all — run in a plain transaction
     const pg = await getPg();
@@ -1424,10 +1461,8 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         }
 
         // Pre-load file index once for import resolution across the batch
-        const fileIndex =
-          config.store === "pg"
-            ? await withMcpScope(session, async () => loadFileIndex(repoRoot, repoId))
-            : await loadFileIndex(repoRoot, repoId);
+        // (loadFileIndex already calls withRepoScope internally for PG)
+        const fileIndex = await loadFileIndex(repoRoot, repoId);
 
         const results: { path: string; indexed: boolean; error?: string }[] = [];
         for (const p of paths) {
@@ -1460,6 +1495,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           } catch (err) {
             results.push({ path: p, indexed: false, error: formatError(err) });
           }
+        }
+
+        // Invalidate repo cache so newly indexed files are visible immediately
+        if (results.some((r) => r.indexed)) {
+          invalidateRepoCache();
         }
 
         return {
