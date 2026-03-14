@@ -967,7 +967,14 @@ export async function search(
     explain: options?.explain ?? false,
   };
 
-  const queryEmbedding = await embedSingle(query);
+  let queryEmbedding: number[];
+  const cached = options?.embeddingCache?.get(query);
+  if (cached) {
+    queryEmbedding = cached;
+  } else {
+    queryEmbedding = await embedSingle(query);
+    options?.embeddingCache?.set(query, queryEmbedding);
+  }
   const resolved = await resolveRepoIds(repoRoot, resolvedOptions.scope, config);
   let repoIds = resolved.repoIds;
   const currentRepoId = resolved.currentRepoId;

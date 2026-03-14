@@ -15,6 +15,7 @@ import type { SearchResult } from "../search/types";
 import { CodeindexError, formatError } from "../errors";
 import { validateRepoScope, type AuthSession } from "./auth";
 import { recordEvent } from "../telemetry";
+import { EmbeddingCache } from "./cache";
 
 // ---------------------------------------------------------------------------
 // Status helper (shared with CLI but returns structured data)
@@ -210,6 +211,9 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
     { capabilities: { tools: {} } },
   );
 
+  // Server-level embedding cache shared across all search calls
+  const embeddingCache = new EmbeddingCache();
+
   // --- search tool ---
   mcp.tool(
     "search",
@@ -244,6 +248,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           explain: explain ?? false,
           includeSkeleton: true,
           includeSummary: true,
+          embeddingCache,
         });
 
         const enriched = await enrichResults(repoRoot, results);

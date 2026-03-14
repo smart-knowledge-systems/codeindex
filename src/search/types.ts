@@ -32,6 +32,11 @@ export interface SearchResult {
   }>;
 }
 
+export interface EmbeddingCacheLike {
+  get(text: string): number[] | undefined;
+  set(text: string, embedding: number[]): void;
+}
+
 export interface SearchOptions {
   minScore?: number;
   topN?: number;
@@ -44,6 +49,7 @@ export interface SearchOptions {
   dir?: string[];
   since?: string;
   explain?: boolean;
+  embeddingCache?: EmbeddingCacheLike;
 }
 
 export interface SkeletonEntry {
