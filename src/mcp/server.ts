@@ -334,7 +334,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
         if (uncached.length > 0) {
           const embeddings = await embed(uncached);
-          for (let i = 0; i < uncached.length; i++) {
+          for (let i = 0; i < uncached.length && i < embeddings.length; i++) {
             embeddingCache.set(uncached[i], embeddings[i]);
           }
         }

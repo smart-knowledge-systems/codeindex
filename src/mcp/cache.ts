@@ -38,8 +38,8 @@ export class EmbeddingCache {
 
   set(text: string, embedding: number[]): void {
     const key = this.computeKey(text);
-    // Evict oldest if at capacity
-    if (this.cache.size >= MAX_ENTRIES) {
+    // Evict oldest if at capacity (only when adding a new key)
+    if (!this.cache.has(key) && this.cache.size >= MAX_ENTRIES) {
       const oldest = this.cache.keys().next().value;
       if (oldest) this.cache.delete(oldest);
     }
