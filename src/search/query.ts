@@ -251,6 +251,20 @@ async function searchPgInTransaction(
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
   await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
+
+  // Defense-in-depth: validate interpolated values are strictly numeric
+  // to prevent SQL injection even if upstream data is compromised.
+  for (const v of queryEmbedding) {
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      throw new Error(`Invalid embedding value: ${String(v)}`);
+    }
+  }
+  for (const id of repoIds) {
+    if (typeof id !== "number" || !Number.isInteger(id)) {
+      throw new Error(`Invalid repo ID: ${String(id)}`);
+    }
+  }
+
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
   const repoIdList = repoIds.join(",");
 
