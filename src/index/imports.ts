@@ -35,6 +35,11 @@ export function extractImports(filePath: string, content: string): ImportEdge[] 
       return extractPhpImports(content);
     case ".lua":
       return extractLuaImports(content);
+    case ".zig":
+      return extractZigImports(content);
+    case ".ex":
+    case ".exs":
+      return extractElixirImports(content);
     default:
       return [];
   }
@@ -223,6 +228,49 @@ function extractLuaImports(content: string): ImportEdge[] {
   const requireNoParenRe = /require\s+["']([^"']+)["']/g;
   for (const match of content.matchAll(requireNoParenRe)) {
     edges.push({ importedModule: match[1], language: "lua" });
+  }
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// Zig
+// ---------------------------------------------------------------------------
+
+function extractZigImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  // @import("module")
+  const importRe = /@import\s*\(\s*"([^"]+)"\s*\)/g;
+  for (const match of content.matchAll(importRe)) {
+    edges.push({ importedModule: match[1], language: "zig" });
+  }
+  return deduplicateEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// Elixir
+// ---------------------------------------------------------------------------
+
+function extractElixirImports(content: string): ImportEdge[] {
+  const edges: ImportEdge[] = [];
+  // alias Module.Name or alias Module.{A, B}
+  const aliasRe = /alias\s+([\w.]+)/g;
+  for (const match of content.matchAll(aliasRe)) {
+    edges.push({ importedModule: match[1], language: "elixir" });
+  }
+  // import Module
+  const importRe = /import\s+([\w.]+)/g;
+  for (const match of content.matchAll(importRe)) {
+    edges.push({ importedModule: match[1], language: "elixir" });
+  }
+  // use Module
+  const useRe = /use\s+([\w.]+)/g;
+  for (const match of content.matchAll(useRe)) {
+    edges.push({ importedModule: match[1], language: "elixir" });
+  }
+  // require Module
+  const requireRe = /require\s+([\w.]+)/g;
+  for (const match of content.matchAll(requireRe)) {
+    edges.push({ importedModule: match[1], language: "elixir" });
   }
   return deduplicateEdges(edges);
 }

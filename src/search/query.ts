@@ -123,6 +123,8 @@ const LANG_ALIASES: Record<string, string[]> = {
   php: [".php"],
   lua: [".lua"],
   zig: [".zig"],
+  elixir: [".ex", ".exs"],
+  ex: [".ex", ".exs"],
 };
 
 function resolveLangExtensions(langs: string[]): string[] {
