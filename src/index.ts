@@ -1617,6 +1617,50 @@ async function main() {
     }
   }
 
+  // Warn about unrecognized flags
+  const GLOBAL_FLAGS = [
+    "help",
+    "version",
+    "read-only",
+    "json",
+    "pretty",
+    "explain",
+    "min-score",
+    "top-n",
+    "lang",
+    "dir",
+    "since",
+    "format",
+    "scope",
+    "out",
+    "transport",
+    "port",
+    "workers",
+    "budget",
+    "files",
+    "commit",
+    "threshold",
+    "config-name",
+    "repo",
+    "output",
+    "exclude",
+    "cost",
+    "include-skeleton",
+    "include-summary",
+    "include-snippet",
+    "dry-run",
+    "quality",
+    "list",
+    "reset",
+    "validate",
+    "alpha",
+    "beta",
+    "gamma",
+    "decay",
+    "parent-boost-multiplier",
+  ];
+  warnUnknownFlags(parsed, GLOBAL_FLAGS);
+
   try {
     switch (parsed.command) {
       case "init":
