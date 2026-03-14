@@ -4,7 +4,11 @@ import path from "path";
 import { parseArgs, flag, hasFlag, warnUnknownFlags, type ParsedArgs } from "./cli";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
-import { getCurrentSchemaVersion, getLatestMigrationVersion } from "./db/migrate";
+import {
+  getCurrentSchemaVersion,
+  getLatestMigrationVersion,
+  checkEmbeddingDimensions,
+} from "./db/migrate";
 import { getPg, pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
@@ -1426,6 +1430,16 @@ async function cmdDoctor(repoRoot: string) {
       );
     } catch {
       check("Schema version", false, "Could not determine schema version.");
+    }
+
+    // Embedding dimension check (SQLite only — vec tables store dimension)
+    if (config.store === "sqlite") {
+      const dimWarning = await checkEmbeddingDimensions(repoRoot, config.embedding.dimensions);
+      if (dimWarning) {
+        check("Embedding dimensions", false, dimWarning);
+      } else {
+        check("Embedding dimensions", true);
+      }
     }
   }
 

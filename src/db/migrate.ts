@@ -272,34 +272,72 @@ export async function verifyMigrationChecksums(
  * These can't be in SQL migration files because they require the sqlite-vec
  * extension to be loaded first (which happens in getSqlite).
  */
-export async function ensureSqliteVecTables(repoRoot?: string): Promise<void> {
+export async function ensureSqliteVecTables(
+  repoRoot?: string,
+  dimensions = 1536,
+): Promise<void> {
   const db = await getSqlite(repoRoot);
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS file_embeddings USING vec0(
       file_id integer PRIMARY KEY,
-      embedding float[1536]
+      embedding float[${dimensions}]
     )
   `);
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS dir_concat_embeddings USING vec0(
       dir_id integer PRIMARY KEY,
-      embedding float[1536]
+      embedding float[${dimensions}]
     )
   `);
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS dir_summary_embeddings USING vec0(
       dir_id integer PRIMARY KEY,
-      embedding float[1536]
+      embedding float[${dimensions}]
     )
   `);
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS commit_embeddings USING vec0(
       commit_id integer PRIMARY KEY,
-      embedding float[1536]
+      embedding float[${dimensions}]
     )
   `);
+}
+
+/**
+ * Verify that the configured embedding dimensions match the vec table schema.
+ * Returns a warning message if mismatched, or null if OK / unable to check.
+ */
+export async function checkEmbeddingDimensions(
+  repoRoot?: string,
+  configDimensions = 1536,
+): Promise<string | null> {
+  try {
+    const db = await getSqlite(repoRoot);
+    // sqlite-vec stores dimension info in the virtual table schema
+    // We can probe by trying to query with a known dimension vector
+    const rows = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'file_embeddings'",
+      )
+      .all() as { sql: string | null }[];
+
+    if (rows.length === 0 || !rows[0].sql) return null;
+
+    const sql = rows[0].sql;
+    const match = sql.match(/float\[(\d+)\]/);
+    if (!match) return null;
+
+    const tableDimensions = parseInt(match[1], 10);
+    if (tableDimensions !== configDimensions) {
+      return `Embedding dimension mismatch: config specifies ${configDimensions} but vec tables use ${tableDimensions}. Re-create tables or update config.`;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
