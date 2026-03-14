@@ -133,44 +133,47 @@ async function getStatus(repoRoot: string, showCost: boolean): Promise<StatusRes
 // Staleness check — compare indexed_at vs file mtime
 // ---------------------------------------------------------------------------
 
-async function getIndexedAt(repoRoot: string, filePath: string): Promise<string | null> {
+async function batchGetIndexedAt(repoRoot: string): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
   const config = await loadConfig(repoRoot);
   if (config.store === "pg") {
-    const rows = await pgUnsafe(
-      `SELECT indexed_at FROM files
-       WHERE repo_id IN (SELECT id FROM repos WHERE root_path = $1)
-         AND file_path = $2`,
-      [repoRoot, filePath],
-    );
-    return rows.length > 0 ? (rows[0].indexed_at as string) : null;
+    const rows = (await pgUnsafe(
+      `SELECT f.file_path, f.indexed_at::text AS indexed_at
+       FROM files f JOIN repos r ON r.id = f.repo_id
+       WHERE r.root_path = $1`,
+      [repoRoot],
+    )) as { file_path: string; indexed_at: string }[];
+    for (const r of rows) map.set(r.file_path, r.indexed_at);
   } else {
     const db = await getSqlite(repoRoot);
-    const row = db
+    const rows = db
       .prepare(
-        `SELECT f.indexed_at FROM files f
-         JOIN repos r ON r.id = f.repo_id
-         WHERE r.root_path = ? AND f.file_path = ?`,
+        `SELECT f.file_path, f.indexed_at
+         FROM files f JOIN repos r ON r.id = f.repo_id
+         WHERE r.root_path = ?`,
       )
-      .get(repoRoot, filePath) as { indexed_at: string } | null;
-    return row?.indexed_at ?? null;
+      .all(repoRoot) as { file_path: string; indexed_at: string }[];
+    for (const r of rows) map.set(r.file_path, r.indexed_at);
   }
+  return map;
 }
 
 async function enrichResults(
   repoRoot: string,
   results: SearchResult[],
 ): Promise<Array<SearchResult & { indexedAt?: string; stale?: boolean }>> {
+  const indexedAtMap = await batchGetIndexedAt(repoRoot);
   const enriched = [];
   for (const r of results) {
     if (r.type === "commit") {
       enriched.push(r);
       continue;
     }
-    const effectiveRoot = r.repoPath ?? repoRoot;
-    const indexedAt = await getIndexedAt(effectiveRoot, r.filePath);
+    const indexedAt = indexedAtMap.get(r.filePath) ?? null;
     let stale = false;
     if (indexedAt) {
       try {
+        const effectiveRoot = r.repoPath ?? repoRoot;
         const absPath = `${effectiveRoot}/${r.filePath}`;
         const stat = statSync(absPath);
         stale = stat.mtimeMs > new Date(indexedAt).getTime();
