@@ -88,14 +88,16 @@ async function resolveFileIds(
     }
   }
 
-  // Also map results without repoId by filePath match
-  for (const r of results) {
-    const key = resultKey(r);
-    if (!map.has(key)) {
-      for (const [k, v] of map) {
-        if (k.endsWith(`:${r.filePath}`)) {
-          map.set(key, v);
-          break;
+  // Also map results without repoId by filePath match (only safe in single-repo setups)
+  if (ctx.repoIds.length <= 1) {
+    for (const r of results) {
+      const key = resultKey(r);
+      if (!map.has(key)) {
+        for (const [k, v] of map) {
+          if (k.endsWith(`:${r.filePath}`)) {
+            map.set(key, v);
+            break;
+          }
         }
       }
     }
@@ -214,7 +216,7 @@ async function getCrossRepoBoosts(
         .all(...topFileIds, ...topFileIds) as Array<{ fid: number }>;
 
       for (const row of rows) {
-        if (allIds.has(row.fid)) {
+        if (allIds.has(row.fid) && !topSet.has(row.fid)) {
           boosts.set(row.fid, 1.0);
         }
       }
