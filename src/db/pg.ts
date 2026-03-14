@@ -11,7 +11,7 @@ export async function getPg(): Promise<InstanceType<typeof SQL>> {
     port: config.pg.port,
     database: config.pg.database,
     username: config.pg.user,
-    max: 10,
+    max: parseInt(process.env.CODEINDEX_PG_MAX_CONNECTIONS ?? "20", 10) || 20,
   });
   return _pg;
 }
