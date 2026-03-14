@@ -651,6 +651,387 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
     },
   );
 
+  // --- getImporters tool ---
+  mcp.tool(
+    "getImporters",
+    "Find all files that import a given file. Returns importer file paths with import specifiers.",
+    {
+      filePath: z.string().describe("Relative file path to find importers of"),
+      repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
+    },
+    async ({ filePath, repoPath }) => {
+      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "getImporters" });
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
+      const repoRoot = repoPath ?? defaultRepoRoot;
+      const config = await loadConfig(repoRoot);
+
+      if (config.store === "pg") {
+        const rows = await pgUnsafe(
+          `SELECT sf.file_path AS importer, fi.import_specifier
+           FROM file_imports fi
+           JOIN files tf ON tf.id = fi.resolved_file_id
+           JOIN files sf ON sf.id = fi.source_file_id
+           JOIN repos r ON r.id = tf.repo_id
+           WHERE r.root_path = $1 AND tf.file_path = $2`,
+          [repoRoot, filePath],
+        );
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      } else {
+        const db = await getSqlite(repoRoot);
+        const rows = db
+          .prepare(
+            `SELECT sf.file_path AS importer, fi.import_specifier
+             FROM file_imports fi
+             JOIN files tf ON tf.id = fi.resolved_file_id
+             JOIN files sf ON sf.id = fi.source_file_id
+             JOIN repos r ON r.id = tf.repo_id
+             WHERE r.root_path = ? AND tf.file_path = ?`,
+          )
+          .all(repoRoot, filePath);
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      }
+    },
+  );
+
+  // --- getDependencies tool ---
+  mcp.tool(
+    "getDependencies",
+    "Find all files that a given file imports/depends on.",
+    {
+      filePath: z.string().describe("Relative file path to find dependencies of"),
+      repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
+    },
+    async ({ filePath, repoPath }) => {
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "getDependencies",
+      });
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
+      const repoRoot = repoPath ?? defaultRepoRoot;
+      const config = await loadConfig(repoRoot);
+
+      if (config.store === "pg") {
+        const rows = await pgUnsafe(
+          `SELECT tf.file_path AS dependency, fi.import_specifier
+           FROM file_imports fi
+           JOIN files sf ON sf.id = fi.source_file_id
+           LEFT JOIN files tf ON tf.id = fi.resolved_file_id
+           JOIN repos r ON r.id = sf.repo_id
+           WHERE r.root_path = $1 AND sf.file_path = $2`,
+          [repoRoot, filePath],
+        );
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      } else {
+        const db = await getSqlite(repoRoot);
+        const rows = db
+          .prepare(
+            `SELECT tf.file_path AS dependency, fi.import_specifier
+             FROM file_imports fi
+             JOIN files sf ON sf.id = fi.source_file_id
+             LEFT JOIN files tf ON tf.id = fi.resolved_file_id
+             JOIN repos r ON r.id = sf.repo_id
+             WHERE r.root_path = ? AND sf.file_path = ?`,
+          )
+          .all(repoRoot, filePath);
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      }
+    },
+  );
+
+  // --- traceImportChain tool ---
+  mcp.tool(
+    "traceImportChain",
+    "Trace the full import chain from a file, following dependencies recursively up to a max depth.",
+    {
+      filePath: z.string().describe("Starting file path"),
+      direction: z
+        .enum(["importers", "dependencies"])
+        .optional()
+        .describe("Direction to trace (default: dependencies)"),
+      maxDepth: z.number().optional().describe("Maximum recursion depth (default: 10, max: 10)"),
+      repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
+    },
+    async ({ filePath, direction, maxDepth, repoPath }) => {
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "traceImportChain",
+      });
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
+      const repoRoot = repoPath ?? defaultRepoRoot;
+      const config = await loadConfig(repoRoot);
+      const depth = Math.min(maxDepth ?? 10, 10);
+      const dir = direction ?? "dependencies";
+
+      if (config.store === "pg") {
+        const joinCol = dir === "dependencies" ? "source_file_id" : "resolved_file_id";
+        const selectCol = dir === "dependencies" ? "resolved_file_id" : "source_file_id";
+        const rows = await pgUnsafe(
+          `WITH RECURSIVE chain AS (
+             SELECT f.id, f.file_path, 0 AS depth
+             FROM files f JOIN repos r ON r.id = f.repo_id
+             WHERE r.root_path = $1 AND f.file_path = $2
+           UNION ALL
+             SELECT nf.id, nf.file_path, c.depth + 1
+             FROM chain c
+             JOIN file_imports fi ON fi.${joinCol} = c.id
+             JOIN files nf ON nf.id = fi.${selectCol}
+             WHERE c.depth < $3
+           )
+           SELECT DISTINCT file_path, depth FROM chain ORDER BY depth`,
+          [repoRoot, filePath, depth],
+        );
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      } else {
+        // SQLite: iterative approach since recursive CTEs with dynamic column names are awkward
+        const db = await getSqlite(repoRoot);
+        const startRow = db
+          .prepare(
+            `SELECT f.id FROM files f JOIN repos r ON r.id = f.repo_id
+             WHERE r.root_path = ? AND f.file_path = ?`,
+          )
+          .get(repoRoot, filePath) as { id: number } | null;
+        if (!startRow) {
+          return { content: [{ type: "text" as const, text: JSON.stringify([]) }] };
+        }
+
+        const visited = new Map<number, { file_path: string; depth: number }>();
+        let frontier = [startRow.id];
+        let currentDepth = 0;
+        const filePathStmt = db.prepare(`SELECT file_path FROM files WHERE id = ?`);
+        const startFilePath = (filePathStmt.get(startRow.id) as { file_path: string }).file_path;
+        visited.set(startRow.id, { file_path: startFilePath, depth: 0 });
+
+        const importStmt =
+          dir === "dependencies"
+            ? db.prepare(
+                `SELECT resolved_file_id AS next_id FROM file_imports WHERE source_file_id = ? AND resolved_file_id IS NOT NULL`,
+              )
+            : db.prepare(
+                `SELECT source_file_id AS next_id FROM file_imports WHERE resolved_file_id = ?`,
+              );
+
+        while (frontier.length > 0 && currentDepth < depth) {
+          currentDepth++;
+          const nextFrontier: number[] = [];
+          for (const id of frontier) {
+            const nexts = importStmt.all(id) as { next_id: number }[];
+            for (const n of nexts) {
+              if (!visited.has(n.next_id)) {
+                const fp = (filePathStmt.get(n.next_id) as { file_path: string }).file_path;
+                visited.set(n.next_id, { file_path: fp, depth: currentDepth });
+                nextFrontier.push(n.next_id);
+              }
+            }
+          }
+          frontier = nextFrontier;
+        }
+
+        const results = [...visited.values()].sort((a, b) => a.depth - b.depth);
+        return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+      }
+    },
+  );
+
+  // --- getCrossRepoEdges tool ---
+  mcp.tool(
+    "getCrossRepoEdges",
+    "Get cross-repository dependency edges, showing how repos depend on each other.",
+    {
+      repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
+    },
+    async ({ repoPath }) => {
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "getCrossRepoEdges",
+      });
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
+      const repoRoot = repoPath ?? defaultRepoRoot;
+      const config = await loadConfig(repoRoot);
+
+      if (config.store === "pg") {
+        const rows = await pgUnsafe(
+          `SELECT sr.name AS source_repo, tr.name AS target_repo,
+                  sf.file_path AS source_file, tf.file_path AS target_file,
+                  e.import_specifier
+           FROM cross_repo_edges e
+           JOIN repos sr ON sr.id = e.source_repo_id
+           JOIN repos tr ON tr.id = e.target_repo_id
+           JOIN files sf ON sf.id = e.source_file_id
+           JOIN files tf ON tf.id = e.target_file_id
+           ORDER BY sr.name, tr.name`,
+        );
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      } else {
+        const db = await getSqlite(repoRoot);
+        const rows = db
+          .prepare(
+            `SELECT sr.name AS source_repo, tr.name AS target_repo,
+                    sf.file_path AS source_file, tf.file_path AS target_file,
+                    e.import_specifier
+             FROM cross_repo_edges e
+             JOIN repos sr ON sr.id = e.source_repo_id
+             JOIN repos tr ON tr.id = e.target_repo_id
+             JOIN files sf ON sf.id = e.source_file_id
+             JOIN files tf ON tf.id = e.target_file_id
+             ORDER BY sr.name, tr.name`,
+          )
+          .all();
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      }
+    },
+  );
+
+  // --- findImplementors tool ---
+  mcp.tool(
+    "findImplementors",
+    "Find files that implement or extend a given interface/class/trait by searching skeleton entries.",
+    {
+      symbol: z.string().describe("Interface, class, or trait name to find implementors of"),
+      repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
+    },
+    async ({ symbol, repoPath }) => {
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "findImplementors",
+      });
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
+      const repoRoot = repoPath ?? defaultRepoRoot;
+      const config = await loadConfig(repoRoot);
+      const pattern = `%${symbol}%`;
+
+      if (config.store === "pg") {
+        const rows = await pgUnsafe(
+          `SELECT f.file_path, f.skeleton, r.name AS repo_name
+           FROM files f
+           JOIN repos r ON r.id = f.repo_id
+           WHERE f.skeleton LIKE $1
+             AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
+                  OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')`,
+          [pattern],
+        );
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      } else {
+        const db = await getSqlite(repoRoot);
+        const rows = db
+          .prepare(
+            `SELECT f.file_path, f.skeleton, r.name AS repo_name
+             FROM files f
+             JOIN repos r ON r.id = f.repo_id
+             WHERE f.skeleton LIKE ?
+               AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
+                    OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')`,
+          )
+          .all(pattern);
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      }
+    },
+  );
+
+  // --- findCallers tool ---
+  mcp.tool(
+    "findCallers",
+    "Find files that import and potentially call a given symbol by searching import specifiers and skeletons.",
+    {
+      symbol: z.string().describe("Function, class, or symbol name to find callers of"),
+      repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
+    },
+    async ({ symbol, repoPath }) => {
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "findCallers",
+      });
+      if (session) {
+        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+        if (!allowed) {
+          return {
+            content: [
+              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+            ],
+          };
+        }
+      }
+      const repoRoot = repoPath ?? defaultRepoRoot;
+      const config = await loadConfig(repoRoot);
+      const pattern = `%${symbol}%`;
+
+      if (config.store === "pg") {
+        const rows = await pgUnsafe(
+          `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+           FROM file_imports fi
+           JOIN files sf ON sf.id = fi.source_file_id
+           JOIN repos r ON r.id = sf.repo_id
+           WHERE fi.import_specifier LIKE $1
+           ORDER BY r.name, sf.file_path`,
+          [pattern],
+        );
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      } else {
+        const db = await getSqlite(repoRoot);
+        const rows = db
+          .prepare(
+            `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.import_specifier
+             FROM file_imports fi
+             JOIN files sf ON sf.id = fi.source_file_id
+             JOIN repos r ON r.id = sf.repo_id
+             WHERE fi.import_specifier LIKE ?
+             ORDER BY r.name, sf.file_path`,
+          )
+          .all(pattern);
+        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+      }
+    },
+  );
+
   // --- reindexFiles tool ---
 
   // Rate limiter: 5 calls/min
