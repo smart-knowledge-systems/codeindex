@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { loadConfig } from "./config";
 import { getPg, pgUnsafe } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
+import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
 import { getRepoOrigin, getRepoName } from "./index/commits";
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,13 @@ export async function repoAdd(repoRoot: string, targetPath: string): Promise<voi
   }
 
   const config = await loadConfig(repoRoot);
+
+  if (config.store === "pg") {
+    await ensurePgSchema();
+  } else {
+    await ensureSqliteSchema(repoRoot);
+  }
+
   const originUrl = (await getRepoOrigin(absPath)) ?? "";
   const name = await getRepoName(absPath);
 
@@ -238,7 +246,7 @@ function printRepoTable(
   console.log(header);
   for (const r of rows) {
     console.log(
-      `${r.id.padEnd(4)}${r.name.padEnd(18)}${r.root_path.padEnd(30)}${r.file_count.padEnd(7)}${r.last_indexed}`,
+      `${String(r.id).padEnd(4)}${String(r.name).padEnd(18)}${String(r.root_path).padEnd(30)}${String(r.file_count).padEnd(7)}${String(r.last_indexed)}`,
     );
   }
 }

@@ -14,6 +14,45 @@ interface MigrationFile {
   sql: string;
 }
 
+/**
+ * Split SQL into statements, preserving dollar-quoted blocks (DO $$ ... $$;).
+ * Strips comment-only lines and empty statements.
+ */
+function splitPgStatements(sql: string): string[] {
+  const results: string[] = [];
+  let current = "";
+  let inDollarQuote = false;
+
+  const lines = sql.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (!inDollarQuote && trimmed.startsWith("--")) continue;
+
+    current += (current ? "\n" : "") + line;
+
+    // Toggle dollar-quoting state
+    const dollarMatches = line.match(/\$\$/g);
+    if (dollarMatches) {
+      for (const _ of dollarMatches) {
+        inDollarQuote = !inDollarQuote;
+      }
+    }
+
+    // Only split on ; when not inside a dollar-quoted block
+    if (!inDollarQuote && line.trimEnd().endsWith(";")) {
+      const stmt = current.replace(/;$/, "").trim();
+      if (stmt.length > 0) results.push(stmt);
+      current = "";
+    }
+  }
+
+  // Capture any trailing statement without semicolon
+  const remaining = current.trim();
+  if (remaining.length > 0) results.push(remaining);
+
+  return results;
+}
+
 /** Compute SHA-256 hex digest of a string. */
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -75,29 +114,23 @@ async function applyPgMigrations(): Promise<number[]> {
     // Run each migration in a connection-pinned transaction
     try {
       await pg.begin(async (tx) => {
-        // Split on semicolons and execute each statement
-        const statements = m.sql
-          .split(";")
-          .map((s) => s.trim())
-          .map((s) =>
-            s
-              .split("\n")
-              .filter((line) => !line.trimStart().startsWith("--"))
-              .join("\n")
-              .trim(),
-          )
-          .filter((s) => s.length > 0);
+        // Split on semicolons, preserving dollar-quoted blocks (DO $$ ... $$;)
+        const statements = splitPgStatements(m.sql);
 
         for (const stmt of statements) {
           await tx.unsafe(stmt);
         }
 
-        // Update version with checksum if the migration didn't already do it
+        // Update version — checksum/filename columns added in migration 7
         if (m.version > 1) {
-          await tx.unsafe(
-            "INSERT INTO schema_version (version, checksum, filename) VALUES ($1, $2, $3)",
-            [m.version, sha256(m.sql), m.filename],
-          );
+          if (m.version >= 7) {
+            await tx.unsafe(
+              "INSERT INTO schema_version (version, checksum, filename) VALUES ($1, $2, $3)",
+              [m.version, sha256(m.sql), m.filename],
+            );
+          } else {
+            await tx.unsafe("INSERT INTO schema_version (version) VALUES ($1)", [m.version]);
+          }
         }
       });
       applied.push(m.version);

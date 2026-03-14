@@ -343,7 +343,9 @@ async function main() {
   console.log(`  Avg Unique Dirs@5:  ${avgUniqueDirsInTop5.toFixed(2)}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
