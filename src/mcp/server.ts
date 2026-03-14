@@ -301,6 +301,16 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           timestamp: new Date().toISOString(),
           tool: "batchSearch",
         });
+        if (session) {
+          const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
+          if (!allowed) {
+            return {
+              content: [
+                { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+              ],
+            };
+          }
+        }
         const repoRoot = defaultRepoRoot;
 
         // Deduplicate queries and batch-embed uncached ones
@@ -383,6 +393,16 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           timestamp: new Date().toISOString(),
           tool: "searchChanged",
         });
+        if (session) {
+          const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
+          if (!allowed) {
+            return {
+              content: [
+                { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+              ],
+            };
+          }
+        }
         const repoRoot = defaultRepoRoot;
         const results = await searchChanged(repoRoot, since, query ?? undefined, {
           topN: topN ?? undefined,
