@@ -13,11 +13,17 @@ export interface PolicyResult {
   details?: Record<string, unknown>;
 }
 
+export interface FixResult {
+  fixed: boolean;
+  message: string;
+}
+
 export interface HealthPolicy {
   name: string;
   description: string;
   severity: "error" | "warning" | "info";
   check(ctx: PolicyContext): Promise<PolicyResult>;
+  fix?(ctx: PolicyContext): Promise<FixResult>;
 }
 
 export interface CheckReport {
