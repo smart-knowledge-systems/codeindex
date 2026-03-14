@@ -1485,14 +1485,16 @@ async function cmdGraph(repoRoot: string, format: string) {
       FROM cross_repo_edges
       GROUP BY source_repo_id, target_repo_id
     `;
-    rows = edgeRows.map((r) => ({
+    rows = edgeRows.map((r: Record<string, unknown>) => ({
       source_repo_id: Number(r.source_repo_id),
       target_repo_id: Number(r.target_repo_id),
       cnt: Number(r.cnt),
     }));
 
     const repoRows = await pg`SELECT id, name FROM repos`;
-    repoNames = new Map(repoRows.map((r) => [Number(r.id), String(r.name)]));
+    repoNames = new Map(
+      repoRows.map((r: Record<string, unknown>) => [Number(r.id), String(r.name)]),
+    );
   } else {
     const db = await getSqlite(repoRoot);
     const edgeRows = db
