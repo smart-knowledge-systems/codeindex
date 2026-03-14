@@ -1131,30 +1131,37 @@ async function attachCrossRepoEdges(
     }[];
     for (const r of repos) repoNameMap.set(parseInt(r.id), r.name);
 
+    // Build cross-repo edges lookup once (matching the SQLite approach)
+    const allEdges = (await pgUnsafe(
+      `SELECT DISTINCT source_repo_id, target_repo_id FROM cross_repo_edges`,
+    )) as { source_repo_id: string; target_repo_id: string }[];
+
+    const depsByRepo = new Map<
+      number,
+      Array<{ repoName: string; direction: "depends-on" | "depended-by" }>
+    >();
+    for (const e of allEdges) {
+      const srcId = parseInt(e.source_repo_id);
+      const tgtId = parseInt(e.target_repo_id);
+
+      const sourceList = depsByRepo.get(srcId) ?? [];
+      const targetName = repoNameMap.get(tgtId) ?? `repo:${tgtId}`;
+      sourceList.push({ repoName: targetName, direction: "depends-on" });
+      depsByRepo.set(srcId, sourceList);
+
+      const targetList = depsByRepo.get(tgtId) ?? [];
+      const sourceName = repoNameMap.get(srcId) ?? `repo:${srcId}`;
+      targetList.push({ repoName: sourceName, direction: "depended-by" });
+      depsByRepo.set(tgtId, targetList);
+    }
+
     for (const result of results) {
       if (result.type === "commit" || result.type === "dir") continue;
-
       const repoId = result.repoId ? parseInt(result.repoId) : null;
       if (!repoId) continue;
-
-      const deps = (await pgUnsafe(
-        `SELECT DISTINCT r.name, 'depends-on' AS direction
-         FROM cross_repo_edges cre
-         JOIN repos r ON r.id = cre.target_repo_id
-         WHERE cre.source_repo_id = $1
-         UNION
-         SELECT DISTINCT r.name, 'depended-by' AS direction
-         FROM cross_repo_edges cre
-         JOIN repos r ON r.id = cre.source_repo_id
-         WHERE cre.target_repo_id = $1`,
-        [repoId],
-      )) as { name: string; direction: string }[];
-
-      if (deps.length > 0) {
-        result.crossRepoEdges = deps.map((d) => ({
-          repoName: d.name,
-          direction: d.direction as "depends-on" | "depended-by",
-        }));
+      const edges = depsByRepo.get(repoId);
+      if (edges && edges.length > 0) {
+        result.crossRepoEdges = edges;
       }
     }
   } else {
