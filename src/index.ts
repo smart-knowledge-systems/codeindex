@@ -957,18 +957,9 @@ async function cmdSearch(
 
   // Zero-result diagnostics
   if (results.length === 0) {
-    const words = query
-      .split(/\s+/)
-      .filter((w) => w.length > 2)
-      .map((w) => `"${w}"`)
-      .join(" ");
-    console.error("\nNo results found. Suggestions:");
-    console.error("  - Try broader or different search terms");
-    console.error("  - Check index status: codeindex status");
-    console.error("  - Validate environment: codeindex doctor");
-    if (words) {
-      console.error(`  - Try keyword search: rg -i ${words}`);
-    }
+    console.error(
+      `No results found. Try: rg '${query}' or run 'codeindex doctor' to check index health.`,
+    );
   }
 }
 
@@ -1463,13 +1454,55 @@ Commands:
 
 Options:
   --path <dir>         Repo root (default: cwd)
-  --read-only          Block write operations (init, reindex, update)`;
+  --read-only          Block write operations (init, reindex, update)
+  --version            Print version`;
 
 const WRITE_COMMANDS = new Set(["init", "reindex", "update", "install-hook"]);
+
+const SUBCOMMAND_HELP: Record<string, string> = {
+  search:
+    "Usage: codeindex search <query> [options]\n\nOptions:\n  --min-score <f>       Minimum score threshold (default 0.3)\n  --top-n <n>           Max results\n  --scope <s>           project|all|name1,name2\n  --lang <l>            Filter by language (ts,python,rust,go,java,c,cpp,cs)\n  --dir <d>             Filter by directory prefix\n  --since <t>           Filter by time (30d, 2w, 3m, or ISO date)\n  --include-skeleton    Include skeleton text\n  --include-summary     Include directory summaries\n  --include-snippet     Include code snippets with line numbers\n  --explain             Show per-result score breakdown\n  --format <f>          Output format: json (default), pretty, compact\n  --pretty              Alias for --format pretty\n  --json                Alias for --format json",
+  reindex:
+    "Usage: codeindex reindex [options]\n\nOptions:\n  --dry-run             Report what would change and projected cost\n  --budget <usd>        Set cost cap for this reindex (USD)\n  --scope all           Reindex all registered repos in parallel\n  --workers <n>         Number of parallel workers (default 3)\n  --force               Force full reindex even if unchanged",
+  status:
+    "Usage: codeindex status [options]\n\nOptions:\n  --cost                Show token usage and cost breakdown",
+  serve:
+    "Usage: codeindex serve [options]\n\nOptions:\n  --transport <t>       stdio (default) or sse\n  --port <n>            Port for SSE transport (default 3100)",
+  init: "Usage: codeindex init\n\nInitializes codeindex in the current repository.",
+  doctor: "Usage: codeindex doctor\n\nChecks environment and configuration health.",
+  check:
+    "Usage: codeindex check [options]\n\nOptions:\n  --json                Output as JSON\n  --quality             Run quality checks\n  --dataset <path>      Quality dataset path\n  --baseline <path>     Quality baseline path",
+  intent:
+    "Usage: codeindex intent [options]\n\nOptions:\n  --out <path>          Output path (default: stdout)",
+  drift:
+    "Usage: codeindex drift [options]\n\nOptions:\n  --threshold <f>       Drift threshold (default 0.3)\n  --agents-md <path>    Path to AGENTS.md (default: AGENTS.md)\n  --out <path>          Output JSON path (default: stdout)",
+  repo: "Usage: codeindex repo <add|remove|list|status|purge>\n\nSubcommands:\n  add <path>            Register a repository\n  remove <name>         Unregister a repository\n  list                  List all registered repos\n  status [name]         Show repo status\n  purge <name> [--force] Remove repo and all its data",
+  token:
+    "Usage: codeindex token <create|list|revoke>\n\nSubcommands:\n  create --name <name> --repos <id,id> [--expires <ISO>]\n  list                  List all tokens\n  revoke --id <N>       Revoke a token",
+  "mcp-config":
+    "Usage: codeindex mcp-config [options]\n\nOptions:\n  --transport <t>       stdio (default) or sse\n  --port <n>            Port for SSE transport (default 3100)",
+  config:
+    "Usage: codeindex config [--list | --key value ...]\n\nOptions:\n  --list                Show all config values with sources",
+  export:
+    "Usage: codeindex export [options]\n\nOptions:\n  --out <path>              Output path (default .codeindex.db)\n  --include-embeddings      Include embedding vectors (redacted by default)\n  --redact-commits          Exclude commit data from export\n  --exclude <globs>         Comma-separated glob patterns to exclude files",
+};
 
 async function main() {
   const parsed = parseArgs(process.argv);
   const repoRoot = flag(parsed, "path") ? path.resolve(flag(parsed, "path")!) : process.cwd();
+
+  // --version: print version and exit
+  if (hasFlag(parsed, "version")) {
+    const pkg = await Bun.file(path.join(import.meta.dir, "../package.json")).json();
+    console.log(pkg.version);
+    process.exit(0);
+  }
+
+  // Per-subcommand --help
+  if (hasFlag(parsed, "help") && parsed.command && SUBCOMMAND_HELP[parsed.command]) {
+    console.log(SUBCOMMAND_HELP[parsed.command]);
+    process.exit(0);
+  }
 
   // Read-only guard: block write operations when --read-only flag or config is set
   if (WRITE_COMMANDS.has(parsed.command)) {
