@@ -1803,6 +1803,8 @@ async function main() {
     "gamma",
     "decay",
     "parent-boost-multiplier",
+    "changed-since",
+    "force",
   ];
   warnUnknownFlags(parsed, GLOBAL_FLAGS);
 
@@ -2147,7 +2149,11 @@ async function main() {
           const { authenticateSession } = await import("./mcp/auth");
           const token = process.env.CODEINDEX_TOKEN;
           const session = await authenticateSession(repoRoot, token);
-          const mcpServer = createMcpServer(repoRoot, session ?? undefined);
+          if (session === null) {
+            console.error("Authentication failed: invalid or missing token.");
+            process.exit(1);
+          }
+          const mcpServer = createMcpServer(repoRoot, session);
           await startStdio(mcpServer, repoRoot);
         }
         break;
