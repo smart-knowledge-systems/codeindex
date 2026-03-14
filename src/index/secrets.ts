@@ -17,7 +17,7 @@ const PATTERNS: [string, RegExp][] = [
   ["Slack User Token", /xoxp-[0-9]{10,}-[0-9]{10,}-[0-9]{10,}-[a-f0-9]{32}/],
   ["Google API Key", /AIza[0-9A-Za-z_-]{35}/],
   ["Stripe Secret Key", /sk_live_[0-9a-zA-Z]{24,}/],
-  ["Twilio API Key", /SK[0-9a-fA-F]{32}/],
+  ["Twilio API Key", /\bSK[0-9a-fA-F]{32}\b/],
   ["SendGrid API Key", /SG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{43,}/],
   [
     "Datadog API Key",
