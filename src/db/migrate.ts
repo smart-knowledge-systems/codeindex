@@ -33,7 +33,7 @@ function splitPgStatements(sql: string): string[] {
     // Toggle dollar-quoting state
     const dollarMatches = line.match(/\$\$/g);
     if (dollarMatches) {
-      for (const _ of dollarMatches) {
+      for (let i = 0; i < dollarMatches.length; i++) {
         inDollarQuote = !inDollarQuote;
       }
     }
