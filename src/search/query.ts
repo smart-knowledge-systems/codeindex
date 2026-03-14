@@ -122,6 +122,7 @@ const LANG_ALIASES: Record<string, string[]> = {
   rb: [".rb"],
   php: [".php"],
   lua: [".lua"],
+  zig: [".zig"],
 };
 
 function resolveLangExtensions(langs: string[]): string[] {
