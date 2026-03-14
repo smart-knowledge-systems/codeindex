@@ -25,14 +25,20 @@ import { reindexSingleFile, loadFileIndex } from "../index/reindex";
 
 const REINDEX_RATE_LIMIT = 5;
 const REINDEX_RATE_WINDOW_MS = 60_000;
-// Keyed by repoRoot so rate limits are per-repo, not per-connection
+// Keyed by session identity so per-user limits persist across reconnections
 const reindexCallLogs = new Map<string, number[]>();
 
-function checkReindexRateLimit(repoRoot: string): boolean {
-  let log = reindexCallLogs.get(repoRoot);
+function reindexRateLimitKey(repoRoot: string, session?: AuthSession): string {
+  if (!session || session.repoIds === null) return `${repoRoot}:full`;
+  return `${repoRoot}:${session.repoIds.slice().sort().join(",")}`;
+}
+
+function checkReindexRateLimit(repoRoot: string, session?: AuthSession): boolean {
+  const key = reindexRateLimitKey(repoRoot, session);
+  let log = reindexCallLogs.get(key);
   if (!log) {
     log = [];
-    reindexCallLogs.set(repoRoot, log);
+    reindexCallLogs.set(key, log);
   }
   const now = Date.now();
   while (log.length > 0 && now - log[0] > REINDEX_RATE_WINDOW_MS) {
@@ -1261,8 +1267,8 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           }
         }
 
-        // Rate limit check (module-level, persists across reconnections)
-        if (!checkReindexRateLimit(defaultRepoRoot)) {
+        // Rate limit check (module-level, persists across reconnections, per-session)
+        if (!checkReindexRateLimit(defaultRepoRoot, session)) {
           return {
             content: [
               {
