@@ -39,8 +39,13 @@ function splitPgStatements(sql: string): string[] {
     }
 
     // Only split on ; when not inside a dollar-quoted block
-    if (!inDollarQuote && line.trimEnd().endsWith(";")) {
-      const stmt = current.replace(/;$/, "").trim();
+    // Strip trailing inline comments before checking for statement terminator
+    const effectiveLine = !inDollarQuote ? line.replace(/\s*--.*$/, "") : line;
+    if (!inDollarQuote && effectiveLine.trimEnd().endsWith(";")) {
+      const stmt = current
+        .replace(/\s*--[^\n]*$/, "")
+        .replace(/;$/, "")
+        .trim();
       if (stmt.length > 0) results.push(stmt);
       current = "";
     }
