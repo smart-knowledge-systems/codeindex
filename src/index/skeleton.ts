@@ -1884,7 +1884,7 @@ function skeletonZig(filename: string, root: Node): string {
             }
             for (const fn_ of childrenOfType(value, "function_declaration")) {
               const fnName = childText(fn_, "name");
-              const params = fn_.childForFieldName("parameters");
+              const params = firstChildOfType(fn_, "parameters");
               const paramStr = extractZigParams(params);
               const retStr = extractZigReturnType(fn_);
               const fnPub = fn_.children.some((c) => c.type === "pub");
@@ -1901,7 +1901,7 @@ function skeletonZig(filename: string, root: Node): string {
             if (variants.length > 0) lines.push(`  variants: ${variants.join(", ")}`);
             for (const fn_ of childrenOfType(value, "function_declaration")) {
               const fnName = childText(fn_, "name");
-              const params = fn_.childForFieldName("parameters");
+              const params = firstChildOfType(fn_, "parameters");
               const paramStr = extractZigParams(params);
               const retStr = extractZigReturnType(fn_);
               const fnPub = fn_.children.some((c) => c.type === "pub");
@@ -1920,7 +1920,7 @@ function skeletonZig(filename: string, root: Node): string {
             if (variants.length > 0) lines.push(`  variants: ${variants.join(", ")}`);
             for (const fn_ of childrenOfType(value, "function_declaration")) {
               const fnName = childText(fn_, "name");
-              const params = fn_.childForFieldName("parameters");
+              const params = firstChildOfType(fn_, "parameters");
               const paramStr = extractZigParams(params);
               const retStr = extractZigReturnType(fn_);
               const fnPub = fn_.children.some((c) => c.type === "pub");
@@ -1941,7 +1941,7 @@ function skeletonZig(filename: string, root: Node): string {
       }
       case "function_declaration": {
         const fnName = childText(node, "name");
-        const params = node.childForFieldName("parameters");
+        const params = firstChildOfType(node, "parameters");
         const paramStr = extractZigParams(params);
         const retStr = extractZigReturnType(node);
         const isPub = node.children.some((c) => c.type === "pub");
