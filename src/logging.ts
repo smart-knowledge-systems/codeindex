@@ -17,10 +17,21 @@ export function withTiming<T>(event: string, extra: Record<string, unknown>, fn:
   const start = performance.now();
   const result = fn();
   if (result instanceof Promise) {
-    return result.then((v) => {
-      logEvent({ event, duration_ms: Math.round(performance.now() - start), ...extra });
-      return v;
-    }) as T;
+    return result.then(
+      (v) => {
+        logEvent({ event, duration_ms: Math.round(performance.now() - start), ...extra });
+        return v;
+      },
+      (err) => {
+        logEvent({
+          event,
+          duration_ms: Math.round(performance.now() - start),
+          error: true,
+          ...extra,
+        });
+        throw err;
+      },
+    ) as T;
   }
   logEvent({ event, duration_ms: Math.round(performance.now() - start), ...extra });
   return result;
