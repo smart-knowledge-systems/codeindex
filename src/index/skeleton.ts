@@ -1,6 +1,13 @@
 import path from "path";
 import { Parser, Language, type Node } from "web-tree-sitter";
 import type { SkeletonEntry } from "../search/types";
+import {
+  childText,
+  nodeText,
+  firstChildOfType,
+  childrenOfType,
+  descendantsOfType,
+} from "./skeleton-utils";
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -97,32 +104,6 @@ async function loadLanguage(lang: SupportedLanguage): Promise<Language> {
 
 function firstNLines(content: string, n: number): string {
   return content.split("\n").slice(0, n).join("\n");
-}
-
-function childText(node: Node, fieldName: string): string {
-  return node.childForFieldName(fieldName)?.text ?? "";
-}
-
-function nodeText(node: Node): string {
-  return node.text;
-}
-
-/** Return the text of the first child whose type matches one of the given types. */
-function firstChildOfType(node: Node, ...types: string[]): Node | null {
-  for (const child of node.children) {
-    if (types.includes(child.type)) return child;
-  }
-  return null;
-}
-
-/** Collect immediate named children with a given type. */
-function childrenOfType(node: Node, ...types: string[]): Node[] {
-  return node.namedChildren.filter((c) => types.includes(c.type));
-}
-
-/** Walk all descendants (breadth-first) matching a type set. */
-function descendantsOfType(node: Node, types: string[]): Node[] {
-  return node.descendantsOfType(types);
 }
 
 // ---------------------------------------------------------------------------
