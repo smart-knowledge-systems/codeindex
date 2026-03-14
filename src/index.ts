@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import path from "path";
-import { parseArgs, flag, hasFlag } from "./cli";
+import { parseArgs, flag, hasFlag, type ParsedArgs } from "./cli";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
 import { getCurrentSchemaVersion, getLatestMigrationVersion } from "./db/migrate";
@@ -1369,6 +1369,36 @@ async function cmdDoctor(repoRoot: string) {
 }
 
 // ---------------------------------------------------------------------------
+// mcp-config command
+// ---------------------------------------------------------------------------
+
+async function cmdMcpConfig(parsed: ParsedArgs) {
+  const transport = flag(parsed, "transport") ?? "stdio";
+  const port = flag(parsed, "port") ?? "3100";
+
+  if (transport === "sse") {
+    const config = {
+      mcpServers: {
+        codeindex: {
+          url: `http://localhost:${port}/sse`,
+        },
+      },
+    };
+    console.log(JSON.stringify(config, null, 2));
+  } else {
+    const config = {
+      mcpServers: {
+        codeindex: {
+          command: "codeindex",
+          args: ["mcp"],
+        },
+      },
+    };
+    console.log(JSON.stringify(config, null, 2));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CLI dispatch
 // ---------------------------------------------------------------------------
 
@@ -1424,6 +1454,9 @@ Commands:
     create --name --repos <id,id> [--expires <ISO>]
     list               List all tokens
     revoke --id <N>    Revoke a token
+  mcp-config           Print MCP integration JSON config
+    --transport <t>    stdio (default) or sse
+    --port <n>         Port for SSE transport (default 3100)
   doctor               Check environment and configuration
 
 Options:
@@ -1749,6 +1782,10 @@ async function main() {
         }
         break;
       }
+
+      case "mcp-config":
+        await cmdMcpConfig(parsed);
+        break;
 
       case "serve": {
         const { createMcpServer } = await import("./mcp/server");
