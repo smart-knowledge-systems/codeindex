@@ -389,6 +389,46 @@
     "language": "lua"
   },
   {
+    "id": "scala-object-singleton",
+    "query": "Scala object singleton pattern",
+    "expectedFiles": ["test/fixtures/sample.scala"],
+    "description": "Scala object definition as singleton pattern",
+    "tags": ["scala", "language-specific"],
+    "language": "scala"
+  },
+  {
+    "id": "scala-trait-definition",
+    "query": "Scala trait with abstract methods",
+    "expectedFiles": ["test/fixtures/sample.scala"],
+    "description": "Scala trait defining interface with abstract methods",
+    "tags": ["scala", "language-specific"],
+    "language": "scala"
+  },
+  {
+    "id": "scala-case-class",
+    "query": "Scala case class value type",
+    "expectedFiles": ["test/fixtures/sample.scala"],
+    "description": "Scala case class for immutable data",
+    "tags": ["scala", "language-specific"],
+    "language": "scala"
+  },
+  {
+    "id": "scala-class-trait-impl",
+    "query": "Scala class extending trait implementation",
+    "expectedFiles": ["test/fixtures/sample.scala"],
+    "description": "Scala class implementing a trait with override methods",
+    "tags": ["scala", "language-specific"],
+    "language": "scala"
+  },
+  {
+    "id": "scala-type-alias",
+    "query": "Scala type alias definition",
+    "expectedFiles": ["test/fixtures/sample.scala"],
+    "description": "Scala type alias for cleaner type signatures",
+    "tags": ["scala", "language-specific"],
+    "language": "scala"
+  },
+  {
     "id": "prose-claude-instructions",
     "query": "project instructions and required behavior for contributors",
     "expectedFiles": ["CLAUDE.md"],

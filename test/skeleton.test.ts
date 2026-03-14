@@ -628,6 +628,67 @@ describe("PHP (.php)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Scala
+// ---------------------------------------------------------------------------
+
+describe("Scala (.scala)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.scala");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Scala]");
+  });
+
+  it("extracts AppConfig object", () => {
+    expect(hasEntry(entries, "AppConfig", "object")).toBeDefined();
+  });
+
+  it("extracts AppConfig class", () => {
+    expect(hasEntry(entries, "AppConfig", "class")).toBeDefined();
+  });
+
+  it("extracts Repository trait", () => {
+    expect(hasEntry(entries, "Repository", "trait")).toBeDefined();
+  });
+
+  it("extracts User class", () => {
+    expect(hasEntry(entries, "User", "class")).toBeDefined();
+  });
+
+  it("extracts val definition", () => {
+    expect(hasEntry(entries, "MaxRetries", "property")).toBeDefined();
+  });
+
+  it("extracts var definition", () => {
+    expect(hasEntry(entries, "currentUser", "property")).toBeDefined();
+  });
+
+  it("extracts type definition", () => {
+    expect(hasEntry(entries, "UserId", "type")).toBeDefined();
+  });
+
+  it("extracts top-level function", () => {
+    expect(hasEntry(entries, "createRepository", "function")).toBeDefined();
+  });
+
+  it("skeleton text includes object and trait", () => {
+    expect(text).toContain("object AppConfig");
+    expect(text).toContain("trait Repository");
+  });
+
+  it("skeleton text includes imports", () => {
+    expect(text).toContain("imports:");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fallback for unsupported extension
 // ---------------------------------------------------------------------------
 

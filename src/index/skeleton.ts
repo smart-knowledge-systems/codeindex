@@ -1459,6 +1459,27 @@ function skeletonRuby(filename: string, root: Node): string {
         lines.push(`${indent}+ self.${name?.text ?? "(anonymous)"}(${paramStr})`);
         break;
       }
+      case "call": {
+        // attr_accessor, attr_reader, attr_writer macros
+        const method = node.childForFieldName("method");
+        if (
+          method &&
+          (method.text === "attr_accessor" ||
+            method.text === "attr_reader" ||
+            method.text === "attr_writer")
+        ) {
+          const args = node.childForFieldName("arguments");
+          if (args) {
+            const symbols = args.namedChildren
+              .filter((a) => a.type === "simple_symbol" || a.type === "symbol")
+              .map((a) => a.text.replace(/^:/, ""));
+            if (symbols.length > 0) {
+              lines.push(`${indent}${method.text} ${symbols.join(", ")}`);
+            }
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -2000,9 +2021,18 @@ function collectEntries(root: Node): SkeletonEntry[] {
         return;
       }
       case "type_definition": {
+        // C/C++: has "declarator" field
         const declarator = node.childForFieldName("declarator");
         if (declarator) {
           entries.push({ name: declarator.text, kind: "typedef", startLine, endLine });
+          return;
+        }
+        // Scala: has "name" field
+        const typeName =
+          node.childForFieldName("name")?.text ??
+          firstChildOfType(node, "type_identifier")?.text;
+        if (typeName) {
+          entries.push({ name: typeName, kind: "type", startLine, endLine });
         }
         return;
       }
@@ -2022,6 +2052,28 @@ function collectEntries(root: Node): SkeletonEntry[] {
       case "singleton_method": {
         const name = node.childForFieldName("name")?.text ?? "(anonymous)";
         entries.push({ name, kind: "method", startLine, endLine });
+        return;
+      }
+
+      // Ruby attr_accessor, attr_reader, attr_writer
+      case "call": {
+        const methodNode = node.childForFieldName("method");
+        if (
+          methodNode &&
+          (methodNode.text === "attr_accessor" ||
+            methodNode.text === "attr_reader" ||
+            methodNode.text === "attr_writer")
+        ) {
+          const args = node.childForFieldName("arguments");
+          if (args) {
+            for (const arg of args.namedChildren) {
+              if (arg.type === "simple_symbol" || arg.type === "symbol") {
+                const propName = arg.text.replace(/^:/, "");
+                entries.push({ name: propName, kind: "property", startLine, endLine });
+              }
+            }
+          }
+        }
         return;
       }
 
