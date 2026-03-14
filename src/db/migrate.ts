@@ -1,14 +1,92 @@
+import { createHash } from "crypto";
 import { readdir, readFile } from "fs/promises";
 import path from "path";
 import { getPg } from "./pg";
 import { getSqlite } from "./sqlite";
+import { logEvent } from "../logging";
 import { loadConfig } from "../config";
 
 const MIGRATIONS_DIR = path.join(import.meta.dir, "../../migrations");
 
 interface MigrationFile {
   version: number;
+  filename: string;
   sql: string;
+}
+
+/**
+ * Strip a trailing SQL inline comment (`-- ...`) from a line, but only if the
+ * `--` is not inside a string literal.  Walks the line character-by-character
+ * toggling an in-string flag on unescaped single quotes.
+ */
+function stripInlineComment(line: string): string {
+  let inString = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "'" && !inString) {
+      inString = true;
+    } else if (ch === "'" && inString) {
+      // Two consecutive quotes ('') are an escaped quote inside a literal
+      if (i + 1 < line.length && line[i + 1] === "'") {
+        i++; // skip the escaped quote
+      } else {
+        inString = false;
+      }
+    } else if (!inString && ch === "-" && i + 1 < line.length && line[i + 1] === "-") {
+      // Found an unquoted `--` — trim from here
+      return line.slice(0, i).trimEnd();
+    }
+  }
+  return line;
+}
+
+/**
+ * Split SQL into statements, preserving dollar-quoted blocks (DO $$ ... $$;).
+ * Strips comment-only lines and empty statements.
+ */
+function splitPgStatements(sql: string): string[] {
+  const results: string[] = [];
+  let current = "";
+  let dollarTag: string | null = null; // null = outside, string = the tag we're inside
+
+  const lines = sql.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (!dollarTag && trimmed.startsWith("--")) continue;
+
+    // Strip trailing inline comments (string-literal-aware) outside dollar-quoted blocks
+    const effectiveLine = !dollarTag ? stripInlineComment(line) : line;
+    current += (current ? "\n" : "") + effectiveLine;
+
+    // Toggle dollar-quoting state (supports both $$ and tagged variants like $body$)
+    const dollarRe = /\$([A-Za-z_]*)\$/g;
+    let m: RegExpExecArray | null;
+    while ((m = dollarRe.exec(line)) !== null) {
+      const tag = m[0]; // e.g. "$$" or "$body$"
+      if (dollarTag === null) {
+        dollarTag = tag; // entering a dollar-quoted block
+      } else if (dollarTag === tag) {
+        dollarTag = null; // closing the matching tag
+      }
+    }
+    const inDollarQuote = dollarTag !== null;
+    if (!inDollarQuote && effectiveLine.trimEnd().endsWith(";")) {
+      const stmt = current.replace(/;$/, "").trim();
+      if (stmt.length > 0) results.push(stmt);
+      current = "";
+    }
+  }
+
+  // Capture any trailing statement without semicolon
+  const remaining = current.trim();
+  if (remaining.length > 0) results.push(remaining);
+
+  return results;
+}
+
+/** Compute SHA-256 hex digest of a string. */
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 /**
@@ -32,7 +110,7 @@ async function loadMigrationFiles(backend: "pg" | "sqlite"): Promise<MigrationFi
     if (isNaN(version)) continue;
 
     const sql = await readFile(path.join(MIGRATIONS_DIR, filename), "utf-8");
-    migrations.push({ version, sql });
+    migrations.push({ version, filename, sql });
   }
 
   return migrations.sort((a, b) => a.version - b.version);
@@ -67,31 +145,47 @@ async function applyPgMigrations(): Promise<number[]> {
     // Run each migration in a connection-pinned transaction
     try {
       await pg.begin(async (tx) => {
-        // Split on semicolons and execute each statement
-        const statements = m.sql
-          .split(";")
-          .map((s) => s.trim())
-          .map((s) =>
-            s
-              .split("\n")
-              .filter((line) => !line.trimStart().startsWith("--"))
-              .join("\n")
-              .trim(),
-          )
-          .filter((s) => s.length > 0);
+        // Split on semicolons, preserving dollar-quoted blocks (DO $$ ... $$;)
+        const statements = splitPgStatements(m.sql);
 
         for (const stmt of statements) {
           await tx.unsafe(stmt);
         }
 
-        // Update version if the migration didn't already do it
+        // Update version — checksum/filename columns added in migration 7
         if (m.version > 1) {
-          await tx.unsafe("INSERT INTO schema_version (version) VALUES ($1)", [m.version]);
+          if (m.version >= 7) {
+            await tx.unsafe(
+              "INSERT INTO schema_version (version, checksum, filename) VALUES ($1, $2, $3)",
+              [m.version, sha256(m.sql), m.filename],
+            );
+          } else {
+            await tx.unsafe("INSERT INTO schema_version (version) VALUES ($1)", [m.version]);
+          }
         }
       });
       applied.push(m.version);
+      logEvent({ event: "migrate", version: m.version, backend: "pg" });
     } catch (err) {
       throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
+    }
+  }
+
+  // Backfill checksums for pre-v7 migrations on PG
+  const finalVersion = await getPgVersion();
+  if (finalVersion >= 7) {
+    for (const m of migrations) {
+      if (m.version < 7) {
+        try {
+          await pg.unsafe(
+            `UPDATE schema_version SET checksum = $1, filename = $2
+             WHERE version = $3 AND checksum IS NULL`,
+            [sha256(m.sql), m.filename, m.version],
+          );
+        } catch {
+          /* column may not exist on very old schemas */
+        }
+      }
     }
   }
 
@@ -129,17 +223,38 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
       )
       .filter((s) => s.length > 0);
 
-    db.exec("BEGIN");
-    try {
+    const runMigration = db.transaction(() => {
       for (const stmt of statements) {
         db.exec(stmt);
       }
       db.exec(`PRAGMA user_version = ${m.version}`);
-      db.exec("COMMIT");
+
+      // Store checksum in migration_checksums table (created by migration 0007)
+      if (m.version >= 7) {
+        db.prepare(
+          "INSERT OR REPLACE INTO migration_checksums (version, filename, checksum) VALUES (?, ?, ?)",
+        ).run(m.version, m.filename, sha256(m.sql));
+      }
+    });
+
+    try {
+      runMigration();
       applied.push(m.version);
+      logEvent({ event: "migrate", version: m.version, backend: "sqlite" });
     } catch (err) {
-      db.exec("ROLLBACK");
       throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
+    }
+  }
+
+  // Backfill checksums for any migrations that predate the checksums table
+  const finalVersion = await getSqliteVersion(repoRoot);
+  if (finalVersion >= 7) {
+    for (const m of migrations) {
+      if (m.version < 7) {
+        db.prepare(
+          "INSERT OR IGNORE INTO migration_checksums (version, filename, checksum) VALUES (?, ?, ?)",
+        ).run(m.version, m.filename, sha256(m.sql));
+      }
     }
   }
 
@@ -167,6 +282,71 @@ export async function applyMigrations(
   repoRoot?: string,
 ): Promise<number[]> {
   return backend === "pg" ? applyPgMigrations() : applySqliteMigrations(repoRoot);
+}
+
+/**
+ * Verify that stored migration checksums match the current migration file contents.
+ * Returns valid=true if all checksums match (or no checksums stored yet).
+ */
+export async function verifyMigrationChecksums(
+  backend: "pg" | "sqlite",
+  repoRoot?: string,
+): Promise<{ valid: boolean; mismatches: string[] }> {
+  const migrations = await loadMigrationFiles(backend);
+  const migrationMap = new Map(migrations.map((m) => [m.version, m]));
+  const mismatches: string[] = [];
+
+  if (backend === "pg") {
+    const pg = await getPg();
+    let rows: { version: number; checksum: string | null; filename: string | null }[];
+    try {
+      rows = (await pg.unsafe(
+        "SELECT version, checksum, filename FROM schema_version WHERE checksum IS NOT NULL",
+      )) as { version: number; checksum: string | null; filename: string | null }[];
+    } catch {
+      // checksum column may not exist yet
+      return { valid: true, mismatches: [] };
+    }
+
+    for (const row of rows) {
+      const m = migrationMap.get(row.version);
+      if (!m) {
+        mismatches.push(`v${row.version}: migration file missing`);
+        continue;
+      }
+      const currentChecksum = sha256(m.sql);
+      if (row.checksum && row.checksum !== currentChecksum) {
+        mismatches.push(`v${row.version} (${m.filename}): checksum mismatch`);
+      }
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    let rows: { version: number; checksum: string; filename: string }[];
+    try {
+      rows = db.prepare("SELECT version, checksum, filename FROM migration_checksums").all() as {
+        version: number;
+        checksum: string;
+        filename: string;
+      }[];
+    } catch {
+      // table may not exist yet
+      return { valid: true, mismatches: [] };
+    }
+
+    for (const row of rows) {
+      const m = migrationMap.get(row.version);
+      if (!m) {
+        mismatches.push(`v${row.version}: migration file missing`);
+        continue;
+      }
+      const currentChecksum = sha256(m.sql);
+      if (row.checksum !== currentChecksum) {
+        mismatches.push(`v${row.version} (${m.filename}): checksum mismatch`);
+      }
+    }
+  }
+
+  return { valid: mismatches.length === 0, mismatches };
 }
 
 /**
@@ -206,4 +386,37 @@ export async function ensureSqliteVecTables(repoRoot?: string): Promise<void> {
       embedding float[${dims}]
     )
   `);
+}
+
+/**
+ * Verify that the configured embedding dimensions match the vec table schema.
+ * Returns a warning message if mismatched, or null if OK / unable to check.
+ */
+export async function checkEmbeddingDimensions(
+  repoRoot?: string,
+  configDimensions = 1536,
+): Promise<string | null> {
+  try {
+    const db = await getSqlite(repoRoot);
+    // sqlite-vec stores dimension info in the virtual table schema
+    // We can probe by trying to query with a known dimension vector
+    const rows = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'file_embeddings'")
+      .all() as { sql: string | null }[];
+
+    if (rows.length === 0 || !rows[0].sql) return null;
+
+    const sql = rows[0].sql;
+    const match = sql.match(/float\[(\d+)\]/);
+    if (!match) return null;
+
+    const tableDimensions = parseInt(match[1], 10);
+    if (tableDimensions !== configDimensions) {
+      return `Embedding dimension mismatch: config specifies ${configDimensions} but vec tables use ${tableDimensions}. Re-create tables or update config.`;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }

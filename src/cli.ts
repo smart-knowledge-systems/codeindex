@@ -30,6 +30,17 @@ const VALUE_FLAGS = new Set([
   "gamma",
   "decay",
   "parent-boost-multiplier",
+  "changed-since",
+  "scan",
+  "store",
+  "name",
+  "repos",
+  "expires",
+  "id",
+  "path",
+  "dataset",
+  "baseline",
+  "agents-md",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -67,4 +78,16 @@ export function flag(parsed: ParsedArgs, name: string): string | undefined {
 
 export function hasFlag(parsed: ParsedArgs, name: string): boolean {
   return name in parsed.flags;
+}
+
+/**
+ * Warn on stderr about any flags not in the known set.
+ */
+export function warnUnknownFlags(parsed: ParsedArgs, knownFlags: string[]): void {
+  const known = new Set(knownFlags);
+  for (const key of Object.keys(parsed.flags)) {
+    if (!known.has(key)) {
+      console.error(`Warning: unknown flag --${key}`);
+    }
+  }
 }

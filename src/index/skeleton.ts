@@ -1,6 +1,13 @@
 import path from "path";
 import { Parser, Language, type Node } from "web-tree-sitter";
 import type { SkeletonEntry } from "../search/types";
+import {
+  childText,
+  nodeText,
+  firstChildOfType,
+  childrenOfType,
+  descendantsOfType,
+} from "./skeleton-utils";
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -34,7 +41,8 @@ type SupportedLanguage =
   | "swift"
   | "ruby"
   | "php"
-  | "lua";
+  | "lua"
+  | "scala";
 
 const EXT_TO_LANG: Record<string, SupportedLanguage> = {
   ".ts": "typescript",
@@ -59,6 +67,8 @@ const EXT_TO_LANG: Record<string, SupportedLanguage> = {
   ".rb": "ruby",
   ".php": "php",
   ".lua": "lua",
+  ".scala": "scala",
+  ".sc": "scala",
 };
 
 const LANG_DISPLAY: Record<SupportedLanguage, string> = {
@@ -77,6 +87,7 @@ const LANG_DISPLAY: Record<SupportedLanguage, string> = {
   ruby: "Ruby",
   php: "PHP",
   lua: "Lua",
+  scala: "Scala",
 };
 
 const WASM_DIR = path.join(import.meta.dir, "../../node_modules/tree-sitter-wasms/out");
@@ -97,32 +108,6 @@ async function loadLanguage(lang: SupportedLanguage): Promise<Language> {
 
 function firstNLines(content: string, n: number): string {
   return content.split("\n").slice(0, n).join("\n");
-}
-
-function childText(node: Node, fieldName: string): string {
-  return node.childForFieldName(fieldName)?.text ?? "";
-}
-
-function nodeText(node: Node): string {
-  return node.text;
-}
-
-/** Return the text of the first child whose type matches one of the given types. */
-function firstChildOfType(node: Node, ...types: string[]): Node | null {
-  for (const child of node.children) {
-    if (types.includes(child.type)) return child;
-  }
-  return null;
-}
-
-/** Collect immediate named children with a given type. */
-function childrenOfType(node: Node, ...types: string[]): Node[] {
-  return node.namedChildren.filter((c) => types.includes(c.type));
-}
-
-/** Walk all descendants (breadth-first) matching a type set. */
-function descendantsOfType(node: Node, types: string[]): Node[] {
-  return node.descendantsOfType(types);
 }
 
 // ---------------------------------------------------------------------------
@@ -1394,6 +1379,28 @@ function skeletonSwift(filename: string, root: Node): string {
         lines.push(`${indent}+ init(${paramStr})`);
         break;
       }
+      case "typealias_declaration": {
+        const nameNode =
+          node.childForFieldName("name") ?? firstChildOfType(node, "type_identifier");
+        const name = nameNode?.text ?? "(anonymous)";
+        // Find the value type — skip the name node itself
+        const valueNode = node.namedChildren.find(
+          (c) =>
+            c !== nameNode &&
+            (c.type === "type_identifier" ||
+              c.type === "user_type" ||
+              c.type === "array_type" ||
+              c.type === "tuple_type"),
+        );
+        const valueStr = valueNode ? ` = ${valueNode.text}` : "";
+        lines.push(`${indent}typealias ${name}${valueStr}`);
+        break;
+      }
+      case "attribute": {
+        // @available, @objc, etc.
+        lines.push(`${indent}${node.text}`);
+        break;
+      }
     }
   }
 
@@ -1472,6 +1479,27 @@ function skeletonRuby(filename: string, root: Node): string {
               .join(", ")
           : "";
         lines.push(`${indent}+ self.${name?.text ?? "(anonymous)"}(${paramStr})`);
+        break;
+      }
+      case "call": {
+        // attr_accessor, attr_reader, attr_writer macros
+        const method = node.childForFieldName("method");
+        if (
+          method &&
+          (method.text === "attr_accessor" ||
+            method.text === "attr_reader" ||
+            method.text === "attr_writer")
+        ) {
+          const args = node.childForFieldName("arguments");
+          if (args) {
+            const symbols = args.namedChildren
+              .filter((a) => a.type === "simple_symbol" || a.type === "symbol")
+              .map((a) => a.text.replace(/^:/, ""));
+            if (symbols.length > 0) {
+              lines.push(`${indent}${method.text} ${symbols.join(", ")}`);
+            }
+          }
+        }
         break;
       }
     }
@@ -1570,6 +1598,23 @@ function skeletonPhp(filename: string, root: Node): string {
         lines.push(`${indent}${vis} ${name?.text ?? "(anonymous)"}(${paramStr})${retStr}`);
         break;
       }
+      case "enum_declaration": {
+        const name = node.childForFieldName("name");
+        lines.push(`${indent}enum ${name?.text ?? "(anonymous)"}`);
+        const body =
+          node.childForFieldName("body") ??
+          firstChildOfType(node, "enum_declaration_list", "declaration_list");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "enum_case": {
+        const name = node.childForFieldName("name");
+        if (name) lines.push(`${indent}case ${name.text}`);
+        break;
+      }
       case "function_definition": {
         const name = node.childForFieldName("name");
         const params = node.childForFieldName("parameters");
@@ -1580,10 +1625,153 @@ function skeletonPhp(filename: string, root: Node): string {
         lines.push("");
         break;
       }
+      case "property_declaration": {
+        // PHP 8.1 readonly properties
+        const isReadonly = node.text.includes("readonly");
+        const varNode = firstChildOfType(node, "property_element");
+        const propName = varNode?.text ?? "";
+        if (propName) {
+          const modifier = isReadonly ? "readonly " : "";
+          const vis = node.text.match(/^\s*(private|protected)/) ? "-" : "+";
+          lines.push(`${indent}${vis} ${modifier}${propName}`);
+        }
+        break;
+      }
+      case "attribute_list": {
+        // PHP 8 #[...] attributes
+        lines.push(`${indent}${node.text}`);
+        break;
+      }
     }
   }
 
   // PHP wraps code in a "program" node; process its children
+  for (const node of root.namedChildren) {
+    processNode(node);
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+// ---------------------------------------------------------------------------
+// Scala extractor
+// ---------------------------------------------------------------------------
+
+function extractScalaParams(params: Node | null): string {
+  if (!params) return "";
+  const parts: string[] = [];
+  for (const p of params.namedChildren) {
+    if (p.type === "parameter") {
+      const name = childText(p, "name") || firstChildOfType(p, "identifier")?.text || "";
+      const type_ =
+        p.childForFieldName("type") ?? firstChildOfType(p, "type_identifier", "generic_type");
+      parts.push(type_ ? `${name}: ${type_.text}` : name);
+    } else if (p.type === "class_parameter") {
+      const name = childText(p, "name") || firstChildOfType(p, "identifier")?.text || "";
+      const type_ =
+        p.childForFieldName("type") ?? firstChildOfType(p, "type_identifier", "generic_type");
+      parts.push(type_ ? `${name}: ${type_.text}` : name);
+    }
+  }
+  return parts.join(", ");
+}
+
+function extractScalaReturnType(node: Node): string {
+  const ret = node.childForFieldName("return_type");
+  if (ret) return ` -> ${ret.text}`;
+  // Look for type annotation after parameters
+  const typeNode = firstChildOfType(node, "type_identifier", "generic_type");
+  // Only use it if it appears after the parameter clause
+  const params = firstChildOfType(node, "parameters", "class_parameters");
+  if (typeNode && params) {
+    const paramsEnd = params.endIndex;
+    if (typeNode.startIndex > paramsEnd) return ` -> ${typeNode.text}`;
+  }
+  return "";
+}
+
+function skeletonScala(filename: string, root: Node): string {
+  const lines: string[] = [`# ${filename} [Scala]`];
+
+  const imports: string[] = [];
+  for (const node of root.namedChildren) {
+    if (node.type === "import_declaration") {
+      const path_ = firstChildOfType(node, "stable_identifier", "identifier");
+      if (path_) imports.push(path_.text);
+    }
+  }
+  if (imports.length > 0) lines.push(`imports: ${imports.join(", ")}`);
+  lines.push("");
+
+  function processNode(node: Node, indent = ""): void {
+    switch (node.type) {
+      case "object_definition": {
+        const name =
+          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        lines.push(`${indent}object ${name}`);
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "template_body");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "class_definition": {
+        const name =
+          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        // Check for case class
+        const isCaseClass = node.children.some((c) => !c.isNamed && c.type === "case");
+        const keyword = isCaseClass ? "case class" : "class";
+        lines.push(`${indent}${keyword} ${name}`);
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "template_body");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "trait_definition": {
+        const name =
+          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        lines.push(`${indent}trait ${name}`);
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "template_body");
+        if (body) {
+          for (const member of body.namedChildren) processNode(member, indent + "  ");
+        }
+        lines.push("");
+        break;
+      }
+      case "function_definition": {
+        const name =
+          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        const params = node.childForFieldName("parameters") ?? firstChildOfType(node, "parameters");
+        const paramStr = extractScalaParams(params ?? null);
+        const retStr = extractScalaReturnType(node);
+        lines.push(`${indent}function ${name}(${paramStr})${retStr}`);
+        break;
+      }
+      case "val_definition":
+      case "var_definition": {
+        const pattern = firstChildOfType(node, "identifier");
+        const name = pattern?.text ?? childText(node, "pattern") ?? "";
+        if (name) {
+          const keyword = node.type === "val_definition" ? "val" : "var";
+          const type_ = firstChildOfType(node, "type_identifier", "generic_type");
+          const typeStr = type_ ? `: ${type_.text}` : "";
+          lines.push(`${indent}${keyword} ${name}${typeStr}`);
+        }
+        break;
+      }
+      case "type_definition": {
+        const name =
+          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        const rhs = node.childForFieldName("type") ?? firstChildOfType(node, "type_identifier");
+        lines.push(`${indent}type ${name}${rhs ? ` = ${rhs.text}` : ""}`);
+        break;
+      }
+    }
+  }
+
   for (const node of root.namedChildren) {
     processNode(node);
   }
@@ -1751,9 +1939,13 @@ function collectEntries(root: Node): SkeletonEntry[] {
         return;
       }
 
-      // TS type alias
-      case "type_alias_declaration": {
-        const name = node.childForFieldName("name")?.text ?? "(anonymous)";
+      // TS type alias / Swift typealias
+      case "type_alias_declaration":
+      case "typealias_declaration": {
+        const name =
+          node.childForFieldName("name")?.text ??
+          firstChildOfType(node, "type_identifier")?.text ??
+          "(anonymous)";
         entries.push({ name, kind: "type", startLine, endLine });
         return;
       }
@@ -1774,7 +1966,7 @@ function collectEntries(root: Node): SkeletonEntry[] {
         const body = node.childForFieldName("body");
         if (body) {
           for (const child of body.namedChildren) {
-            if (child.type === "function_definition") walk(child);
+            walk(child);
           }
         }
         return;
@@ -1889,9 +2081,17 @@ function collectEntries(root: Node): SkeletonEntry[] {
         return;
       }
       case "type_definition": {
+        // C/C++: has "declarator" field
         const declarator = node.childForFieldName("declarator");
         if (declarator) {
           entries.push({ name: declarator.text, kind: "typedef", startLine, endLine });
+          return;
+        }
+        // Scala: has "name" field
+        const typeName =
+          node.childForFieldName("name")?.text ?? firstChildOfType(node, "type_identifier")?.text;
+        if (typeName) {
+          entries.push({ name: typeName, kind: "type", startLine, endLine });
         }
         return;
       }
@@ -1914,12 +2114,66 @@ function collectEntries(root: Node): SkeletonEntry[] {
         return;
       }
 
+      // Ruby attr_accessor, attr_reader, attr_writer
+      case "call": {
+        const methodNode = node.childForFieldName("method");
+        if (
+          methodNode &&
+          (methodNode.text === "attr_accessor" ||
+            methodNode.text === "attr_reader" ||
+            methodNode.text === "attr_writer")
+        ) {
+          const args = node.childForFieldName("arguments");
+          if (args) {
+            for (const arg of args.namedChildren) {
+              if (arg.type === "simple_symbol" || arg.type === "symbol") {
+                const propName = arg.text.replace(/^:/, "");
+                entries.push({ name: propName, kind: "property", startLine, endLine });
+              }
+            }
+          }
+        }
+        return;
+      }
+
       // PHP trait
       case "trait_declaration": {
         const name = node.childForFieldName("name")?.text ?? "(anonymous)";
         entries.push({ name, kind: "class", startLine, endLine });
         const body = node.childForFieldName("body") ?? firstChildOfType(node, "declaration_list");
         if (body) collectMethodsFromBody(body);
+        return;
+      }
+
+      // Scala
+      case "object_definition": {
+        const name =
+          node.childForFieldName("name")?.text ??
+          firstChildOfType(node, "identifier")?.text ??
+          "(anonymous)";
+        entries.push({ name, kind: "object", startLine, endLine });
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "template_body");
+        if (body) {
+          for (const child of body.namedChildren) walk(child);
+        }
+        return;
+      }
+      case "trait_definition": {
+        const name =
+          node.childForFieldName("name")?.text ??
+          firstChildOfType(node, "identifier")?.text ??
+          "(anonymous)";
+        entries.push({ name, kind: "trait", startLine, endLine });
+        const body = node.childForFieldName("body") ?? firstChildOfType(node, "template_body");
+        if (body) {
+          for (const child of body.namedChildren) walk(child);
+        }
+        return;
+      }
+      case "val_definition":
+      case "var_definition": {
+        const name = firstChildOfType(node, "identifier")?.text ?? "(anonymous)";
+        entries.push({ name, kind: "property", startLine, endLine });
         return;
       }
     }
@@ -1939,7 +2193,10 @@ function collectEntries(root: Node): SkeletonEntry[] {
 }
 
 /** Extensions treated as prose/documentation — get a structured extractor instead of firstNLines. */
-const PROSE_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst"]);
+const PROSE_EXTENSIONS = new Set([".md", ".mdx"]);
+
+/** Maximum characters for prose skeleton — matches MAX_EMBED_CHARS in embedder.ts */
+const MAX_PROSE_CHARS = 4_000;
 
 /**
  * Extract a structured skeleton from a markdown/prose file.
@@ -1987,9 +2244,11 @@ function skeletonProse(content: string): { text: string; entries: SkeletonEntry[
     }
   }
 
-  // If the structured extraction is too sparse, use more of the original content
-  const text = parts.length >= 5 ? parts.join("\n") : content;
-  return { text, entries };
+  // Use full content (up to MAX_PROSE_CHARS) to preserve searchable prose content.
+  // The structured parts are still extracted for entries, but the text should retain
+  // as much of the original document as possible for embedding quality.
+  const fullText = content.length > MAX_PROSE_CHARS ? content.slice(0, MAX_PROSE_CHARS) : content;
+  return { text: fullText, entries };
 }
 
 export async function extractSkeletonWithEntries(
@@ -2076,6 +2335,9 @@ export async function extractSkeletonWithEntries(
         break;
       case "php":
         text = skeletonPhp(filename, root);
+        break;
+      case "scala":
+        text = skeletonScala(filename, root);
         break;
       default:
         text = firstNLines(content, fallbackLines);

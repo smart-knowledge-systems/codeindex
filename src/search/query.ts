@@ -1,12 +1,15 @@
 import path from "path";
 import { loadConfig } from "../config";
 import { embedSingle } from "../index/embedder";
-import { getPg, pgUnsafe } from "../db/pg";
+import { pgUnsafe } from "../db/pg";
+import { withRepoScope } from "../db/rls";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
 import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
 import { getScopedRepoIds } from "../auth/tokens";
+import { logEvent } from "../logging";
+import { recordEvent, hashQuery } from "../telemetry";
 
 // ---------------------------------------------------------------------------
 // Internal row shapes returned by DB queries
@@ -170,6 +173,9 @@ function computeCommitBoost(
   return boost;
 }
 
+/** Prose file types exempt from length normalization penalty. */
+const PROSE_FILE_TYPES = new Set([".md", ".mdx", ".rst", ".txt", ".adoc"]);
+
 /** Map file extension to language profile key. */
 const EXT_TO_LANG_KEY: Record<string, string> = {
   ".ts": "typescript",
@@ -213,15 +219,13 @@ async function searchPg(
   currentRepoId: number,
   queryEmbedding: number[],
   query: string,
-  options: Required<SearchOptions>,
+  options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
-  const pg = await getPg();
-
-  // Use pg.begin() to pin to a single connection so SET LOCAL hnsw.ef_search
-  // applies to all queries in the transaction
-  return pg.begin(async (tx) => {
+  // Use withRepoScope to pin to a single connection, set RLS scope, and
+  // apply SET LOCAL hnsw.ef_search within the same transaction
+  return withRepoScope(repoIds, async (tx) => {
     return await searchPgInTransaction(
       tx,
       repoIds,
@@ -241,11 +245,25 @@ async function searchPgInTransaction(
   currentRepoId: number,
   queryEmbedding: number[],
   query: string,
-  options: Required<SearchOptions>,
+  options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
   await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
+
+  // Defense-in-depth: validate interpolated values are strictly numeric
+  // to prevent SQL injection even if upstream data is compromised.
+  for (const v of queryEmbedding) {
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      throw new Error(`Invalid embedding value: ${String(v)}`);
+    }
+  }
+  for (const id of repoIds) {
+    if (typeof id !== "number" || !Number.isInteger(id)) {
+      throw new Error(`Invalid repo ID: ${String(id)}`);
+    }
+  }
+
   const vecLiteral = `'[${queryEmbedding.join(",")}]'::vector`;
   const repoIdList = repoIds.join(",");
 
@@ -427,9 +445,14 @@ async function searchPgInTransaction(
     const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
 
     // Length normalization penalty (token-approximated skeleton length)
+    // Prose files (md, rst, txt, adoc) are exempt — their skeletons are intentionally
+    // full-content and should not be penalized for length.
     const tokenCount = (row.skeleton?.length ?? 0) / 4;
+    const isProse = PROSE_FILE_TYPES.has(row.file_type);
     const lengthPenalty =
-      tokenCount > 0 ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight : 0;
+      !isProse && tokenCount > 0
+        ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight
+        : 0;
 
     // Semantic score with length penalty (using per-language alpha/beta)
     const fAlpha = fileScoring.alpha;
@@ -560,7 +583,7 @@ async function searchSqlite(
   repoRoot: string,
   queryEmbedding: number[],
   query: string,
-  options: Required<SearchOptions>,
+  options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
 ): Promise<SearchResult[]> {
@@ -763,9 +786,12 @@ async function searchSqlite(
     const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
 
     // Length normalization penalty (token-approximated skeleton length)
+    // Prose files (md, rst, txt, adoc) are exempt — their skeletons are intentionally
+    // full-content and should not be penalized for length.
     const tokenCount = (row.skeleton?.length ?? 0) / 4;
+    const isProse = PROSE_FILE_TYPES.has(row.file_type);
     const lengthPenalty =
-      tokenCount > 0
+      !isProse && tokenCount > 0
         ? Math.max(0, Math.log(tokenCount / avgTokenCountSqlite)) * lengthPenaltyWeight
         : 0;
 
@@ -951,7 +977,7 @@ export async function search(
     ? { ...config.scoring, ...options.scoringOverrides }
     : config.scoring;
 
-  const resolvedOptions: Required<SearchOptions> = {
+  const resolvedOptions: Required<Omit<SearchOptions, "embeddingCache">> = {
     minScore: options?.minScore ?? scoring.minScore,
     topN: options?.topN ?? 0,
     scope: options?.scope ?? "project",
@@ -965,7 +991,14 @@ export async function search(
     explain: options?.explain ?? false,
   };
 
-  const queryEmbedding = await embedSingle(query);
+  let queryEmbedding: number[];
+  const cached = options?.embeddingCache?.get(query);
+  if (cached) {
+    queryEmbedding = cached;
+  } else {
+    queryEmbedding = await embedSingle(query);
+    options?.embeddingCache?.set(query, queryEmbedding);
+  }
   const resolved = await resolveRepoIds(repoRoot, resolvedOptions.scope, config);
   let repoIds = resolved.repoIds;
   const currentRepoId = resolved.currentRepoId;
@@ -1017,8 +1050,17 @@ export async function search(
 
   // Post-processing: annotate with cross-repo edges if multi-repo
   if (repoIds.length > 1) {
-    await attachCrossRepoEdges(repoRoot, config, finalResults, currentRepoId);
+    await attachCrossRepoEdges(repoRoot, config, finalResults, currentRepoId, tokenRepoIds);
   }
+
+  logEvent({ event: "search", query_length: query.length, result_count: finalResults.length });
+
+  recordEvent({
+    event: "search",
+    timestamp: new Date().toISOString(),
+    queryHash: hashQuery(query),
+    resultCount: finalResults.length,
+  });
 
   return finalResults;
 }
@@ -1057,12 +1099,14 @@ async function attachSnippets(
 
   if (filePaths.length > 0) {
     if (config.store === "pg") {
-      const rows = (await pgUnsafe(
-        `SELECT repo_id, file_path, skeleton_entries FROM files
-         WHERE repo_id = ANY($1)
-         AND file_path = ANY($2)`,
-        [resultRepoIds, filePaths],
-      )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
+      const rows = await withRepoScope(resultRepoIds, async (tx) => {
+        return (await tx.unsafe(
+          `SELECT repo_id, file_path, skeleton_entries FROM files
+           WHERE repo_id = ANY($1)
+           AND file_path = ANY($2)`,
+          [resultRepoIds, filePaths],
+        )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
+      });
       for (const row of rows) {
         if (row.skeleton_entries)
           entriesMap.set(`${row.repo_id}:${row.file_path}`, row.skeleton_entries);
@@ -1158,6 +1202,7 @@ async function attachCrossRepoEdges(
   config: Awaited<ReturnType<typeof loadConfig>>,
   results: SearchResult[],
   currentRepoId: number,
+  scopedRepoIds: number[] | null = null,
 ): Promise<void> {
   // Build repo name map
   const repoNameMap = new Map<number, string>();
@@ -1168,10 +1213,25 @@ async function attachCrossRepoEdges(
     }[];
     for (const r of repos) repoNameMap.set(parseInt(r.id), r.name);
 
-    // Build cross-repo edges lookup once (matching the SQLite approach)
-    const allEdges = (await pgUnsafe(
-      `SELECT DISTINCT source_repo_id, target_repo_id FROM cross_repo_edges`,
-    )) as { source_repo_id: string; target_repo_id: string }[];
+    // Build cross-repo edges lookup, filtered by scoped repo IDs if present
+    // Wrap in withRepoScope so FORCE RLS on cross_repo_edges passes
+    const edgeRepoIds = scopedRepoIds ?? [...repoNameMap.keys()];
+    let edgeQuery = `SELECT DISTINCT source_repo_id, target_repo_id FROM cross_repo_edges`;
+    const edgeParams: unknown[] = [];
+    if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
+      const placeholders = scopedRepoIds.map((_, i) => `$${i + 1}`).join(",");
+      const placeholders2 = scopedRepoIds
+        .map((_, i) => `$${i + 1 + scopedRepoIds.length}`)
+        .join(",");
+      edgeQuery += ` WHERE (source_repo_id IN (${placeholders}) OR target_repo_id IN (${placeholders2}))`;
+      edgeParams.push(...scopedRepoIds, ...scopedRepoIds);
+    }
+    const allEdges = await withRepoScope(edgeRepoIds, async (tx) => {
+      return (await tx.unsafe(edgeQuery, edgeParams)) as {
+        source_repo_id: string;
+        target_repo_id: string;
+      }[];
+    });
 
     const depsByRepo = new Map<
       number,
@@ -1208,13 +1268,19 @@ async function attachCrossRepoEdges(
     }[];
     for (const r of repos) repoNameMap.set(r.id, r.name);
 
-    // Build cross-repo edges lookup once
-    const allEdges = db
-      .prepare(
-        `SELECT source_repo_id, target_repo_id FROM cross_repo_edges
-         GROUP BY source_repo_id, target_repo_id`,
-      )
-      .all() as { source_repo_id: number; target_repo_id: number }[];
+    // Build cross-repo edges lookup, filtered by scoped repo IDs if present
+    let edgeQuery = `SELECT source_repo_id, target_repo_id FROM cross_repo_edges`;
+    const edgeBindings: number[] = [];
+    if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
+      const placeholders = scopedRepoIds.map(() => "?").join(",");
+      edgeQuery += ` WHERE (source_repo_id IN (${placeholders}) OR target_repo_id IN (${placeholders}))`;
+      edgeBindings.push(...scopedRepoIds, ...scopedRepoIds);
+    }
+    edgeQuery += ` GROUP BY source_repo_id, target_repo_id`;
+    const allEdges = db.prepare(edgeQuery).all(...edgeBindings) as {
+      source_repo_id: number;
+      target_repo_id: number;
+    }[];
 
     const depsByRepo = new Map<
       number,
@@ -1243,6 +1309,100 @@ async function attachCrossRepoEdges(
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Changed-file search — files indexed after a given timestamp
+// ---------------------------------------------------------------------------
+
+function parseSinceTimestamp(since: string): Date {
+  // Relative formats: "1d", "7d", "2w", "3m"
+  const relMatch = since.match(/^(\d+)([dwm])$/);
+  if (relMatch) {
+    const n = parseInt(relMatch[1]);
+    const unit = relMatch[2];
+    const now = new Date();
+    switch (unit) {
+      case "d":
+        now.setDate(now.getDate() - n);
+        break;
+      case "w":
+        now.setDate(now.getDate() - n * 7);
+        break;
+      case "m": {
+        const day = now.getDate();
+        now.setDate(1); // pin to 1st to avoid overflow
+        now.setMonth(now.getMonth() - n);
+        // Restore original day, clamped to end of target month
+        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        now.setDate(Math.min(day, lastDay));
+        break;
+      }
+    }
+    return now;
+  }
+  // ISO date string
+  const d = new Date(since);
+  if (isNaN(d.getTime())) throw new Error(`Invalid since value: ${since}`);
+  return d;
+}
+
+export async function searchChanged(
+  repoRoot: string,
+  since: string,
+  query?: string,
+  options?: SearchOptions,
+): Promise<SearchResult[]> {
+  const config = await loadConfig(repoRoot);
+  const sinceDate = parseSinceTimestamp(since);
+  const sinceIso = sinceDate.toISOString();
+
+  // Get the repo ID
+  const resolved = await resolveRepoIds(repoRoot, options?.scope ?? "project", config);
+  const repoIds = resolved.repoIds;
+  if (repoIds.length === 0) return [];
+
+  // Query files changed since the timestamp
+  const changedPaths = new Set<string>();
+
+  if (config.store === "pg") {
+    const placeholders = repoIds.map((_, i) => `$${i + 2}`).join(",");
+    const rows = await withRepoScope(repoIds, async (tx) => {
+      return (await tx.unsafe(
+        `SELECT file_path FROM files
+         WHERE repo_id IN (${placeholders}) AND indexed_at >= $1`,
+        [sinceIso, ...repoIds],
+      )) as { file_path: string }[];
+    });
+    for (const r of rows) changedPaths.add(r.file_path);
+  } else {
+    const db = await getSqlite(repoRoot);
+    const placeholders = repoIds.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT file_path FROM files
+         WHERE repo_id IN (${placeholders}) AND indexed_at >= ?`,
+      )
+      .all(...repoIds, sinceIso) as { file_path: string }[];
+    for (const r of rows) changedPaths.add(r.file_path);
+  }
+
+  if (changedPaths.size === 0) return [];
+
+  // If no query, return changed files as basic results
+  if (!query) {
+    return Array.from(changedPaths).map((fp) => ({
+      filePath: fp,
+      cosineSimilarity: 0,
+      finalScore: 0,
+      type: "file",
+      inProject: true,
+    }));
+  }
+
+  // Run semantic search and intersect with changed files
+  const semanticResults = await search(repoRoot, query, options);
+  return semanticResults.filter((r) => r.type === "file" && changedPaths.has(r.filePath));
 }
 
 /**

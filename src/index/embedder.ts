@@ -2,6 +2,7 @@ import type { EmbeddingProvider } from "./embedding-provider";
 import type { CodeindexConfig } from "../search/types";
 import { OpenAIEmbeddingProvider } from "./providers/openai";
 import { OllamaEmbeddingProvider } from "./providers/ollama";
+import { logEvent } from "../logging";
 
 const MAX_EMBED_CHARS = 4_000; // ~8000 tokens max; code averages ~2 tokens/char
 
@@ -48,7 +49,9 @@ export async function embed(
   config?: CodeindexConfig,
 ): Promise<number[][]> {
   const input = (Array.isArray(texts) ? texts : [texts]).map(sanitize);
-  return getProvider(config).embed(input);
+  const result = await getProvider(config).embed(input);
+  logEvent({ event: "embed", text_count: input.length });
+  return result;
 }
 
 export async function embedSingle(text: string, config?: CodeindexConfig): Promise<number[]> {

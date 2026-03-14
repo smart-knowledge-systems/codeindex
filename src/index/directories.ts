@@ -6,6 +6,7 @@ import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import { loadConfig } from "../config";
 import { recordCost } from "../cost";
+import { generateSummary as anthropicGenerateSummary } from "./providers/anthropic";
 
 export async function buildDirectoryIndex(
   repoRoot: string,
@@ -225,23 +226,7 @@ const DIR_SUMMARY_SCHEMA = JSON.stringify({
   },
 });
 
-async function generateSummary(
-  concatSkeleton: string,
-  childSummaries: string[],
-): Promise<string | null> {
-  if (!concatSkeleton && childSummaries.length === 0) return null;
-
-  const prompt = [
-    "Summarize this directory.",
-    "",
-    "Files in this directory:",
-    concatSkeleton || "(no files)",
-    "",
-    childSummaries.length > 0 ? `Subdirectory summaries:\n${childSummaries.join("\n")}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
+async function generateSummaryViaCli(prompt: string): Promise<string | null> {
   try {
     const proc = Bun.spawn(
       [
@@ -280,6 +265,52 @@ async function generateSummary(
     // claude CLI not available or failed — graceful fallback
     return null;
   }
+}
+
+async function generateSummaryViaSdk(prompt: string): Promise<string | null> {
+  try {
+    const { summary, tokensIn, tokensOut } = await anthropicGenerateSummary(
+      `${prompt}\n\nRespond with a JSON object containing a "summary" field: a 1-3 sentence summary of this directory's purpose, key abstractions, and what a developer would find here.`,
+    );
+    await recordCost("summarize", "haiku", tokensIn, tokensOut);
+
+    // Try to parse as JSON, fall back to raw text
+    try {
+      const parsed = JSON.parse(summary);
+      return parsed.summary ?? summary;
+    } catch {
+      return summary;
+    }
+  } catch {
+    return null;
+  }
+}
+
+async function generateSummary(
+  concatSkeleton: string,
+  childSummaries: string[],
+): Promise<string | null> {
+  if (!concatSkeleton && childSummaries.length === 0) return null;
+
+  const prompt = [
+    "Summarize this directory.",
+    "",
+    "Files in this directory:",
+    concatSkeleton || "(no files)",
+    "",
+    childSummaries.length > 0 ? `Subdirectory summaries:\n${childSummaries.join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const provider = process.env.CODEINDEX_SUMMARY_PROVIDER ?? "anthropic-sdk";
+
+  if (provider === "claude-cli") {
+    return generateSummaryViaCli(prompt);
+  }
+
+  // Default: anthropic-sdk
+  return generateSummaryViaSdk(prompt);
 }
 
 export async function updateAffectedDirectories(

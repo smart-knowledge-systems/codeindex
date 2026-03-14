@@ -1,21 +1,26 @@
 #!/usr/bin/env bun
 
 import path from "path";
-import { parseArgs, flag, hasFlag } from "./cli";
+import os from "os";
+import { parseArgs, flag, hasFlag, warnUnknownFlags, type ParsedArgs } from "./cli";
 import { loadConfig, detectFormatter } from "./config";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
-import { getCurrentSchemaVersion, getLatestMigrationVersion } from "./db/migrate";
-import { pgUnsafe, closePg } from "./db/pg";
+import {
+  getCurrentSchemaVersion,
+  getLatestMigrationVersion,
+  checkEmbeddingDimensions,
+} from "./db/migrate";
+import { getPg, pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
-import { walkRepo } from "./index/walker";
+import { walkRepo, MAX_FILE_SIZE } from "./index/walker";
 import { extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
 import { scanForSecrets } from "./index/secrets";
 import { embed, embedSingle, getProvider } from "./index/embedder";
 import { getRepoOrigin, getRepoName, getFileCommits, getChangedFiles } from "./index/commits";
 import { buildDirectoryIndex, updateAffectedDirectories } from "./index/directories";
-import { search } from "./search/query";
+import { search, searchChanged } from "./search/query";
 import { installHook } from "./hooks/post-commit";
 import { exportToSqlite, type ExportOptions } from "./db/export";
 import { setCurrentRepo, getProjectedCost, checkCostCap } from "./cost";
@@ -28,7 +33,11 @@ import { runQualityCheck } from "./check/quality-runner";
 import { extractImports, resolveImport } from "./index/imports";
 import { discoverCrossRepoEdges } from "./index/cross-repo";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
+import { xrefSymbol, formatXrefTable, formatXrefJson } from "./xref";
 import type { SearchOptions } from "./search/types";
+import { formatError } from "./errors";
+import { logEvent } from "./logging";
+import { resetTelemetry } from "./telemetry";
 
 // ---------------------------------------------------------------------------
 // init command
@@ -147,7 +156,7 @@ async function extractAndStoreImports(
     const absPath = path.join(repoRoot, relPath);
     let content: string;
     try {
-      content = await Bun.file(absPath).text();
+      content = (await Bun.file(absPath).text()).replace(/\0/g, "");
     } catch {
       continue;
     }
@@ -168,24 +177,20 @@ async function extractAndStoreImports(
   }
 
   if (store === "pg") {
-    await pgUnsafe("BEGIN");
-    try {
-      await pgUnsafe(
+    const pg = await getPg();
+    await pg.begin(async (tx) => {
+      await tx.unsafe(
         "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1)",
         [repoId],
       );
       for (const e of edgesToInsert) {
-        await pgUnsafe(
+        await tx.unsafe(
           `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
            VALUES ($1, $2, $3, $4)`,
           [e.sourceId, e.importedModule, e.resolvedId, e.language],
         );
       }
-      await pgUnsafe("COMMIT");
-    } catch (err) {
-      await pgUnsafe("ROLLBACK");
-      throw err;
-    }
+    });
   } else {
     const sqliteDb = await getSqlite(repoRoot);
     const sqliteStmt = sqliteDb.prepare(
@@ -294,9 +299,14 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   }[] = [];
 
   for await (const relPath of walkRepo(repoRoot)) {
-    allFiles.push(relPath);
     const absPath = path.join(repoRoot, relPath);
-    const content = await Bun.file(absPath).text();
+    const file = Bun.file(absPath);
+    if (file.size > MAX_FILE_SIZE) {
+      skipped++;
+      continue;
+    }
+    allFiles.push(relPath);
+    const content = (await file.text()).replace(/\0/g, "");
 
     const scan = scanForSecrets(content);
     if (scan.hasSecrets) {
@@ -368,12 +378,12 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
     const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
 
     if (config.store === "pg") {
-      await pgUnsafe("BEGIN");
-      try {
+      const pg = await getPg();
+      await pg.begin(async (tx) => {
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          await pgUnsafe(
+          await tx.unsafe(
             `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
              VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
@@ -398,11 +408,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
             process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
           }
         }
-        await pgUnsafe("COMMIT");
-      } catch (err) {
-        await pgUnsafe("ROLLBACK");
-        throw err;
-      }
+      });
     } else {
       const db = await getSqlite(repoRoot);
       const insertFile = db.prepare(
@@ -519,12 +525,12 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   // Write all commit data in a transaction
   if (commitRecords.length > 0) {
     if (config.store === "pg") {
-      await pgUnsafe("BEGIN");
-      try {
+      const pg = await getPg();
+      await pg.begin(async (tx) => {
         for (const cr of commitRecords) {
           let commitId: number;
           if (cr.embedding) {
-            const inserted = await pgUnsafe(
+            const inserted = await tx.unsafe(
               `INSERT INTO commits (repo_id, commit_hash, message, embedding, authored_at)
                VALUES ($1, $2, $3, $4::vector, $5)
                ON CONFLICT (repo_id, commit_hash) DO UPDATE SET
@@ -536,18 +542,18 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
             commitId = inserted[0].id as number;
             commitCount++;
           } else {
-            const existing = await pgUnsafe(
+            const existing = await tx.unsafe(
               "SELECT id FROM commits WHERE repo_id = $1 AND commit_hash = $2",
               [repoId, cr.hash],
             );
             commitId = existing[0].id as number;
           }
-          const fileRows = await pgUnsafe(
+          const fileRows = await tx.unsafe(
             "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
             [repoId, cr.relPath],
           );
           if (fileRows.length > 0) {
-            await pgUnsafe(
+            await tx.unsafe(
               `INSERT INTO file_commits (file_id, commit_id, recency)
                VALUES ($1, $2, $3)
                ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = EXCLUDED.recency`,
@@ -555,11 +561,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
             );
           }
         }
-        await pgUnsafe("COMMIT");
-      } catch (err) {
-        await pgUnsafe("ROLLBACK");
-        throw err;
-      }
+      });
     } else {
       const db = await getSqlite(repoRoot);
       const upsertCommit = db.prepare(
@@ -605,6 +607,60 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   }
   console.log(`Commits: ${commitCount} embedded`);
 
+  // Prune stale entries (files removed, filtered by extension, or oversized)
+  const allFileSet = new Set(allFiles);
+  let pruned = 0;
+  if (config.store === "pg") {
+    const rows = (await pgUnsafe("SELECT file_path FROM files WHERE repo_id = $1", [repoId])) as {
+      file_path: string;
+    }[];
+    const stalePaths = rows.filter((r) => !allFileSet.has(r.file_path)).map((r) => r.file_path);
+    if (stalePaths.length > 0) {
+      const pg = await getPg();
+      await pg.begin(async (tx) => {
+        for (const fp of stalePaths) {
+          await tx.unsafe(
+            "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
+            [repoId, fp],
+          );
+          await tx.unsafe(
+            "DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
+            [repoId, fp],
+          );
+          await tx.unsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [repoId, fp]);
+        }
+      });
+      pruned = stalePaths.length;
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    const rows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
+    const stalePaths = rows.filter((r) => !allFileSet.has(r.file_path)).map((r) => r.file_path);
+    if (stalePaths.length > 0) {
+      const selectId = db.prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?");
+      const delImports = db.prepare("DELETE FROM file_imports WHERE source_file_id = ?");
+      const delEmbeddings = db.prepare("DELETE FROM file_embeddings WHERE file_id = ?");
+      const delCommits = db.prepare("DELETE FROM file_commits WHERE file_id = ?");
+      const delFile = db.prepare("DELETE FROM files WHERE id = ?");
+      db.transaction(() => {
+        for (const fp of stalePaths) {
+          const fileRows = selectId.all(repoId, fp) as { id: number }[];
+          if (fileRows.length > 0) {
+            const fileId = fileRows[0].id;
+            delImports.run(fileId);
+            delEmbeddings.run(fileId);
+            delCommits.run(fileId);
+            delFile.run(fileId);
+          }
+        }
+      })();
+      pruned = stalePaths.length;
+    }
+  }
+  if (pruned > 0) console.log(`Pruned ${pruned} stale entries`);
+
   // Build directory index
   console.log("Building directory index...");
   await buildDirectoryIndex(repoRoot, repoId, allFiles);
@@ -615,6 +671,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   await extractAndStoreImports(repoRoot, repoId, new Set(allFiles), config.store);
   console.log("Import graph complete.");
 
+  logEvent({ event: "reindex", repo: repoRoot, files_indexed: indexed, files_skipped: skipped });
   console.log("Reindex complete.");
 }
 
@@ -667,6 +724,8 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
       continue;
     }
 
+    if (file.size > MAX_FILE_SIZE) continue;
+
     const content = await file.text();
 
     const scan = scanForSecrets(content);
@@ -705,12 +764,12 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
 
     if (config.store === "pg") {
-      await pgUnsafe("BEGIN");
-      try {
+      const pg = await getPg();
+      await pg.begin(async (tx) => {
         for (let i = 0; i < filesToEmbed.length; i++) {
           const f = filesToEmbed[i];
           const embedding = embeddings[i];
-          await pgUnsafe(
+          await tx.unsafe(
             `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
              VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
              ON CONFLICT (repo_id, file_path) DO UPDATE SET
@@ -731,11 +790,7 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
             ],
           );
         }
-        await pgUnsafe("COMMIT");
-      } catch (err) {
-        await pgUnsafe("ROLLBACK");
-        throw err;
-      }
+      });
     } else {
       const db = await getSqlite(repoRoot);
       const insertFile = db.prepare(
@@ -780,9 +835,9 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
     if (commitMsg) {
       const commitEmbedding = await embedSingle(commitMsg);
       if (config.store === "pg") {
-        await pgUnsafe("BEGIN");
-        try {
-          const inserted = await pgUnsafe(
+        const pg = await getPg();
+        await pg.begin(async (tx) => {
+          const inserted = await tx.unsafe(
             `INSERT INTO commits (repo_id, commit_hash, message, embedding)
              VALUES ($1, $2, $3, $4::vector)
              ON CONFLICT (repo_id, commit_hash) DO NOTHING
@@ -793,15 +848,16 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           if (inserted.length > 0) {
             const commitId = inserted[0].id as number;
             for (const relPath of changedFiles) {
-              const fileRows = await pgUnsafe(
+              const fileRows = await tx.unsafe(
                 "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
                 [repoId, relPath],
               );
               if (fileRows.length > 0) {
-                await pgUnsafe("UPDATE file_commits SET recency = recency + 1 WHERE file_id = $1", [
-                  fileRows[0].id,
-                ]);
-                await pgUnsafe(
+                await tx.unsafe(
+                  "UPDATE file_commits SET recency = recency + 1 WHERE file_id = $1",
+                  [fileRows[0].id],
+                );
+                await tx.unsafe(
                   `INSERT INTO file_commits (file_id, commit_id, recency)
                    VALUES ($1, $2, 1)
                    ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = 1`,
@@ -810,11 +866,7 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
               }
             }
           }
-          await pgUnsafe("COMMIT");
-        } catch (err) {
-          await pgUnsafe("ROLLBACK");
-          throw err;
-        }
+        });
       } else {
         const db = await getSqlite(repoRoot);
         db.transaction(() => {
@@ -892,6 +944,7 @@ async function cmdSearch(
     dir?: string[];
     since?: string;
     explain?: boolean;
+    changedSince?: string;
   },
 ) {
   const searchOpts: SearchOptions = {
@@ -912,7 +965,9 @@ async function cmdSearch(
     searchOpts.scope = opts.scope.split(",");
   }
 
-  const results = await search(repoRoot, query, searchOpts);
+  const results = opts.changedSince
+    ? await searchChanged(repoRoot, opts.changedSince, query, searchOpts)
+    : await search(repoRoot, query, searchOpts);
 
   // Resolve output format: --format takes precedence over --pretty/--json
   const format = opts.format ?? (opts.pretty ? "pretty" : "json");
@@ -959,18 +1014,9 @@ async function cmdSearch(
 
   // Zero-result diagnostics
   if (results.length === 0) {
-    const words = query
-      .split(/\s+/)
-      .filter((w) => w.length > 2)
-      .map((w) => `"${w}"`)
-      .join(" ");
-    console.error("\nNo results found. Suggestions:");
-    console.error("  - Try broader or different search terms");
-    console.error("  - Check index status: codeindex status");
-    console.error("  - Validate environment: codeindex doctor");
-    if (words) {
-      console.error(`  - Try keyword search: rg -i ${words}`);
-    }
+    console.error(
+      `No results found. Try: rg '${query}' or run 'codeindex doctor' to check index health.`,
+    );
   }
 }
 
@@ -996,7 +1042,7 @@ async function cmdExport(repoRoot: string, outPath: string, opts: ExportOptions 
 // status command
 // ---------------------------------------------------------------------------
 
-async function cmdStatus(repoRoot: string, showCost = false) {
+async function cmdStatus(repoRoot: string, showCost = false, showQuality = false) {
   const config = await loadConfig(repoRoot);
 
   if (config.store === "pg") {
@@ -1086,6 +1132,50 @@ async function cmdStatus(repoRoot: string, showCost = false) {
       console.log(`  Total: $${totalCost.toFixed(4)}`);
     }
   }
+
+  // Quality metrics
+  if (showQuality) {
+    try {
+      const report = await runQualityCheck(repoRoot);
+      console.log("\nQuality Report:");
+      console.log(`  Status: ${report.passed ? "PASS" : "FAIL"}`);
+      console.log(`  Dataset queries: ${report.queryCount}`);
+      for (const r of report.results) {
+        const icon = r.result.passed ? "PASS" : "FAIL";
+        console.log(`  [${icon}] ${r.policy}: ${r.result.message}`);
+      }
+    } catch (err) {
+      console.log(`\nQuality check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// telemetry command
+// ---------------------------------------------------------------------------
+
+async function cmdTelemetry(parsed: ParsedArgs) {
+  if (hasFlag(parsed, "reset")) {
+    await resetTelemetry();
+    console.log("Telemetry data reset.");
+    return;
+  }
+  const telemetryFile = path.join(
+    process.env.HOME ?? os.homedir(),
+    ".config",
+    "codeindex",
+    "telemetry.jsonl",
+  );
+  try {
+    const content = await Bun.file(telemetryFile).text();
+    if (!content.trim()) {
+      console.log("No telemetry data recorded. Set CODEINDEX_TELEMETRY=1 to enable.");
+      return;
+    }
+    console.log(content);
+  } catch {
+    console.log("No telemetry data found. Set CODEINDEX_TELEMETRY=1 to enable.");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,7 +1252,7 @@ async function cmdManifest(repoRoot: string) {
     // Check if skipped due to secrets
     const absPath = path.join(repoRoot, relPath);
     try {
-      const content = await Bun.file(absPath).text();
+      const content = (await Bun.file(absPath).text()).replace(/\0/g, "");
       const scan = scanForSecrets(content);
       if (scan.hasSecrets) {
         skippedFiles.push({ path: relPath, reason: `secrets: ${scan.patterns.join(", ")}` });
@@ -1241,6 +1331,53 @@ async function cmdConfig(repoRoot: string, args: string[]) {
   const merged = { ...existing, ...updates };
   await Bun.write(localConfigPath, JSON.stringify(merged, null, 2) + "\n");
   console.log("Config saved to .codeindex.json");
+}
+
+// ---------------------------------------------------------------------------
+// config --list command
+// ---------------------------------------------------------------------------
+
+async function cmdConfigList(repoRoot: string) {
+  const config = await loadConfig(repoRoot);
+
+  // Flatten config into key-value pairs with source info
+  const entries: Array<{ key: string; value: unknown; source: string }> = [];
+
+  function flatten(obj: Record<string, unknown>, prefix: string) {
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k;
+      if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+        flatten(v as Record<string, unknown>, key);
+      } else {
+        entries.push({ key, value: v, source: "config" });
+      }
+    }
+  }
+
+  flatten(config as unknown as Record<string, unknown>, "");
+
+  // Check env var overrides
+  const envOverrides: Record<string, string | undefined> = {
+    "pg.host": process.env.PGHOST,
+    "pg.port": process.env.PGPORT,
+    "pg.database": process.env.PGDATABASE,
+    "pg.user": process.env.PGUSER,
+  };
+
+  for (const entry of entries) {
+    const envVal = envOverrides[entry.key];
+    if (envVal !== undefined) {
+      entry.source = "env";
+      entry.value = envVal;
+    }
+  }
+
+  // Print as aligned table
+  const maxKeyLen = Math.max(...entries.map((e) => e.key.length));
+  for (const e of entries) {
+    const val = JSON.stringify(e.value);
+    console.log(`${e.key.padEnd(maxKeyLen)}  ${val.padEnd(20)}  (${e.source})`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,6 +1479,16 @@ async function cmdDoctor(repoRoot: string) {
     } catch {
       check("Schema version", false, "Could not determine schema version.");
     }
+
+    // Embedding dimension check (SQLite only — vec tables store dimension)
+    if (config.store === "sqlite") {
+      const dimWarning = await checkEmbeddingDimensions(repoRoot, config.embedding.dimensions);
+      if (dimWarning) {
+        check("Embedding dimensions", false, dimWarning);
+      } else {
+        check("Embedding dimensions", true);
+      }
+    }
   }
 
   // 5. claude CLI available
@@ -1373,12 +1520,163 @@ async function cmdDoctor(repoRoot: string) {
 }
 
 // ---------------------------------------------------------------------------
+// graph command
+// ---------------------------------------------------------------------------
+
+interface GraphNode {
+  name: string;
+  id: number;
+}
+
+interface GraphEdge {
+  source: number;
+  target: number;
+  count: number;
+}
+
+async function cmdGraph(repoRoot: string, format: string) {
+  const config = await loadConfig(repoRoot);
+
+  let rows: Array<{ source_repo_id: number; target_repo_id: number; cnt: number }>;
+  let repoNames: Map<number, string>;
+
+  if (config.store === "pg") {
+    const pg = await getPg();
+    const edgeRows = await pg`
+      SELECT source_repo_id, target_repo_id, COUNT(*) as cnt
+      FROM cross_repo_edges
+      GROUP BY source_repo_id, target_repo_id
+    `;
+    rows = edgeRows.map((r: Record<string, unknown>) => ({
+      source_repo_id: Number(r.source_repo_id),
+      target_repo_id: Number(r.target_repo_id),
+      cnt: Number(r.cnt),
+    }));
+
+    const repoRows = await pg`SELECT id, name FROM repos`;
+    repoNames = new Map(
+      repoRows.map((r: Record<string, unknown>) => [Number(r.id), String(r.name)]),
+    );
+  } else {
+    const db = await getSqlite(repoRoot);
+    const edgeRows = db
+      .prepare(
+        `SELECT source_repo_id, target_repo_id, COUNT(*) as cnt
+         FROM cross_repo_edges
+         GROUP BY source_repo_id, target_repo_id`,
+      )
+      .all() as Array<{ source_repo_id: number; target_repo_id: number; cnt: number }>;
+    rows = edgeRows;
+
+    const repoRows = db.prepare(`SELECT id, name FROM repos`).all() as Array<{
+      id: number;
+      name: string;
+    }>;
+    repoNames = new Map(repoRows.map((r) => [r.id, r.name]));
+  }
+
+  if (rows.length === 0) {
+    console.log("No cross-repo edges found.");
+    return;
+  }
+
+  // Collect unique node IDs
+  const nodeIds = new Set<number>();
+  for (const r of rows) {
+    nodeIds.add(r.source_repo_id);
+    nodeIds.add(r.target_repo_id);
+  }
+
+  const nodes: GraphNode[] = [...nodeIds].map((id) => ({
+    name: repoNames.get(id) ?? `repo_${id}`,
+    id,
+  }));
+
+  const edges: GraphEdge[] = rows.map((r) => ({
+    source: r.source_repo_id,
+    target: r.target_repo_id,
+    count: r.cnt,
+  }));
+
+  switch (format) {
+    case "json":
+      console.log(JSON.stringify({ nodes, edges }, null, 2));
+      break;
+
+    case "dot": {
+      const dotLines = ["digraph cross_repo {"];
+      for (const n of nodes) {
+        dotLines.push(`  "${n.name}" [label="${n.name}"];`);
+      }
+      for (const e of edges) {
+        const src = repoNames.get(e.source) ?? `repo_${e.source}`;
+        const tgt = repoNames.get(e.target) ?? `repo_${e.target}`;
+        dotLines.push(`  "${src}" -> "${tgt}" [label="${e.count}"];`);
+      }
+      dotLines.push("}");
+      console.log(dotLines.join("\n"));
+      break;
+    }
+
+    case "mermaid":
+    default: {
+      const mermaidLines = ["graph TD"];
+      for (const e of edges) {
+        const src = repoNames.get(e.source) ?? `repo_${e.source}`;
+        const tgt = repoNames.get(e.target) ?? `repo_${e.target}`;
+        // Sanitize names for Mermaid (replace special chars)
+        const srcId = `r${e.source}`;
+        const tgtId = `r${e.target}`;
+        mermaidLines.push(`  ${srcId}["${src}"] -->|${e.count} edges| ${tgtId}["${tgt}"]`);
+      }
+      console.log(mermaidLines.join("\n"));
+      break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// mcp-config command
+// ---------------------------------------------------------------------------
+
+async function cmdMcpConfig(parsed: ParsedArgs) {
+  const transport = flag(parsed, "transport") ?? "stdio";
+  const port = flag(parsed, "port") ?? "3100";
+
+  if (transport === "sse") {
+    const config = {
+      mcpServers: {
+        codeindex: {
+          url: `http://localhost:${port}/sse`,
+        },
+      },
+    };
+    console.log(JSON.stringify(config, null, 2));
+  } else {
+    const config = {
+      mcpServers: {
+        codeindex: {
+          command: "codeindex",
+          args: ["mcp"],
+        },
+      },
+    };
+    console.log(JSON.stringify(config, null, 2));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CLI dispatch
 // ---------------------------------------------------------------------------
 
 const HELP_TEXT = `codeindex — semantic code search
 
 Commands:
+  setup                Guided setup: database, repos, .indexignore, all in one
+    --scan <dir>       Scan directory for git repos (multi-repo mode)
+    --yes              Non-interactive, accept all defaults
+    --store <type>     Force store type: pg | sqlite
+    --dry-run          Show what would happen
   init                 Initialize codeindex in current repo
   reindex              Full reindex of current repo
     --dry-run          Report what would change and projected cost
@@ -1428,17 +1726,69 @@ Commands:
     create --name --repos <id,id> [--expires <ISO>]
     list               List all tokens
     revoke --id <N>    Revoke a token
+  mcp-config           Print MCP integration JSON config
+    --transport <t>    stdio (default) or sse
+    --port <n>         Port for SSE transport (default 3100)
+  graph                Visualize cross-repo dependency graph
+    --format <f>       json|mermaid|dot (default: mermaid)
+  xref <symbol>        Cross-reference a symbol across repos
+    --format <f>       json|table (default: table)
   doctor               Check environment and configuration
 
 Options:
   --path <dir>         Repo root (default: cwd)
-  --read-only          Block write operations (init, reindex, update)`;
+  --read-only          Block write operations (init, reindex, update)
+  --version            Print version`;
 
 const WRITE_COMMANDS = new Set(["init", "reindex", "update", "install-hook"]);
+
+const SUBCOMMAND_HELP: Record<string, string> = {
+  search:
+    "Usage: codeindex search <query> [options]\n\nOptions:\n  --min-score <f>       Minimum score threshold (default 0.3)\n  --top-n <n>           Max results\n  --scope <s>           project|all|name1,name2\n  --lang <l>            Filter by language (ts,python,rust,go,java,c,cpp,cs)\n  --dir <d>             Filter by directory prefix\n  --since <t>           Filter by time (30d, 2w, 3m, or ISO date)\n  --include-skeleton    Include skeleton text\n  --include-summary     Include directory summaries\n  --include-snippet     Include code snippets with line numbers\n  --explain             Show per-result score breakdown\n  --format <f>          Output format: json (default), pretty, compact\n  --pretty              Alias for --format pretty\n  --json                Alias for --format json",
+  reindex:
+    "Usage: codeindex reindex [options]\n\nOptions:\n  --dry-run             Report what would change and projected cost\n  --budget <usd>        Set cost cap for this reindex (USD)\n  --scope all           Reindex all registered repos in parallel\n  --workers <n>         Number of parallel workers (default 3)\n  --force               Force full reindex even if unchanged",
+  status:
+    "Usage: codeindex status [options]\n\nOptions:\n  --cost                Show token usage and cost breakdown",
+  serve:
+    "Usage: codeindex serve [options]\n\nOptions:\n  --transport <t>       stdio (default) or sse\n  --port <n>            Port for SSE transport (default 3100)",
+  init: "Usage: codeindex init\n\nInitializes codeindex in the current repository.",
+  doctor: "Usage: codeindex doctor\n\nChecks environment and configuration health.",
+  check:
+    "Usage: codeindex check [options]\n\nOptions:\n  --json                Output as JSON\n  --quality             Run quality checks\n  --dataset <path>      Quality dataset path\n  --baseline <path>     Quality baseline path",
+  intent:
+    "Usage: codeindex intent [options]\n\nOptions:\n  --out <path>          Output path (default: stdout)",
+  drift:
+    "Usage: codeindex drift [options]\n\nOptions:\n  --threshold <f>       Drift threshold (default 0.3)\n  --agents-md <path>    Path to AGENTS.md (default: AGENTS.md)\n  --out <path>          Output JSON path (default: stdout)",
+  repo: "Usage: codeindex repo <add|remove|list|status|purge>\n\nSubcommands:\n  add <path>            Register a repository\n  remove <name>         Unregister a repository\n  list                  List all registered repos\n  status [name]         Show repo status\n  purge <name> [--force] Remove repo and all its data",
+  token:
+    "Usage: codeindex token <create|list|revoke>\n\nSubcommands:\n  create --name <name> --repos <id,id> [--expires <ISO>]\n  list                  List all tokens\n  revoke --id <N>       Revoke a token",
+  graph:
+    "Usage: codeindex graph [options]\n\nOptions:\n  --format <f>          Output format: mermaid (default), json, dot",
+  xref: "Usage: codeindex xref <symbol> [options]\n\nOptions:\n  --format <f>          Output format: table (default), json",
+  "mcp-config":
+    "Usage: codeindex mcp-config [options]\n\nOptions:\n  --transport <t>       stdio (default) or sse\n  --port <n>            Port for SSE transport (default 3100)",
+  config:
+    "Usage: codeindex config [--list | --key value ...]\n\nOptions:\n  --list                Show all config values with sources",
+  export:
+    "Usage: codeindex export [options]\n\nOptions:\n  --out <path>              Output path (default .codeindex.db)\n  --include-embeddings      Include embedding vectors (redacted by default)\n  --redact-commits          Exclude commit data from export\n  --exclude <globs>         Comma-separated glob patterns to exclude files",
+};
 
 async function main() {
   const parsed = parseArgs(process.argv);
   const repoRoot = flag(parsed, "path") ? path.resolve(flag(parsed, "path")!) : process.cwd();
+
+  // --version: print version and exit
+  if (hasFlag(parsed, "version")) {
+    const pkg = await Bun.file(path.join(import.meta.dir, "../package.json")).json();
+    console.log(pkg.version);
+    process.exit(0);
+  }
+
+  // Per-subcommand --help
+  if (hasFlag(parsed, "help") && parsed.command && SUBCOMMAND_HELP[parsed.command]) {
+    console.log(SUBCOMMAND_HELP[parsed.command]);
+    process.exit(0);
+  }
 
   // Read-only guard: block write operations when --read-only flag or config is set
   if (WRITE_COMMANDS.has(parsed.command)) {
@@ -1460,11 +1810,83 @@ async function main() {
     }
   }
 
+  // Warn about unrecognized flags
+  const GLOBAL_FLAGS = [
+    "help",
+    "version",
+    "read-only",
+    "json",
+    "pretty",
+    "explain",
+    "min-score",
+    "top-n",
+    "lang",
+    "dir",
+    "since",
+    "format",
+    "scope",
+    "out",
+    "transport",
+    "port",
+    "workers",
+    "budget",
+    "files",
+    "commit",
+    "threshold",
+    "config-name",
+    "repo",
+    "output",
+    "exclude",
+    "cost",
+    "include-skeleton",
+    "include-summary",
+    "include-snippet",
+    "dry-run",
+    "quality",
+    "list",
+    "reset",
+    "validate",
+    "alpha",
+    "beta",
+    "gamma",
+    "decay",
+    "parent-boost-multiplier",
+    "changed-since",
+    "force",
+    "scan",
+    "store",
+    "yes",
+    "single",
+    "skip-doctor",
+    "name",
+    "repos",
+    "expires",
+    "id",
+    "path",
+    "dataset",
+    "baseline",
+    "agents-md",
+  ];
+  warnUnknownFlags(parsed, GLOBAL_FLAGS);
+
   try {
     switch (parsed.command) {
       case "init":
         await cmdInit(repoRoot);
         break;
+
+      case "setup": {
+        const { cmdSetup } = await import("./setup");
+        await cmdSetup(repoRoot, {
+          scanDir: flag(parsed, "scan"),
+          single: hasFlag(parsed, "single"),
+          yes: hasFlag(parsed, "yes"),
+          store: flag(parsed, "store") as "pg" | "sqlite" | undefined,
+          skipDoctor: hasFlag(parsed, "skip-doctor"),
+          dryRun: hasFlag(parsed, "dry-run"),
+        });
+        break;
+      }
 
       case "reindex": {
         const budgetStr = flag(parsed, "budget");
@@ -1539,6 +1961,7 @@ async function main() {
           dir: dirRaw ? dirRaw.split(",") : undefined,
           since: flag(parsed, "since"),
           explain: hasFlag(parsed, "explain"),
+          changedSince: flag(parsed, "changed-since"),
         });
         break;
       }
@@ -1559,7 +1982,11 @@ async function main() {
         break;
 
       case "config":
-        await cmdConfig(repoRoot, process.argv.slice(3));
+        if (hasFlag(parsed, "list")) {
+          await cmdConfigList(repoRoot);
+        } else {
+          await cmdConfig(repoRoot, process.argv.slice(3));
+        }
         break;
 
       case "manifest":
@@ -1698,7 +2125,11 @@ async function main() {
       }
 
       case "status":
-        await cmdStatus(repoRoot, hasFlag(parsed, "cost"));
+        await cmdStatus(repoRoot, hasFlag(parsed, "cost"), hasFlag(parsed, "quality"));
+        break;
+
+      case "telemetry":
+        await cmdTelemetry(parsed);
         break;
 
       case "doctor":
@@ -1754,15 +2185,52 @@ async function main() {
         break;
       }
 
+      case "graph": {
+        const graphFormat = flag(parsed, "format") ?? "mermaid";
+        await cmdGraph(repoRoot, graphFormat);
+        break;
+      }
+
+      case "xref": {
+        const symbolName = parsed.positional[0];
+        if (!symbolName) {
+          console.error("Usage: codeindex xref <symbol> [--format json|table]");
+          process.exit(1);
+        }
+        const xrefFormat = flag(parsed, "format") ?? "table";
+        const xrefResult = await xrefSymbol(repoRoot, symbolName);
+        if (xrefFormat === "json") {
+          console.log(formatXrefJson(xrefResult));
+        } else {
+          console.log(formatXrefTable(xrefResult));
+        }
+        break;
+      }
+
+      case "mcp-config":
+        await cmdMcpConfig(parsed);
+        break;
+
       case "serve": {
         const { createMcpServer } = await import("./mcp/server");
         const { startStdio, startSSE } = await import("./mcp/transport");
-        const mcpServer = createMcpServer(repoRoot);
         const transport = flag(parsed, "transport") ?? "stdio";
         if (transport === "sse") {
           const portStr = flag(parsed, "port");
-          await startSSE(mcpServer, portStr ? parseInt(portStr) : 3100);
+          await startSSE(
+            (session) => createMcpServer(repoRoot, session),
+            portStr ? parseInt(portStr) : 3100,
+            repoRoot,
+          );
         } else {
+          const { authenticateSession } = await import("./mcp/auth");
+          const token = process.env.CODEINDEX_TOKEN;
+          const session = await authenticateSession(repoRoot, token);
+          if (session === null) {
+            console.error("Authentication failed: invalid or missing token.");
+            process.exit(1);
+          }
+          const mcpServer = createMcpServer(repoRoot, session);
           await startStdio(mcpServer);
         }
         break;
@@ -1786,6 +2254,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error(formatError(err));
   process.exit(1);
 });

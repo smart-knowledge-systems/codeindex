@@ -540,6 +540,19 @@ describe("Swift (.swift)", () => {
     expect(text).toContain("struct Point");
     expect(text).toContain("protocol Drawable");
   });
+
+  it("extracts typealias declaration", () => {
+    expect(hasEntry(entries, "ShapeList", "type")).toBeDefined();
+  });
+
+  it("skeleton text includes typealias", () => {
+    expect(text).toContain("typealias ShapeList");
+  });
+
+  it("extracts createShapes function with ShapeList return type", () => {
+    expect(text).toContain("createShapes");
+    expect(text).toContain("ShapeList");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -581,6 +594,15 @@ describe("Ruby (.rb)", () => {
   it("skeleton text includes class hierarchy", () => {
     expect(text).toContain("class Dog");
     expect(text).toContain("module Animals");
+  });
+
+  it("extracts attr_reader as property entries", () => {
+    expect(hasEntry(entries, "name", "property")).toBeDefined();
+    expect(hasEntry(entries, "age", "property")).toBeDefined();
+  });
+
+  it("skeleton text includes attr_reader", () => {
+    expect(text).toContain("attr_reader");
   });
 });
 
@@ -624,6 +646,84 @@ describe("PHP (.php)", () => {
     expect(text).toContain("class User");
     expect(text).toContain("interface Renderable");
     expect(text).toContain("trait HasTimestamps");
+  });
+
+  it("extracts PHP 8 enum declaration", () => {
+    expect(hasEntry(entries, "Status", "enum")).toBeDefined();
+  });
+
+  it("skeleton text includes enum", () => {
+    expect(text).toContain("enum Status");
+  });
+
+  it("extracts Route class with attribute", () => {
+    expect(hasEntry(entries, "Route", "class")).toBeDefined();
+  });
+
+  it("skeleton text includes enum cases", () => {
+    expect(text).toContain("case Active");
+    expect(text).toContain("case Inactive");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scala
+// ---------------------------------------------------------------------------
+
+describe("Scala (.scala)", () => {
+  let text: string;
+  let entries: SkeletonEntry[];
+
+  beforeAll(async () => {
+    const filePath = path.join(FIXTURES, "sample.scala");
+    const content = await readFile(filePath, "utf-8");
+    ({ text, entries } = await extractSkeletonWithEntries(filePath, content));
+  });
+
+  it("produces non-empty skeleton text", () => {
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain("[Scala]");
+  });
+
+  it("extracts AppConfig object", () => {
+    expect(hasEntry(entries, "AppConfig", "object")).toBeDefined();
+  });
+
+  it("extracts AppConfig class", () => {
+    expect(hasEntry(entries, "AppConfig", "class")).toBeDefined();
+  });
+
+  it("extracts Repository trait", () => {
+    expect(hasEntry(entries, "Repository", "trait")).toBeDefined();
+  });
+
+  it("extracts User class", () => {
+    expect(hasEntry(entries, "User", "class")).toBeDefined();
+  });
+
+  it("extracts val definition", () => {
+    expect(hasEntry(entries, "MaxRetries", "property")).toBeDefined();
+  });
+
+  it("extracts var definition", () => {
+    expect(hasEntry(entries, "currentUser", "property")).toBeDefined();
+  });
+
+  it("extracts type definition", () => {
+    expect(hasEntry(entries, "UserId", "type")).toBeDefined();
+  });
+
+  it("extracts top-level function", () => {
+    expect(hasEntry(entries, "createRepository", "function")).toBeDefined();
+  });
+
+  it("skeleton text includes object and trait", () => {
+    expect(text).toContain("object AppConfig");
+    expect(text).toContain("trait Repository");
+  });
+
+  it("skeleton text includes imports", () => {
+    expect(text).toContain("imports:");
   });
 });
 

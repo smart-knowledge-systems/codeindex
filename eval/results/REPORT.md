@@ -221,3 +221,55 @@ The MRR regression is partly from the BM25 CamelCase fix changing token distribu
 3. **KNN over-fetch prevents result starvation.** With narrow `--lang`/`--dir` filters, the 3x→10x multiplier and 200→500 minimum keep results from being filtered to nothing.
 4. **Prose indexing needs more work.** The markdown skeleton extractor helps (STEERING.md queries work), but conceptual queries about planned features in ROADMAP.md still miss. Consider embedding full prose content or improving the heading-based skeleton.
 5. **Gravity well partially addressed.** Skeleton length normalization reduces but doesn't eliminate `src/index.ts` dominating rankings across diverse queries.
+
+---
+
+## M5 Post-Merge Evaluation
+
+**Date:** 2026-03-14
+**Dataset:** 65 queries (20 original code + 7 original prose + 30 multi-language + 8 new prose)
+**Changes since M3:** Multi-language skeleton extraction (Kotlin, Swift, Ruby, PHP, Lua, Scala), architecture intelligence features, expanded eval dataset, migration checksum tracking.
+
+### Aggregate Metrics (65 queries)
+
+| Metric | Value |
+|--------|-------|
+| P@5 | 0.154 |
+| HitRate@5 | 0.718 |
+| Recall | 0.749 |
+| MRR | 0.476 |
+| nDCG@10 | 0.531 |
+
+### By Category
+
+| Category | Queries | HitRate@5 | MRR | Notes |
+|----------|---------|-----------|-----|-------|
+| Original code | 20 | 0.784 | 0.52 | Stable vs M3 |
+| Kotlin | 5 | 1.00 | 0.67 | All queries hit |
+| Swift | 5 | 0.80 | 0.67 | `swift-async-await` missed |
+| Ruby | 5 | 1.00 | 0.67 | All queries hit |
+| PHP | 5 | 1.00 | 1.00 | Perfect across all queries |
+| Lua | 5 | 0.00 | 0.00 | **All queries miss — skeleton extraction broken** |
+| Scala | 5 | 1.00 | 0.67 | All queries hit |
+| Prose | 15 | 0.47 | 0.32 | Conceptual queries still weak |
+
+### Key Findings
+
+1. **Multi-language skeleton extraction works well.** 24/30 language-specific queries hit (80% HR@5). PHP is perfect (5/5, MRR 1.0). Kotlin, Ruby, and Scala all achieve 100% HR@5.
+
+2. **Lua is completely broken.** All 5 Lua queries return zero hits. The Lua skeleton extractor is not surfacing the right constructs (tables, closures, coroutines, metatables, modules). This needs investigation — likely the tree-sitter grammar isn't extracting meaningful skeletons.
+
+3. **Swift async/await missed.** The only non-Lua language miss. The `async`/`await` keywords may not be captured in the skeleton, or the Swift fixture doesn't exercise them prominently enough.
+
+4. **Prose query quality is bimodal.** Practical prose queries work well (`ci-guide`, `tree-sitter-upgrade`, `skill-definition`, `package-manager-bun` all hit). Abstract/conceptual queries (`roadmap-milestones`, `plan-milestones`, `readme-overview`, `mcp-server-plan`) still miss — the skeleton extractor captures headings but not the semantic content of plans and roadmaps.
+
+5. **Core code metrics stable.** Original 20 code queries show HR@5 of 0.784 vs M3's 0.754 — a slight improvement, likely from the expanded file set providing better directory-level context.
+
+6. **`config-loading` regression persists.** This query achieved perfect scores in M1 but has returned 0 hits since M3. The `src/config.ts` skeleton may have changed enough that the embedding no longer matches.
+
+### Recommendations for Next Milestone
+
+1. **Fix Lua skeleton extraction.** Debug the tree-sitter Lua grammar integration. Verify that `sample.lua` fixture is being parsed and that skeleton output contains meaningful constructs.
+2. **Improve prose indexing for conceptual content.** Consider embedding full document content for markdown files, not just heading-based skeletons.
+3. **Investigate `config-loading` regression.** Compare M1 vs current skeleton for `src/config.ts` to understand what changed.
+4. **Add `swift-async-await` to skeleton.** Ensure `async` and `await` keywords are preserved in Swift skeleton extraction.

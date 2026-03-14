@@ -70,7 +70,10 @@ extension Shape {
     }
 }
 
-func createShapes() -> [Shape] {
+typealias ShapeList = [Shape]
+
+@available(iOS 15.0, macOS 12.0, *)
+func createShapes() -> ShapeList {
     return [
         Circle(radius: 5.0, color: "red"),
         Shape(color: "blue", name: "Square"),

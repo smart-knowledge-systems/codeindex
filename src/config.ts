@@ -124,6 +124,22 @@ const FORMATTER_CHECKS: {
   { files: [".clang-format"], command: "clang-format" },
 ];
 
+export function getGlobalConfigPath(): string {
+  return GLOBAL_CONFIG_PATH;
+}
+
+export async function globalConfigExists(): Promise<boolean> {
+  return await Bun.file(GLOBAL_CONFIG_PATH).exists();
+}
+
+export async function writeGlobalConfig(config: Partial<CodeindexConfig>): Promise<string> {
+  const dir = path.dirname(GLOBAL_CONFIG_PATH);
+  const { mkdirSync } = await import("fs");
+  mkdirSync(dir, { recursive: true });
+  await Bun.write(GLOBAL_CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+  return GLOBAL_CONFIG_PATH;
+}
+
 export async function detectFormatter(repoRoot: string): Promise<string | null> {
   for (const entry of FORMATTER_CHECKS) {
     for (const fileName of entry.files) {

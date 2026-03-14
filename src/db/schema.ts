@@ -1,10 +1,11 @@
 import { applyMigrations, ensureSqliteVecTables } from "./migrate";
 
-export async function ensurePgSchema() {
+export async function ensurePgSchema(): Promise<number[]> {
   const applied = await applyMigrations("pg");
   if (applied.length > 0) {
     console.error(`Applied ${applied.length} migration(s): ${applied.join(", ")}`);
   }
+  return applied;
 }
 
 export async function ensureSqliteSchema(repoRoot?: string) {

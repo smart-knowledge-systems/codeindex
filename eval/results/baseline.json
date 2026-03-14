@@ -1,425 +1,1464 @@
 {
   "configName": "baseline",
-  "avgPrecision5": 0.8416666666666666,
-  "avgRecall": 0.8583333333333334,
-  "avgMrr": 0.7516666666666667,
+  "avgPrecision5": 0.1538461538461538,
+  "avgHitRate5": 0.717948717948718,
+  "avgRecall": 0.7487179487179488,
+  "avgMrr": 0.47606837606837593,
+  "avgNdcg": 0.5310488545403812,
+  "avgUniqueFilesInTop5": 4.030769230769231,
+  "avgUniqueDirsInTop5": 3.5692307692307694,
   "results": [
     {
       "queryId": "embedding-vector-search",
       "query": "embedding and vector similarity search",
-      "precision5": 0.5,
-      "recall": 0.5,
-      "mrr": 0.25,
+      "precision5": 0.2,
+      "hitRate5": 0.5,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 0.7977228895450266,
       "returnedFiles": [
-        "eval/dataset.json",
-        "src/db/util.ts",
-        "src/search/types.ts",
         "src/search/query.ts",
-        "src/search",
-        "eval/summary-assessments.json",
-        "eval"
+        "eval/results/ablation.json",
+        "eval/results/baseline.json",
+        "eval/dataset.json",
+        "src/index.ts",
+        "src/search/types.ts",
+        "src/db/util.ts",
+        "migrations/0001_baseline.pg.sql",
+        "src/index/embedder.ts",
+        "eval/results/SUMMARY.md"
       ],
       "expectedFiles": [
         "src/search/query.ts",
         "src/index/embedder.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
     },
     {
       "queryId": "tree-sitter-skeleton",
       "query": "tree-sitter AST skeleton extraction",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
       "mrr": 1,
+      "ndcg": 1,
       "returnedFiles": [
         "src/index/skeleton.ts",
-        "eval/dataset.json",
-        "src/search/types.ts",
-        "SPEC.md",
         "src/index.ts",
-        "package.json",
-        "eval",
-        "src/search"
+        "src/search/query.ts",
+        "eval/results/ablation.json",
+        "eval/results/baseline.json",
+        "test/skeleton.test.ts",
+        "eval/dataset.json",
+        "docs/lua-skeleton-lessons.md",
+        "SPEC.md"
       ],
       "expectedFiles": [
         "src/index/skeleton.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
     },
     {
       "queryId": "git-commit-recency",
       "query": "git commit history and recency",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 0.5,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306,
       "returnedFiles": [
         "src/index.ts",
+        "src/search/query.ts",
+        "eval/dataset.json",
         "src/index/commits.ts",
-        "src/hooks/post-commit.ts",
-        "SPEC.md",
-        "codeindex-skill-workspace/iteration-1/cross-repo-migrations/without_skill",
-        "src/index",
-        "codeindex-skill-workspace/iteration-1/cross-repo-migrations/eval_metadata.json",
-        "README.md"
+        "README.md",
+        "src/search/types.ts",
+        "eval/results/SUMMARY.md",
+        "src/mcp/server.ts",
+        "src/hooks/post-commit.ts"
       ],
       "expectedFiles": [
         "src/index/commits.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
     },
     {
       "queryId": "database-schema",
       "query": "database schema creation",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5,
       "returnedFiles": [
-        "src/db/schema.ts",
-        "src/db/export.ts",
-        "src/db/sqlite.ts",
-        "src/search/query.ts",
-        "src/db",
         "src/index.ts",
-        "src/index/directories.ts"
+        "audit/test/database.bats",
+        "src/db/schema.ts",
+        "eval/dataset.json",
+        "migrations/0001_baseline.sqlite.sql",
+        "src/search/query.ts",
+        "src/db/migrate.ts"
       ],
       "expectedFiles": [
         "src/db/schema.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
     },
     {
       "queryId": "file-walking-gitignore",
       "query": "file walking and gitignore",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.25,
+      "ndcg": 0.43067655807339306,
       "returnedFiles": [
-        "src/index/walker.ts",
         "src/index.ts",
-        "src/index/directories.ts",
-        "src/index/commits.ts",
-        "src/hooks/post-commit.ts",
-        "package.json"
+        "src/search/query.ts",
+        "eval/dataset.json",
+        "src/index/walker.ts"
       ],
       "expectedFiles": [
         "src/index/walker.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 4
     },
     {
       "queryId": "directory-summary",
       "query": "directory summary generation",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
       "returnedFiles": [
-        "src/index/directories.ts",
         "src/index.ts",
+        "src/index/directories.ts",
         "src/search/query.ts",
-        "eval/summary-assessments.json",
-        "codeindex-skill-workspace/pr-draft.md",
-        "src/intent.ts",
         "eval/dataset.json",
-        "README.md",
+        "migrations/0002_directory_children_hash.sqlite.sql",
+        "migrations/0002_directory_children_hash.pg.sql",
+        "audit/legacy/generate-branches.sh",
+        "codeindex-skill-workspace/pr-draft.md",
         "SPEC.md"
       ],
       "expectedFiles": [
         "src/index/directories.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
     },
     {
       "queryId": "config-loading",
       "query": "configuration loading",
-      "precision5": 1,
-      "recall": 1,
-      "mrr": 1,
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
       "returnedFiles": [
-        "src/config.ts",
         "src/index.ts",
-        "src/index/skeleton.ts",
-        "tsconfig.json",
         "src/search/query.ts",
-        "package.json",
-        "src",
-        "src/index/directories.ts",
-        "src/drift.ts"
+        "eval/dataset.json"
       ],
       "expectedFiles": [
         "src/config.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
     },
     {
       "queryId": "cli-args",
       "query": "CLI argument parsing",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 0.5,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163,
       "returnedFiles": [
         "src/index.ts",
-        "src/cli.ts",
-        "src/index/skeleton.ts",
-        "tsconfig.json",
-        "src/config.ts",
-        "CLAUDE.md",
-        "SPEC.md",
-        "package.json"
+        "audit/legacy/run-audit.sh",
+        "dialogue/priorities/dx-engineer.md",
+        "src/search/query.ts",
+        "src/cli.ts"
       ],
       "expectedFiles": [
         "src/cli.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
     },
     {
       "queryId": "secret-detection",
       "query": "secret detection in files",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
       "returnedFiles": [
-        "src/index/secrets.ts",
         "src/index.ts",
-        "src/index/directories.ts",
-        "eval/ripgrep-baseline.ts",
+        "src/index/secrets.ts",
         "src/search/query.ts",
-        "src/index/walker.ts",
-        "codeindex-skill-workspace/iteration-2/find-rate-limiting/eval_metadata.json",
-        "src/intent.ts"
+        "src/check/policies/secret-scan.ts",
+        "dialogue/priorities/security-reviewer.md",
+        "eval/results/SUMMARY.md"
       ],
       "expectedFiles": [
         "src/index/secrets.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
     },
     {
       "queryId": "postgres-vector",
       "query": "PostgreSQL vector search",
-      "precision5": 0.5,
+      "precision5": 0.2,
+      "hitRate5": 0.5,
       "recall": 0.5,
       "mrr": 1,
+      "ndcg": 0.6131471927654584,
       "returnedFiles": [
         "src/search/query.ts",
-        "src/db/schema.ts",
-        "src/search",
+        "migrations/0001_baseline.pg.sql",
+        "src/index.ts",
         "eval/summary-assessments.json",
-        "eval/dataset.json"
+        "README.md",
+        "dialogue/priorities/multi-repo-user.md",
+        "eval/results/ablation.json",
+        "eval/results/baseline.json",
+        "PLAN.md"
       ],
       "expectedFiles": [
         "src/db/pg.ts",
         "src/search/query.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
     },
     {
       "queryId": "sqlite-vec0",
       "query": "SQLite connection and vec0",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163,
       "returnedFiles": [
-        "src/db/sqlite.ts",
+        "src/index.ts",
+        "migrations/0001_baseline.sqlite.sql",
         "src/db/util.ts",
-        "src/db/export.ts",
-        "src/db",
         "src/search/query.ts",
-        "src/db/schema.ts"
+        "src/db/sqlite.ts",
+        "src/db/migrate.ts",
+        "src/db/export.ts",
+        "PLAN.md",
+        "test/fixtures/sample.py"
       ],
       "expectedFiles": [
         "src/db/sqlite.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
     },
     {
       "queryId": "content-formatting",
       "query": "content formatting and hashing",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
       "returnedFiles": [
-        "src/index/formatter.ts",
         "src/index.ts",
-        "src/config.ts",
-        "src/index/secrets.ts",
-        "SPEC.md",
-        "CLAUDE.md",
+        "src/index/formatter.ts",
+        "src/search/query.ts",
+        "eval/results/SUMMARY.md",
+        "src/index/skeleton.ts",
         "src/search/types.ts"
       ],
       "expectedFiles": [
         "src/index/formatter.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
     },
     {
       "queryId": "post-commit-hook",
       "query": "post-commit hook installation",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
       "returnedFiles": [
-        "src/hooks/post-commit.ts",
         "src/index.ts",
-        "src/hooks",
-        "src/index/commits.ts",
-        "src/index/directories.ts",
-        "src/repo.ts",
-        "CLAUDE.md"
+        "src/hooks/post-commit.ts",
+        "src/search/query.ts",
+        "src/hooks"
       ],
       "expectedFiles": [
         "src/hooks/post-commit.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 3
     },
     {
       "queryId": "export-snapshot",
       "query": "export database snapshot",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163,
       "returnedFiles": [
-        "src/db/export.ts",
-        "src/db/sqlite.ts",
         "src/index.ts",
-        "src/db/schema.ts",
-        "src/index/directories.ts",
-        "src/db",
+        "docs/ci-guide.md",
         "src/search/query.ts",
-        "src/search/types.ts",
-        "src/db/pg.ts"
+        "src/db/sqlite.ts",
+        "src/db/export.ts"
       ],
       "expectedFiles": [
         "src/db/export.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
     },
     {
       "queryId": "scoring-commit-boost",
       "query": "scoring formula with commit boost",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 0.2,
+      "mrr": 1,
+      "ndcg": 1,
       "returnedFiles": [
+        "src/search/query.ts",
         "src/index.ts",
         "src/search/types.ts",
-        "eval/run-eval.ts",
+        "eval/results/SUMMARY.md",
+        "eval/results/REPORT.md",
+        "dialogue/priorities/search-quality.md",
         "codeindex-skill-workspace/iteration-1/tuning-noisy-results/with_skill/outputs/response.md",
-        "src/search/query.ts",
-        "codeindex-skill-workspace/iteration-1/tuning-noisy-results/without_skill",
-        "eval/ablation.ts",
-        "codeindex-skill-workspace/iteration-1/tuning-noisy-results/with_skill",
-        "codeindex-skill-workspace/iteration-1/tuning-noisy-results/with_skill/outputs"
+        "eval/run-eval.ts",
+        "README.md"
       ],
       "expectedFiles": [
         "src/search/query.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 3
     },
     {
       "queryId": "parent-dir-boost",
       "query": "parent directory boost propagation",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 0.25,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
       "returnedFiles": [
-        "src/index/directories.ts",
         "src/index.ts",
-        "src/config.ts",
         "src/search/query.ts",
-        "src/intent.ts",
-        "eval/summary-assessments.json",
-        "codeindex-skill-workspace"
+        "src/search/types.ts",
+        "eval/results/SUMMARY.md",
+        "eval/results/REPORT.md",
+        "dialogue/priorities/search-quality.md",
+        "README.md",
+        "src/index/directories.ts",
+        "codeindex-skill-workspace/pr-draft.md",
+        "codeindex-skill-workspace/iteration-1/tuning-noisy-results/with_skill/outputs/response.md"
       ],
       "expectedFiles": [
         "src/search/query.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 3
     },
     {
       "queryId": "indexignore-override",
       "query": "indexignore override patterns",
-      "precision5": 1,
+      "precision5": 0.2,
+      "hitRate5": 1,
       "recall": 1,
-      "mrr": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
       "returnedFiles": [
-        "src/index/walker.ts",
         "src/index.ts",
-        "package.json",
+        "src/index/walker.ts",
+        "src/search/query.ts",
+        "src/db/export.ts",
+        "README.md",
         "src/config.ts",
-        "src/index/directories.ts",
-        "tsconfig.json",
-        "codeindex.skill.md",
-        "src/search/query.ts"
+        "docs/ci-guide.md",
+        "src/index/skeleton.ts"
       ],
       "expectedFiles": [
         "src/index/walker.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
     },
     {
       "queryId": "negative-kubernetes",
       "query": "kubernetes deployment",
       "precision5": 0,
+      "hitRate5": 0,
       "recall": 0,
       "mrr": 0,
+      "ndcg": 0,
       "returnedFiles": [
         "src/index.ts",
-        "package.json",
-        "CLAUDE.md",
-        "src/index/directories.ts",
-        "src/hooks/post-commit.ts",
-        "eval/summary-assessments.json",
-        "PLAN.md",
-        "eval/dataset.json"
+        "eval/results/SUMMARY.md"
       ],
       "expectedFiles": [],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
     },
     {
       "queryId": "ambiguous-types",
       "query": "types and interfaces",
-      "precision5": 0.5,
-      "recall": 0.5,
-      "mrr": 1,
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
       "returnedFiles": [
-        "src/search/types.ts",
-        "src/search/query.ts",
-        "src/index/skeleton.ts",
-        "package.json",
-        "src/config.ts",
-        "tsconfig.json",
-        "src/search",
         "src/index.ts",
-        "src/repo.ts"
+        "test/fixtures/sample.php"
       ],
       "expectedFiles": [
         "src/search/types.ts",
         "src/cli.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
     },
     {
       "queryId": "cross-file-embedding-pipeline",
       "query": "how files get embedded end to end",
-      "precision5": 0.3333333333333333,
+      "precision5": 0.4,
+      "hitRate5": 0.6666666666666666,
       "recall": 0.6666666666666666,
-      "mrr": 0.3333333333333333,
+      "mrr": 1,
+      "ndcg": 0.6713860725233041,
       "returnedFiles": [
-        "src/index/directories.ts",
-        "src/search/query.ts",
         "src/index.ts",
-        "eval/dataset.json",
-        "src/db/util.ts",
+        "src/search/query.ts",
+        "src/search/types.ts",
         "src/index/embedder.ts",
-        "src/config.ts",
-        "src/drift.ts"
+        "eval/ripgrep-baseline.ts",
+        "patches/web-tree-sitter@0.25.3.patch"
       ],
       "expectedFiles": [
         "src/index.ts",
         "src/index/embedder.ts",
         "src/index/skeleton.ts"
       ],
-      "scoringConfig": {}
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-roadmap-milestones",
+      "query": "project roadmap and milestones",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index.ts",
+        "dialogue/CONTEXT.md",
+        "dialogue/CONTEXT_M3.md",
+        "src/search/query.ts",
+        "src/mcp/server.ts"
+      ],
+      "expectedFiles": [
+        "ROADMAP.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-schema-versioning-plan",
+      "query": "schema versioning and migration plan",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0.5,
+      "mrr": 0.16666666666666666,
+      "ndcg": 0.21840743681816419,
+      "returnedFiles": [
+        "src/index.ts",
+        "src/db/migrate.ts",
+        "src/search/query.ts",
+        "migrations/0007_migration_checksums.pg.sql",
+        "codeindex-skill-workspace/iteration-1/cross-repo-migrations/with_skill/outputs/response.md",
+        "src/db/schema.ts",
+        "codeindex-skill-workspace/iteration-1/cross-repo-migrations/without_skill/outputs/response.md",
+        "migrations/0007_migration_checksums.sqlite.sql",
+        "dialogue/CONTEXT_M3.md"
+      ],
+      "expectedFiles": [
+        "ROADMAP.md",
+        "src/db/schema.ts"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
+    },
+    {
+      "queryId": "prose-design-principles",
+      "query": "design principles and steering decisions",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "STEERING.md",
+        "src/index.ts"
+      ],
+      "expectedFiles": [
+        "STEERING.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
+    },
+    {
+      "queryId": "prose-mcp-server-plan",
+      "query": "MCP server mode for agent integration",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/mcp/server.ts",
+        "src/index.ts",
+        "README.md",
+        "test/mcp.test.ts",
+        "src/mcp/transport.ts",
+        "src/search/query.ts"
+      ],
+      "expectedFiles": [
+        "ROADMAP.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-cost-tracking",
+      "query": "embedding cost tracking and budget controls",
+      "precision5": 0.2,
+      "hitRate5": 0.5,
+      "recall": 0.5,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.3065735963827292,
+      "returnedFiles": [
+        "src/index.ts",
+        "src/search/query.ts",
+        "src/cost.ts",
+        "dialogue/priorities/cost-economist.md",
+        "src/search/types.ts",
+        "src/mcp/server.ts",
+        "src/index/parallel.ts",
+        "dialogue/THEME_CLUSTERS.md",
+        "dialogue/CONTEXT_M3.md"
+      ],
+      "expectedFiles": [
+        "src/cost.ts",
+        "ROADMAP.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "prose-local-embeddings",
+      "query": "local embedding models and Ollama support",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index/providers/ollama.ts",
+        "src/index/embedder.ts",
+        "src/search/types.ts",
+        "src/search/query.ts",
+        "src/index.ts",
+        "dialogue/priorities/cost-economist.md",
+        "README.md"
+      ],
+      "expectedFiles": [
+        "ROADMAP.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-intent-layer",
+      "query": "intent nodes and AGENTS.md generation",
+      "precision5": 0.2,
+      "hitRate5": 0.5,
+      "recall": 0.5,
+      "mrr": 0.2,
+      "ndcg": 0.23719771276929622,
+      "returnedFiles": [
+        "src/index.ts",
+        "dialogue/CONTEXT.md",
+        "src/search/query.ts",
+        "dialogue/priorities/agent-developer.md",
+        "src/drift.ts",
+        "STEERING.md",
+        "src/mcp/server.ts",
+        "dialogue/priorities/product-owner.md",
+        "README.md",
+        "dialogue/DRAFT_ROADMAP.md"
+      ],
+      "expectedFiles": [
+        "src/intent.ts",
+        "src/drift.ts"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "kotlin-data-class",
+      "query": "Kotlin data class with properties",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index/skeleton.ts",
+        "test/fixtures/sample.kt"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.kt"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
+    },
+    {
+      "queryId": "kotlin-sealed-class",
+      "query": "Kotlin sealed class hierarchy",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index/skeleton.ts",
+        "test/fixtures/sample.kt"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.kt"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
+    },
+    {
+      "queryId": "kotlin-extension-function",
+      "query": "Kotlin extension function on existing type",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.2,
+      "ndcg": 0.38685280723454163,
+      "returnedFiles": [
+        "src/index/skeleton.ts",
+        "src/index.ts",
+        "src/index/imports.ts",
+        "src/search/query.ts",
+        "test/fixtures/sample.kt",
+        "test/fixtures/sample.swift"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.kt"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "kotlin-coroutine-suspend",
+      "query": "Kotlin coroutine suspend function",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5,
+      "returnedFiles": [
+        "src/index/skeleton.ts",
+        "src/index.ts",
+        "test/fixtures/sample.kt"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.kt"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "kotlin-companion-object",
+      "query": "Kotlin companion object with factory method",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.kt",
+        "src/index/skeleton.ts",
+        "src/index.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.kt"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "swift-protocol-conformance",
+      "query": "Swift protocol conformance and extension",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.swift",
+        "src/index.ts",
+        "src/index/skeleton.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.swift"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "swift-struct-memberwise-init",
+      "query": "Swift struct with memberwise initializer",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.swift",
+        "src/index/skeleton.ts",
+        "src/index.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.swift"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "swift-enum-associated-values",
+      "query": "Swift enum with associated values",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.swift",
+        "src/index/skeleton.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.swift"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
+    },
+    {
+      "queryId": "swift-async-await",
+      "query": "Swift async await concurrency",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index.ts",
+        "src/db/sqlite.ts",
+        "src/search/query.ts",
+        "src/index/commits.ts",
+        "src/index/formatter.ts",
+        "src/hooks/post-commit.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.swift"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "swift-property-wrapper",
+      "query": "Swift property wrapper declaration",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5,
+      "returnedFiles": [
+        "src/index/skeleton.ts",
+        "src/index.ts",
+        "test/fixtures/sample.swift"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.swift"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "ruby-class-inheritance",
+      "query": "Ruby class with inheritance and mixins",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.rb",
+        "src/index/skeleton.ts",
+        "src/index.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.rb"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "ruby-module-mixin",
+      "query": "Ruby module as mixin with instance methods",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.rb",
+        "src/index.ts",
+        "src/index/imports.ts",
+        "src/index/skeleton.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.rb"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "ruby-block-yield",
+      "query": "Ruby method with block yield",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5,
+      "returnedFiles": [
+        "src/index/skeleton.ts",
+        "src/index.ts",
+        "test/fixtures/sample.rb",
+        "src/search/query.ts",
+        "docs/lua-skeleton-lessons.md",
+        "test/fixtures/sample.php"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.rb"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
+    },
+    {
+      "queryId": "ruby-attr-accessor",
+      "query": "Ruby attr_accessor and attr_reader declarations",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index.ts",
+        "test/fixtures/sample.rb",
+        "src/index/skeleton.ts",
+        "audit/policies/logging-strategy/POLICY.md"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.rb"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "ruby-proc-lambda",
+      "query": "Ruby proc and lambda callable objects",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index.ts",
+        "test/fixtures/sample.rb",
+        "src/index/skeleton.ts",
+        "src/search/query.ts",
+        "src/index/formatter.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.rb"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "php-class-interface",
+      "query": "PHP class implementing interface",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.php",
+        "src/index/skeleton.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.php"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
+    },
+    {
+      "queryId": "php-trait-usage",
+      "query": "PHP trait definition and usage",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.php",
+        "src/index.ts",
+        "src/index/skeleton.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.php"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "php-namespace-use",
+      "query": "PHP namespace declaration and use statement",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.php",
+        "src/index/skeleton.ts",
+        "src/index.ts",
+        "docs/lua-skeleton-lessons.md"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.php"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "php-enum-backed",
+      "query": "PHP backed enum with string values",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.php"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.php"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 1,
+      "uniqueDirsInTop5": 1
+    },
+    {
+      "queryId": "php-constructor-promotion",
+      "query": "PHP constructor property promotion",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.php",
+        "src/index.ts",
+        "src/index/skeleton.ts",
+        "test/fixtures/sample.py",
+        "test/fixtures/sample.js"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.php"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "lua-table-constructor",
+      "query": "Lua table constructor and metatables",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index.ts",
+        "docs/lua-skeleton-lessons.md"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.lua"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
+    },
+    {
+      "queryId": "lua-closure-upvalue",
+      "query": "Lua closure capturing upvalues",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index.ts",
+        "docs/lua-skeleton-lessons.md",
+        "src/search/query.ts",
+        "src/index/skeleton.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.lua"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "lua-coroutine-resume",
+      "query": "Lua coroutine create and resume",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "docs/lua-skeleton-lessons.md",
+        "src/index.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.lua"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 2,
+      "uniqueDirsInTop5": 2
+    },
+    {
+      "queryId": "lua-module-require",
+      "query": "Lua module pattern with require",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index.ts",
+        "docs/lua-skeleton-lessons.md",
+        "src/search/query.ts",
+        "src/index/imports.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.lua"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "lua-metamethod-index",
+      "query": "Lua __index metamethod for inheritance",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index.ts",
+        "src/search/query.ts",
+        "docs/lua-skeleton-lessons.md",
+        "src/index/skeleton.ts",
+        "test/skeleton.test.ts",
+        "src/mcp/server.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.lua"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
+    },
+    {
+      "queryId": "scala-object-singleton",
+      "query": "Scala object singleton pattern",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.scala",
+        "src/index.ts",
+        "src/index/skeleton.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.scala"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "scala-trait-definition",
+      "query": "Scala trait with abstract methods",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index.ts",
+        "test/fixtures/sample.scala",
+        "src/index/skeleton.ts",
+        "src/search/query.ts",
+        "test/fixtures/sample.rs"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.scala"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "scala-case-class",
+      "query": "Scala case class value type",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 1,
+      "ndcg": 1,
+      "returnedFiles": [
+        "test/fixtures/sample.scala",
+        "src/index/skeleton.ts",
+        "src/index.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.scala"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "scala-class-trait-impl",
+      "query": "Scala class extending trait implementation",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index/skeleton.ts",
+        "test/fixtures/sample.scala",
+        "src/index.ts",
+        "src/search/query.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.scala"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "scala-type-alias",
+      "query": "Scala type alias definition",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5,
+      "returnedFiles": [
+        "src/index/skeleton.ts",
+        "src/index.ts",
+        "test/fixtures/sample.scala",
+        "src/xref.ts",
+        "src/search/query.ts",
+        "audit/src/branches/scanner.ts",
+        "test/skeleton.test.ts"
+      ],
+      "expectedFiles": [
+        "test/fixtures/sample.scala"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-claude-instructions",
+      "query": "project instructions and required behavior for contributors",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5,
+      "returnedFiles": [
+        "src/index.ts",
+        "src/search/query.ts",
+        "CLAUDE.md",
+        "audit/audit.conf.default"
+      ],
+      "expectedFiles": [
+        "CLAUDE.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-readme-overview",
+      "query": "project overview and getting started guide",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index.ts",
+        "src/search/query.ts",
+        "SPEC.md",
+        "audit/src/ui/src/components/PipelinePhases.tsx",
+        "CLAUDE.md",
+        "audit/src/ui/src/state.ts"
+      ],
+      "expectedFiles": [
+        "README.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-spec-architecture",
+      "query": "codeindex specification and architecture design",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 1,
+      "mrr": 0.1111111111111111,
+      "ndcg": 0.3010299956639812,
+      "returnedFiles": [
+        "src/index.ts",
+        "src/search/query.ts",
+        "ROADMAP.md",
+        "STEERING.md",
+        "README.md",
+        "codeindex.skill.md",
+        "PLAN.md",
+        "package.json",
+        "SPEC.md",
+        "src/config.ts"
+      ],
+      "expectedFiles": [
+        "SPEC.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 3
+    },
+    {
+      "queryId": "prose-plan-milestones",
+      "query": "development plan with milestone phases",
+      "precision5": 0,
+      "hitRate5": 0,
+      "recall": 0,
+      "mrr": 0,
+      "ndcg": 0,
+      "returnedFiles": [
+        "src/index.ts",
+        "audit/src/ui/src/components/PipelinePhases.tsx",
+        "ROADMAP.md",
+        "dialogue/DRAFT_ROADMAP.md",
+        "audit/docs/per-branch-batching-plan.md",
+        "src/search/query.ts"
+      ],
+      "expectedFiles": [
+        "PLAN.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
+    },
+    {
+      "queryId": "prose-ci-guide",
+      "query": "continuous integration setup and CI pipeline",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index.ts",
+        "docs/ci-guide.md",
+        "src/search/query.ts",
+        "README.md"
+      ],
+      "expectedFiles": [
+        "docs/ci-guide.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 4,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-tree-sitter-upgrade",
+      "query": "tree-sitter WASM upgrade and parser migration",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index.ts",
+        "docs/tree-sitter-upgrade.md",
+        "src/search/query.ts",
+        "src/index/skeleton.ts",
+        "package.json",
+        "docs/lua-skeleton-lessons.md",
+        "src/db/migrate.ts"
+      ],
+      "expectedFiles": [
+        "docs/tree-sitter-upgrade.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 5
+    },
+    {
+      "queryId": "prose-skill-definition",
+      "query": "codeindex skill definition for AI agent tools",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.3333333333333333,
+      "ndcg": 0.5,
+      "returnedFiles": [
+        "src/index.ts",
+        "dialogue/priorities/product-owner.md",
+        "codeindex.skill.md",
+        "README.md",
+        "dialogue/DRAFT_ROADMAP.md",
+        "src/search/query.ts",
+        "dialogue/priorities/agent-developer.md",
+        "dialogue/CONTEXT.md",
+        "codeindex-skill-workspace/evals.json",
+        "PLAN.md"
+      ],
+      "expectedFiles": [
+        "codeindex.skill.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 5,
+      "uniqueDirsInTop5": 4
+    },
+    {
+      "queryId": "prose-package-manager-bun",
+      "query": "bun package manager and never use npm",
+      "precision5": 0.2,
+      "hitRate5": 1,
+      "recall": 1,
+      "mrr": 0.5,
+      "ndcg": 0.6309297535714575,
+      "returnedFiles": [
+        "src/index.ts",
+        "CLAUDE.md",
+        "src/search/query.ts"
+      ],
+      "expectedFiles": [
+        "CLAUDE.md"
+      ],
+      "scoringConfig": {},
+      "uniqueFilesInTop5": 3,
+      "uniqueDirsInTop5": 3
     }
   ],
-  "timestamp": "2026-03-13T19:23:34.401Z"
+  "timestamp": "2026-03-14T03:50:04.594Z"
 }

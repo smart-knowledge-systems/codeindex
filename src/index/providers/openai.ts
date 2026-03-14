@@ -2,7 +2,10 @@ import OpenAI from "openai";
 import type { EmbeddingProvider } from "../embedding-provider";
 import { recordCost } from "../../cost";
 
-const BATCH_SIZE = 2048;
+// OpenAI embeddings API has a 300K token-per-request limit.
+// Large skeletons average ~200-500 tokens each, so 256 texts keeps
+// us well under the limit while still batching efficiently.
+const BATCH_SIZE = 256;
 const MAX_RETRIES = 3;
 
 export class OpenAIEmbeddingProvider implements EmbeddingProvider {
