@@ -92,16 +92,23 @@ export async function repoRemove(repoRoot: string, name: string): Promise<void> 
     if (repos.length === 0) throw new Error(`Repo not found: ${name}`);
     const repoId = parseInt(repos[0].id);
 
-    // Delete in order respecting foreign keys
-    await pgUnsafe(`DELETE FROM cost_events WHERE repo_id = $1`, [repoId]);
-    await pgUnsafe(
-      `DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1)`,
-      [repoId],
-    );
-    await pgUnsafe(`DELETE FROM files WHERE repo_id = $1`, [repoId]);
-    await pgUnsafe(`DELETE FROM directories WHERE repo_id = $1`, [repoId]);
-    await pgUnsafe(`DELETE FROM commits WHERE repo_id = $1`, [repoId]);
-    await pgUnsafe(`DELETE FROM repos WHERE id = $1`, [repoId]);
+    // Delete in order respecting foreign keys, wrapped in a transaction
+    await pgUnsafe("BEGIN");
+    try {
+      await pgUnsafe(`DELETE FROM cost_events WHERE repo_id = $1`, [repoId]);
+      await pgUnsafe(
+        `DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1)`,
+        [repoId],
+      );
+      await pgUnsafe(`DELETE FROM files WHERE repo_id = $1`, [repoId]);
+      await pgUnsafe(`DELETE FROM directories WHERE repo_id = $1`, [repoId]);
+      await pgUnsafe(`DELETE FROM commits WHERE repo_id = $1`, [repoId]);
+      await pgUnsafe(`DELETE FROM repos WHERE id = $1`, [repoId]);
+      await pgUnsafe("COMMIT");
+    } catch (err) {
+      await pgUnsafe("ROLLBACK");
+      throw err;
+    }
   } else {
     const db = await getSqlite(repoRoot);
     const repos = db.prepare(`SELECT id FROM repos WHERE name = ?`).all(name) as { id: number }[];

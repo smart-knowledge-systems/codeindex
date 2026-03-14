@@ -210,7 +210,7 @@ export function resolveImport(
   importedModule: string,
   sourceFile: string,
   language: string,
-  allFiles: string[],
+  allFiles: Set<string>,
 ): string | null {
   if (language === "typescript" || language === "javascript") {
     return resolveTsImport(importedModule, sourceFile, allFiles);
@@ -223,7 +223,7 @@ export function resolveImport(
   return null;
 }
 
-function resolveTsImport(module: string, sourceFile: string, allFiles: string[]): string | null {
+function resolveTsImport(module: string, sourceFile: string, allFiles: Set<string>): string | null {
   // Skip node_modules / bare specifiers
   if (!module.startsWith(".") && !module.startsWith("/")) return null;
 
@@ -234,32 +234,32 @@ function resolveTsImport(module: string, sourceFile: string, allFiles: string[])
   const extensions = [".ts", ".tsx", ".js", ".jsx"];
   for (const ext of extensions) {
     const candidate = resolved + ext;
-    if (allFiles.includes(candidate)) return candidate;
+    if (allFiles.has(candidate)) return candidate;
   }
 
   // Try index files
   for (const ext of extensions) {
     const candidate = path.join(resolved, `index${ext}`);
-    if (allFiles.includes(candidate)) return candidate;
+    if (allFiles.has(candidate)) return candidate;
   }
 
   // Try exact match (already has extension)
-  if (allFiles.includes(resolved)) return resolved;
+  if (allFiles.has(resolved)) return resolved;
 
   return null;
 }
 
-function resolvePythonImport(module: string, allFiles: string[]): string | null {
+function resolvePythonImport(module: string, allFiles: Set<string>): string | null {
   // Convert dotted module path to file path
   const filePath = module.replace(/\./g, "/");
 
   // Try as a file
   const withPy = filePath + ".py";
-  if (allFiles.includes(withPy)) return withPy;
+  if (allFiles.has(withPy)) return withPy;
 
   // Try as a package __init__.py
   const initPy = path.join(filePath, "__init__.py");
-  if (allFiles.includes(initPy)) return initPy;
+  if (allFiles.has(initPy)) return initPy;
 
   return null;
 }
