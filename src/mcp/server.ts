@@ -374,11 +374,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           }
         }
 
-        // Run search for each original query using cached embeddings
+        // Run search for each unique query, then map results back preserving order
         const resolvedScope = scope === "all" ? "all" : scope ? scope.split(",") : "project";
-        const perQueryResults: Record<string, unknown> = {};
+        const searchCache = new Map<string, unknown>();
 
-        for (const q of queries) {
+        for (const q of uniqueQueries) {
           const results = await search(repoRoot, q, {
             topN: topN ?? undefined,
             minScore: minScore ?? undefined,
@@ -387,9 +387,14 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             includeSummary: true,
             embeddingCache,
           });
-          const enriched = await enrichResults(repoRoot, results);
-          perQueryResults[q] = enriched;
+          searchCache.set(q, await enrichResults(repoRoot, results));
         }
+
+        // Return array preserving original query order (including duplicates)
+        const perQueryResults = queries.map((q) => ({
+          query: q,
+          results: searchCache.get(q),
+        }));
 
         return {
           content: [
