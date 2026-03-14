@@ -156,7 +156,7 @@ async function extractAndStoreImports(
     const absPath = path.join(repoRoot, relPath);
     let content: string;
     try {
-      content = await Bun.file(absPath).text();
+      content = (await Bun.file(absPath).text()).replace(/\0/g, "");
     } catch {
       continue;
     }
@@ -305,7 +305,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   for await (const relPath of walkRepo(repoRoot)) {
     allFiles.push(relPath);
     const absPath = path.join(repoRoot, relPath);
-    const content = await Bun.file(absPath).text();
+    const content = (await Bun.file(absPath).text()).replace(/\0/g, "");
 
     const scan = scanForSecrets(content);
     if (scan.hasSecrets) {
@@ -1210,7 +1210,7 @@ async function cmdManifest(repoRoot: string) {
     // Check if skipped due to secrets
     const absPath = path.join(repoRoot, relPath);
     try {
-      const content = await Bun.file(absPath).text();
+      const content = (await Bun.file(absPath).text()).replace(/\0/g, "");
       const scan = scanForSecrets(content);
       if (scan.hasSecrets) {
         skippedFiles.push({ path: relPath, reason: `secrets: ${scan.patterns.join(", ")}` });

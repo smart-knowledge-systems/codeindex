@@ -54,7 +54,7 @@ export async function reindexSingleFile(
     return true;
   }
 
-  const content = await file.text();
+  const content = (await file.text()).replace(/\0/g, "");
 
   const scan = scanForSecrets(content);
   if (scan.hasSecrets) {

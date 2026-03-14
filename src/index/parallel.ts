@@ -141,7 +141,7 @@ async function reindexOne(
     for await (const relPath of walkRepo(repoRoot)) {
       allFiles.push(relPath);
       const absPath = path.join(repoRoot, relPath);
-      const content = await Bun.file(absPath).text();
+      const content = (await Bun.file(absPath).text()).replace(/\0/g, "");
 
       const scan = scanForSecrets(content);
       if (scan.hasSecrets) {
