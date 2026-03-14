@@ -30,6 +30,11 @@ import type { TransactionSQL } from "bun";
  * For scoped sessions: uses session.repoIds.
  * For full-access / no session: queries all repo IDs so RLS passes.
  */
+/** Cached full-access repo IDs — avoids SELECT id FROM repos on every tool call. */
+let cachedAllRepoIds: number[] | null = null;
+let cachedAllRepoIdsAt = 0;
+const REPO_CACHE_TTL_MS = 60_000; // refresh every 60 seconds
+
 async function withMcpScope<T>(
   session: AuthSession | undefined,
   fn: (tx: TransactionSQL) => Promise<T>,
@@ -37,9 +42,14 @@ async function withMcpScope<T>(
   if (session?.repoIds) {
     return withRepoScope(session.repoIds, fn);
   }
-  // Full access — need all repo IDs for FORCE RLS
-  const allRepos = await pgUnsafe("SELECT id FROM repos");
-  const allRepoIds = allRepos.map((r: Record<string, unknown>) => Number(r.id));
+  // Full access — use cached repo IDs for FORCE RLS
+  const now = Date.now();
+  if (!cachedAllRepoIds || now - cachedAllRepoIdsAt > REPO_CACHE_TTL_MS) {
+    const allRepos = await pgUnsafe("SELECT id FROM repos");
+    cachedAllRepoIds = allRepos.map((r: Record<string, unknown>) => Number(r.id));
+    cachedAllRepoIdsAt = now;
+  }
+  const allRepoIds: number[] = cachedAllRepoIds!;
   if (allRepoIds.length === 0) {
     // No repos at all — run in a plain transaction
     const pg = await getPg();
@@ -1424,10 +1434,8 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         }
 
         // Pre-load file index once for import resolution across the batch
-        const fileIndex =
-          config.store === "pg"
-            ? await withMcpScope(session, async () => loadFileIndex(repoRoot, repoId))
-            : await loadFileIndex(repoRoot, repoId);
+        // (loadFileIndex already calls withRepoScope internally for PG)
+        const fileIndex = await loadFileIndex(repoRoot, repoId);
 
         const results: { path: string; indexed: boolean; error?: string }[] = [];
         for (const p of paths) {
