@@ -629,26 +629,36 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         let lastReindexAt: string | null = null;
 
         if (backend === "pg") {
-          const repos = await pgUnsafe("SELECT count(*) as cnt FROM repos");
-          repoCount = Number(repos[0].cnt);
-          const files = await pgUnsafe("SELECT count(*) as cnt FROM files");
-          fileCount = Number(files[0].cnt);
-          const lastIdx = await pgUnsafe("SELECT max(indexed_at)::text as last FROM files");
-          lastReindexAt = lastIdx[0].last ?? null;
+          const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
+          repoCount = repos.length;
+          if (repos.length > 0) {
+            const repoId = repos[0].id;
+            const files = await pgUnsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [
+              repoId,
+            ]);
+            fileCount = Number(files[0].cnt);
+            const lastIdx = await pgUnsafe(
+              "SELECT max(indexed_at)::text as last FROM files WHERE repo_id = $1",
+              [repoId],
+            );
+            lastReindexAt = lastIdx[0].last ?? null;
+          }
         } else {
           const db = await getSqlite(repoRoot);
-          const repos = db.prepare("SELECT count(*) as cnt FROM repos").get() as {
-            cnt: number;
-          };
-          repoCount = repos.cnt;
-          const files = db.prepare("SELECT count(*) as cnt FROM files").get() as {
-            cnt: number;
-          };
-          fileCount = files.cnt;
-          const lastIdx = db.prepare("SELECT max(indexed_at) as last FROM files").get() as {
-            last: string | null;
-          };
-          lastReindexAt = lastIdx.last ?? null;
+          const repo = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoRoot) as {
+            id: number;
+          } | null;
+          repoCount = repo ? 1 : 0;
+          if (repo) {
+            const files = db
+              .prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?")
+              .get(repo.id) as { cnt: number };
+            fileCount = files.cnt;
+            const lastIdx = db
+              .prepare("SELECT max(indexed_at) as last FROM files WHERE repo_id = ?")
+              .get(repo.id) as { last: string | null };
+            lastReindexAt = lastIdx.last ?? null;
+          }
         }
 
         return {
@@ -832,9 +842,14 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       const depth = Math.min(maxDepth ?? 10, 10);
       const dir = direction ?? "dependencies";
 
+      const scopedRepoIds = session?.repoIds ?? null;
+
       if (config.store === "pg") {
         const joinCol = dir === "dependencies" ? "source_file_id" : "resolved_file_id";
         const selectCol = dir === "dependencies" ? "resolved_file_id" : "source_file_id";
+        const repoFilter = scopedRepoIds ? `AND nf.repo_id = ANY($4::int[])` : "";
+        const params: unknown[] = [repoRoot, filePath, depth];
+        if (scopedRepoIds) params.push(scopedRepoIds);
         const rows = await pgUnsafe(
           `WITH RECURSIVE chain AS (
              SELECT f.id, f.file_path, 0 AS depth
@@ -845,10 +860,10 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              FROM chain c
              JOIN file_imports fi ON fi.${joinCol} = c.id
              JOIN files nf ON nf.id = fi.${selectCol}
-             WHERE c.depth < $3
+             WHERE c.depth < $3 ${repoFilter}
            )
            SELECT DISTINCT file_path, depth FROM chain ORDER BY depth`,
-          [repoRoot, filePath, depth],
+          params,
         );
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
@@ -863,6 +878,19 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         if (!startRow) {
           return { content: [{ type: "text" as const, text: JSON.stringify([]) }] };
         }
+
+        // Build scope filter for SQLite
+        const scopedFileIds = scopedRepoIds
+          ? new Set(
+              (
+                db
+                  .prepare(
+                    `SELECT id FROM files WHERE repo_id IN (${scopedRepoIds.map(() => "?").join(",")})`,
+                  )
+                  .all(...scopedRepoIds) as { id: number }[]
+              ).map((r) => r.id),
+            )
+          : null;
 
         const visited = new Map<number, { file_path: string; depth: number }>();
         let frontier = [startRow.id];
@@ -887,6 +915,8 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             const nexts = importStmt.all(id) as { next_id: number }[];
             for (const n of nexts) {
               if (!visited.has(n.next_id)) {
+                // Skip files outside scoped repos
+                if (scopedFileIds && !scopedFileIds.has(n.next_id)) continue;
                 const fp = (filePathStmt.get(n.next_id) as { file_path: string }).file_path;
                 visited.set(n.next_id, { file_path: fp, depth: currentDepth });
                 nextFrontier.push(n.next_id);
