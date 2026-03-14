@@ -252,10 +252,20 @@ function extractZigImports(content: string): ImportEdge[] {
 
 function extractElixirImports(content: string): ImportEdge[] {
   const edges: ImportEdge[] = [];
-  // alias Module.Name or alias Module.{A, B}
+  // alias Module.Name
   const aliasRe = /alias\s+([\w.]+)/g;
   for (const match of content.matchAll(aliasRe)) {
-    edges.push({ importedModule: match[1], language: "elixir" });
+    const mod = match[1].replace(/\.$/, ""); // strip trailing dot from destructuring prefix
+    if (mod) edges.push({ importedModule: mod, language: "elixir" });
+  }
+  // alias Module.{A, B} — expand destructured aliases
+  const aliasDestructRe = /alias\s+([\w.]+)\.\{([^}]+)\}/g;
+  for (const match of content.matchAll(aliasDestructRe)) {
+    const prefix = match[1];
+    const members = match[2].split(",").map((s) => s.trim());
+    for (const member of members) {
+      if (member) edges.push({ importedModule: `${prefix}.${member}`, language: "elixir" });
+    }
   }
   // import Module
   const importRe = /import\s+([\w.]+)/g;
