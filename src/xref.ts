@@ -53,12 +53,13 @@ export async function xrefSymbol(repoRoot: string, symbol: string): Promise<Xref
 async function xrefPg(symbol: string, matches: XrefMatch[]): Promise<void> {
   const pg = await getPg();
 
-  // 1. Search skeletons for symbol using BM25
+  // 1. Search skeletons for symbol using BM25 (pre-filter to avoid full table scan)
   const skeletonRows = await pg`
     SELECT f.id, f.file_path, f.skeleton, f.repo_id, r.name as repo_name
     FROM files f
     JOIN repos r ON f.repo_id = r.id
     WHERE f.skeleton IS NOT NULL
+      AND f.skeleton ILIKE ${"%" + symbol + "%"}
   `;
 
   const docs = skeletonRows
@@ -145,15 +146,16 @@ async function xrefPg(symbol: string, matches: XrefMatch[]): Promise<void> {
 async function xrefSqlite(repoRoot: string, symbol: string, matches: XrefMatch[]): Promise<void> {
   const db = await getSqlite(repoRoot);
 
-  // 1. Search skeletons for symbol using BM25
+  // 1. Search skeletons for symbol using BM25 (pre-filter to avoid full table scan)
   const skeletonRows = db
     .prepare(
       `SELECT f.id, f.file_path, f.skeleton, f.repo_id, r.name as repo_name
        FROM files f
        JOIN repos r ON f.repo_id = r.id
-       WHERE f.skeleton IS NOT NULL`,
+       WHERE f.skeleton IS NOT NULL
+         AND f.skeleton LIKE '%' || ? || '%'`,
     )
-    .all() as Array<{
+    .all(symbol) as Array<{
     id: number;
     file_path: string;
     skeleton: string;
