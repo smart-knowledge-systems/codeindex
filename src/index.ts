@@ -29,6 +29,7 @@ import { extractImports, resolveImport } from "./index/imports";
 import { discoverCrossRepoEdges } from "./index/cross-repo";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import type { SearchOptions } from "./search/types";
+import { logEvent } from "./logging";
 
 // ---------------------------------------------------------------------------
 // init command
@@ -611,6 +612,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   await extractAndStoreImports(repoRoot, repoId, new Set(allFiles), config.store);
   console.log("Import graph complete.");
 
+  logEvent({ event: "reindex", repo: repoRoot, files_indexed: indexed, files_skipped: skipped });
   console.log("Reindex complete.");
 }
 
