@@ -291,21 +291,21 @@ function resolvePythonImport(module: string, allFiles: Set<string>): string | nu
  * import is "github.com/user/project/pkg/foo", resolves to "pkg/foo/*.go".
  */
 // Pre-built index mapping directory paths to a representative .go file
-let goDirIndex: Map<string, string> | null = null;
-let goDirIndexSource: Set<string> | null = null;
+const goDirIndexCache = new WeakMap<Set<string>, Map<string, string>>();
 
 function getGoDirIndex(allFiles: Set<string>): Map<string, string> {
-  if (goDirIndex && goDirIndexSource === allFiles) return goDirIndex;
-  goDirIndex = new Map();
-  goDirIndexSource = allFiles;
+  const cached = goDirIndexCache.get(allFiles);
+  if (cached) return cached;
+  const index = new Map<string, string>();
   for (const file of allFiles) {
     if (!file.endsWith(".go")) continue;
     const dir = path.dirname(file);
-    if (!goDirIndex.has(dir)) {
-      goDirIndex.set(dir, file);
+    if (!index.has(dir)) {
+      index.set(dir, file);
     }
   }
-  return goDirIndex;
+  goDirIndexCache.set(allFiles, index);
+  return index;
 }
 
 function resolveGoImport(
