@@ -123,12 +123,6 @@ async function extractAndStoreImports(
       repoId,
     ])) as { id: string; file_path: string }[];
     for (const r of rows) fileIdMap.set(r.file_path, parseInt(r.id));
-
-    // Clear existing imports for this repo
-    await pgUnsafe(
-      "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1)",
-      [repoId],
-    );
   } else {
     const db = await getSqlite(repoRoot);
     const rows = db.prepare("SELECT id, file_path FROM files WHERE repo_id = ?").all(repoId) as {
@@ -142,16 +136,13 @@ async function extractAndStoreImports(
     ).run(repoId);
   }
 
-  let importCount = 0;
-
-  // Hoist SQLite handle + prepared statement outside the loop
-  const sqliteDb = store === "sqlite" ? await getSqlite(repoRoot) : null;
-  const sqliteStmt = sqliteDb
-    ? sqliteDb.prepare(
-        `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
-         VALUES (?, ?, ?, ?)`,
-      )
-    : null;
+  // Collect all edges first, then write atomically
+  const edgesToInsert: Array<{
+    sourceId: number;
+    importedModule: string;
+    resolvedId: number | null;
+    language: string;
+  }> = [];
 
   for (const relPath of allFiles) {
     const sourceId = fileIdMap.get(relPath);
@@ -171,21 +162,45 @@ async function extractAndStoreImports(
     for (const edge of edges) {
       const resolved = resolveImport(edge.importedModule, relPath, edge.language, allFiles);
       const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
-
-      if (store === "pg") {
-        await pgUnsafe(
-          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
-           VALUES ($1, $2, $3, $4)`,
-          [sourceId, edge.importedModule, resolvedId, edge.language],
-        );
-      } else {
-        sqliteStmt!.run(sourceId, edge.importedModule, resolvedId, edge.language);
-      }
-      importCount++;
+      edgesToInsert.push({
+        sourceId,
+        importedModule: edge.importedModule,
+        resolvedId,
+        language: edge.language,
+      });
     }
   }
 
-  console.log(`  ${importCount} import edges stored.`);
+  if (store === "pg") {
+    await pgUnsafe("BEGIN");
+    try {
+      await pgUnsafe(
+        "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1)",
+        [repoId],
+      );
+      for (const e of edgesToInsert) {
+        await pgUnsafe(
+          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+           VALUES ($1, $2, $3, $4)`,
+          [e.sourceId, e.importedModule, e.resolvedId, e.language],
+        );
+      }
+      await pgUnsafe("COMMIT");
+    } catch (err) {
+      await pgUnsafe("ROLLBACK");
+      throw err;
+    }
+  } else {
+    const sqliteDb = await getSqlite(repoRoot);
+    const sqliteStmt = sqliteDb.prepare(
+      `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
+       VALUES (?, ?, ?, ?)`,
+    );
+    for (const e of edgesToInsert) {
+      sqliteStmt.run(e.sourceId, e.importedModule, e.resolvedId, e.language);
+    }
+  }
+  console.log(`  ${edgesToInsert.length} import edges stored.`);
 }
 
 // ---------------------------------------------------------------------------
