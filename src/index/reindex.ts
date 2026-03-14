@@ -200,23 +200,18 @@ export async function reindexSingleFile(
       // Refresh file_imports for this file
       db.prepare("DELETE FROM file_imports WHERE source_file_id = ?").run(row.id);
       if (importEdges.length > 0) {
-        const idx = fileIndex ?? {
-          allFiles: new Set(
-            (
-              db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
-                file_path: string;
-              }[]
-            ).map((r) => r.file_path),
-          ),
-          fileIdMap: new Map(
-            (
-              db.prepare("SELECT id, file_path FROM files WHERE repo_id = ?").all(repoId) as {
-                id: number;
-                file_path: string;
-              }[]
-            ).map((r) => [r.file_path, r.id]),
-          ),
-        };
+        let idx: FileIndex;
+        if (fileIndex) {
+          idx = fileIndex;
+        } else {
+          const allFileRows = db
+            .prepare("SELECT id, file_path FROM files WHERE repo_id = ?")
+            .all(repoId) as { id: number; file_path: string }[];
+          idx = {
+            allFiles: new Set(allFileRows.map((r) => r.file_path)),
+            fileIdMap: new Map(allFileRows.map((r) => [r.file_path, r.id])),
+          };
+        }
 
         const insertStmt = db.prepare(
           `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
