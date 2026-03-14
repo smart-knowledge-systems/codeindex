@@ -139,13 +139,13 @@ async function reindexOne(
     }[] = [];
 
     for await (const relPath of walkRepo(repoRoot)) {
-      allFiles.push(relPath);
       const absPath = path.join(repoRoot, relPath);
       const file = Bun.file(absPath);
       if (file.size > MAX_FILE_SIZE) {
         skipped++;
         continue;
       }
+      allFiles.push(relPath);
       const content = (await file.text()).replace(/\0/g, "");
 
       const scan = scanForSecrets(content);
@@ -238,6 +238,51 @@ async function reindexOne(
         }
       });
       insertAll();
+    }
+
+    // Prune stale entries (files removed, filtered by extension, or oversized)
+    const allFileSet = new Set(allFiles);
+    const stalePaths = [...existingHashes.keys()].filter((fp) => !allFileSet.has(fp));
+    if (stalePaths.length > 0) {
+      if (config.store === "pg") {
+        const pg = await getPg();
+        await pg.begin(async (tx) => {
+          for (const fp of stalePaths) {
+            await tx.unsafe(
+              "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
+              [repoId, fp],
+            );
+            await tx.unsafe(
+              "DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
+              [repoId, fp],
+            );
+            await tx.unsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [
+              repoId,
+              fp,
+            ]);
+          }
+        });
+      } else {
+        const db = await getSqlite(repoRoot);
+        const selectId = db.prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?");
+        const delImports = db.prepare("DELETE FROM file_imports WHERE source_file_id = ?");
+        const delEmbeddings = db.prepare("DELETE FROM file_embeddings WHERE file_id = ?");
+        const delCommits = db.prepare("DELETE FROM file_commits WHERE file_id = ?");
+        const delFile = db.prepare("DELETE FROM files WHERE id = ?");
+        db.transaction(() => {
+          for (const fp of stalePaths) {
+            const rows = selectId.all(repoId, fp) as { id: number }[];
+            if (rows.length > 0) {
+              const fileId = rows[0].id;
+              delImports.run(fileId);
+              delEmbeddings.run(fileId);
+              delCommits.run(fileId);
+              delFile.run(fileId);
+            }
+          }
+        })();
+      }
+      process.stderr.write(`${tag} Pruned ${stalePaths.length} stale entries\n`);
     }
 
     // Build directory index

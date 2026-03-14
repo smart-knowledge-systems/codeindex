@@ -299,13 +299,13 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   }[] = [];
 
   for await (const relPath of walkRepo(repoRoot)) {
-    allFiles.push(relPath);
     const absPath = path.join(repoRoot, relPath);
     const file = Bun.file(absPath);
     if (file.size > MAX_FILE_SIZE) {
       skipped++;
       continue;
     }
+    allFiles.push(relPath);
     const content = (await file.text()).replace(/\0/g, "");
 
     const scan = scanForSecrets(content);
@@ -606,6 +606,60 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
     }
   }
   console.log(`Commits: ${commitCount} embedded`);
+
+  // Prune stale entries (files removed, filtered by extension, or oversized)
+  const allFileSet = new Set(allFiles);
+  let pruned = 0;
+  if (config.store === "pg") {
+    const rows = (await pgUnsafe("SELECT file_path FROM files WHERE repo_id = $1", [repoId])) as {
+      file_path: string;
+    }[];
+    const stalePaths = rows.filter((r) => !allFileSet.has(r.file_path)).map((r) => r.file_path);
+    if (stalePaths.length > 0) {
+      const pg = await getPg();
+      await pg.begin(async (tx) => {
+        for (const fp of stalePaths) {
+          await tx.unsafe(
+            "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
+            [repoId, fp],
+          );
+          await tx.unsafe(
+            "DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
+            [repoId, fp],
+          );
+          await tx.unsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [repoId, fp]);
+        }
+      });
+      pruned = stalePaths.length;
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    const rows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
+    const stalePaths = rows.filter((r) => !allFileSet.has(r.file_path)).map((r) => r.file_path);
+    if (stalePaths.length > 0) {
+      const selectId = db.prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?");
+      const delImports = db.prepare("DELETE FROM file_imports WHERE source_file_id = ?");
+      const delEmbeddings = db.prepare("DELETE FROM file_embeddings WHERE file_id = ?");
+      const delCommits = db.prepare("DELETE FROM file_commits WHERE file_id = ?");
+      const delFile = db.prepare("DELETE FROM files WHERE id = ?");
+      db.transaction(() => {
+        for (const fp of stalePaths) {
+          const fileRows = selectId.all(repoId, fp) as { id: number }[];
+          if (fileRows.length > 0) {
+            const fileId = fileRows[0].id;
+            delImports.run(fileId);
+            delEmbeddings.run(fileId);
+            delCommits.run(fileId);
+            delFile.run(fileId);
+          }
+        }
+      })();
+      pruned = stalePaths.length;
+    }
+  }
+  if (pruned > 0) console.log(`Pruned ${pruned} stale entries`);
 
   // Build directory index
   console.log("Building directory index...");
