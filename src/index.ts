@@ -15,7 +15,7 @@ import { scanForSecrets } from "./index/secrets";
 import { embed, embedSingle, getProvider } from "./index/embedder";
 import { getRepoOrigin, getRepoName, getFileCommits, getChangedFiles } from "./index/commits";
 import { buildDirectoryIndex, updateAffectedDirectories } from "./index/directories";
-import { search } from "./search/query";
+import { search, searchChanged } from "./search/query";
 import { installHook } from "./hooks/post-commit";
 import { exportToSqlite, type ExportOptions } from "./db/export";
 import { setCurrentRepo, getProjectedCost, checkCostCap } from "./cost";
@@ -892,6 +892,7 @@ async function cmdSearch(
     dir?: string[];
     since?: string;
     explain?: boolean;
+    changedSince?: string;
   },
 ) {
   const searchOpts: SearchOptions = {
@@ -912,7 +913,9 @@ async function cmdSearch(
     searchOpts.scope = opts.scope.split(",");
   }
 
-  const results = await search(repoRoot, query, searchOpts);
+  const results = opts.changedSince
+    ? await searchChanged(repoRoot, opts.changedSince, query, searchOpts)
+    : await search(repoRoot, query, searchOpts);
 
   // Resolve output format: --format takes precedence over --pretty/--json
   const format = opts.format ?? (opts.pretty ? "pretty" : "json");
@@ -1740,6 +1743,7 @@ async function main() {
           dir: dirRaw ? dirRaw.split(",") : undefined,
           since: flag(parsed, "since"),
           explain: hasFlag(parsed, "explain"),
+          changedSince: flag(parsed, "changed-since"),
         });
         break;
       }

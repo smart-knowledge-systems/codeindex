@@ -1278,6 +1278,94 @@ async function attachCrossRepoEdges(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Changed-file search — files indexed after a given timestamp
+// ---------------------------------------------------------------------------
+
+function parseSinceTimestamp(since: string): Date {
+  // Relative formats: "1d", "7d", "2w", "3m"
+  const relMatch = since.match(/^(\d+)([dwm])$/);
+  if (relMatch) {
+    const n = parseInt(relMatch[1]);
+    const unit = relMatch[2];
+    const now = new Date();
+    switch (unit) {
+      case "d":
+        now.setDate(now.getDate() - n);
+        break;
+      case "w":
+        now.setDate(now.getDate() - n * 7);
+        break;
+      case "m":
+        now.setMonth(now.getMonth() - n);
+        break;
+    }
+    return now;
+  }
+  // ISO date string
+  const d = new Date(since);
+  if (isNaN(d.getTime())) throw new Error(`Invalid since value: ${since}`);
+  return d;
+}
+
+export async function searchChanged(
+  repoRoot: string,
+  since: string,
+  query?: string,
+  options?: SearchOptions,
+): Promise<SearchResult[]> {
+  const config = await loadConfig(repoRoot);
+  const sinceDate = parseSinceTimestamp(since);
+  const sinceIso = sinceDate.toISOString();
+
+  // Get the repo ID
+  const resolved = await resolveRepoIds(repoRoot, options?.scope ?? "project", config);
+  const repoIds = resolved.repoIds;
+  if (repoIds.length === 0) return [];
+
+  // Query files changed since the timestamp
+  const changedPaths = new Set<string>();
+
+  if (config.store === "pg") {
+    const placeholders = repoIds.map((_, i) => `$${i + 2}`).join(",");
+    const rows = (await pgUnsafe(
+      `SELECT file_path FROM files
+       WHERE repo_id IN (${placeholders}) AND indexed_at >= $1`,
+      [sinceIso, ...repoIds],
+    )) as { file_path: string }[];
+    for (const r of rows) changedPaths.add(r.file_path);
+  } else {
+    const db = await getSqlite(repoRoot);
+    const placeholders = repoIds.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT file_path FROM files
+         WHERE repo_id IN (${placeholders}) AND indexed_at >= ?`,
+      )
+      .all(...repoIds, sinceIso) as { file_path: string }[];
+    for (const r of rows) changedPaths.add(r.file_path);
+  }
+
+  if (changedPaths.size === 0) return [];
+
+  // If no query, return changed files as basic results
+  if (!query) {
+    return Array.from(changedPaths).map((fp) => ({
+      filePath: fp,
+      cosineSimilarity: 0,
+      finalScore: 0,
+      type: "file",
+      inProject: true,
+    }));
+  }
+
+  // Run semantic search and intersect with changed files
+  const semanticResults = await search(repoRoot, query, options);
+  return semanticResults.filter(
+    (r) => r.type === "file" && changedPaths.has(r.filePath),
+  );
+}
+
 /**
  * Convenience wrapper — returns only file-type results (excludes "dir" and "commit").
  */

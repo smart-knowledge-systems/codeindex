@@ -30,6 +30,7 @@ const VALUE_FLAGS = new Set([
   "gamma",
   "decay",
   "parent-boost-multiplier",
+  "changed-since",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {

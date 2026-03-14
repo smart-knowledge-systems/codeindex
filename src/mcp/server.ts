@@ -2,7 +2,7 @@ import path from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { statSync } from "fs";
-import { search } from "../search/query";
+import { search, searchChanged } from "../search/query";
 import { generateIntent } from "../intent";
 import { detectDrift } from "../drift";
 import { loadConfig } from "../config";
@@ -246,6 +246,67 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           since: since ?? undefined,
           scope: scope === "all" ? "all" : scope ? scope.split(",") : "project",
           explain: explain ?? false,
+          includeSkeleton: true,
+          includeSummary: true,
+          embeddingCache,
+        });
+
+        const enriched = await enrichResults(repoRoot, results);
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(enriched, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = formatError(err);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                error: message,
+                code: err instanceof CodeindexError ? err.code : undefined,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // --- searchChanged tool ---
+  mcp.tool(
+    "searchChanged",
+    "Find files that were indexed after a given timestamp, optionally filtered by semantic query.",
+    {
+      since: z
+        .string()
+        .describe("ISO date or relative duration (e.g. '1d', '7d', '2w', '3m')"),
+      query: z.string().optional().describe("Optional semantic search query to intersect with"),
+      topN: z.number().optional().describe("Maximum number of results to return"),
+      minScore: z.number().optional().describe("Minimum score threshold (0-1)"),
+      scope: z
+        .string()
+        .optional()
+        .describe("Search scope: project, all, or comma-separated repo names"),
+    },
+    async ({ since, query, topN, minScore, scope }) => {
+      try {
+        recordEvent({
+          event: "mcp_tool",
+          timestamp: new Date().toISOString(),
+          tool: "searchChanged",
+        });
+        const repoRoot = defaultRepoRoot;
+        const results = await searchChanged(repoRoot, since, query ?? undefined, {
+          topN: topN ?? undefined,
+          minScore: minScore ?? undefined,
+          scope: scope === "all" ? "all" : scope ? scope.split(",") : "project",
           includeSkeleton: true,
           includeSummary: true,
           embeddingCache,
