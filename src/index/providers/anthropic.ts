@@ -56,7 +56,12 @@ export async function generateSummariesBatch(
   // Poll for completion
   const results = new Map<string, { summary: string; tokensIn: number; tokensOut: number }>();
   let status = batch;
+  const maxWaitMs = 30 * 60 * 1000; // 30 minutes
+  const startTime = Date.now();
   while (status.processing_status === "in_progress") {
+    if (Date.now() - startTime > maxWaitMs) {
+      throw new Error(`Batch ${batch.id} did not complete within 30 minutes`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 5000));
     status = await client.messages.batches.retrieve(batch.id);
   }
