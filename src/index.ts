@@ -792,9 +792,10 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
                 [repoId, relPath],
               );
               if (fileRows.length > 0) {
-                await tx.unsafe("UPDATE file_commits SET recency = recency + 1 WHERE file_id = $1", [
-                  fileRows[0].id,
-                ]);
+                await tx.unsafe(
+                  "UPDATE file_commits SET recency = recency + 1 WHERE file_id = $1",
+                  [fileRows[0].id],
+                );
                 await tx.unsafe(
                   `INSERT INTO file_commits (file_id, commit_id, recency)
                    VALUES ($1, $2, 1)
