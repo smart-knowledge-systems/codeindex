@@ -26,6 +26,10 @@ function setCorsHeaders(res: ServerResponse, req: IncomingMessage): void {
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  if (allowedOrigin !== "*") {
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Vary", "Origin");
+  }
 }
 
 // ---------------------------------------------------------------------------
