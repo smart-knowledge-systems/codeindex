@@ -70,7 +70,8 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
     CREATE TABLE IF NOT EXISTS files (
       id integer PRIMARY KEY, repo_id int NOT NULL REFERENCES repos(id),
       file_path text NOT NULL, content_hash text NOT NULL, skeleton text,
-      file_type text NOT NULL, indexed_at text, UNIQUE(repo_id, file_path)
+      skeleton_entries text, file_type text NOT NULL, indexed_at text,
+      UNIQUE(repo_id, file_path)
     );
     CREATE TABLE IF NOT EXISTS directories (
       id integer PRIMARY KEY, repo_id int NOT NULL REFERENCES repos(id),
@@ -127,8 +128,8 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
 
     // Export files + embeddings
     const fileColumns = redactEmbeddings
-      ? "id, repo_id, file_path, content_hash, skeleton, file_type, indexed_at::text"
-      : "id, repo_id, file_path, content_hash, skeleton, file_type, indexed_at::text, embedding::text";
+      ? "id, repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, indexed_at::text"
+      : "id, repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, indexed_at::text, embedding::text";
     const files = await pg.unsafe(`SELECT ${fileColumns} FROM files WHERE repo_id = $1`, [repoId]);
 
     const exportedFileIds = new Set<number>();
@@ -137,8 +138,17 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
       if (shouldExclude && shouldExclude(f.file_path)) continue;
 
       db.prepare(
-        "INSERT OR REPLACE INTO files (id, repo_id, file_path, content_hash, skeleton, file_type, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      ).run(f.id, f.repo_id, f.file_path, f.content_hash, f.skeleton, f.file_type, f.indexed_at);
+        "INSERT OR REPLACE INTO files (id, repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        f.id,
+        f.repo_id,
+        f.file_path,
+        f.content_hash,
+        f.skeleton,
+        f.skeleton_entries ?? null,
+        f.file_type,
+        f.indexed_at,
+      );
       exportedFileIds.add(f.id);
 
       if (!redactEmbeddings && f.embedding) {
