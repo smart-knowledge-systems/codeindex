@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { readdir, readFile } from "fs/promises";
 import path from "path";
 import { getPg } from "./pg";
@@ -7,7 +8,13 @@ const MIGRATIONS_DIR = path.join(import.meta.dir, "../../migrations");
 
 interface MigrationFile {
   version: number;
+  filename: string;
   sql: string;
+}
+
+/** Compute SHA-256 hex digest of a string. */
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 /**
@@ -31,7 +38,7 @@ async function loadMigrationFiles(backend: "pg" | "sqlite"): Promise<MigrationFi
     if (isNaN(version)) continue;
 
     const sql = await readFile(path.join(MIGRATIONS_DIR, filename), "utf-8");
-    migrations.push({ version, sql });
+    migrations.push({ version, filename, sql });
   }
 
   return migrations.sort((a, b) => a.version - b.version);
@@ -83,9 +90,12 @@ async function applyPgMigrations(): Promise<number[]> {
         await pg.unsafe(stmt);
       }
 
-      // Update version if the migration didn't already do it
+      // Update version with checksum if the migration didn't already do it
       if (m.version > 1) {
-        await pg.unsafe("INSERT INTO schema_version (version) VALUES ($1)", [m.version]);
+        await pg.unsafe(
+          "INSERT INTO schema_version (version, checksum, filename) VALUES ($1, $2, $3)",
+          [m.version, sha256(m.sql), m.filename],
+        );
       }
 
       await pg.unsafe("COMMIT");
@@ -136,11 +146,30 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
         db.exec(stmt);
       }
       db.exec(`PRAGMA user_version = ${m.version}`);
+
+      // Store checksum in migration_checksums table (created by migration 0007)
+      if (m.version >= 7) {
+        db.prepare(
+          "INSERT OR REPLACE INTO migration_checksums (version, filename, checksum) VALUES (?, ?, ?)",
+        ).run(m.version, m.filename, sha256(m.sql));
+      }
+
       db.exec("COMMIT");
       applied.push(m.version);
     } catch (err) {
       db.exec("ROLLBACK");
       throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
+    }
+  }
+
+  // Backfill checksums for migrations applied before 0007
+  if (applied.includes(7)) {
+    for (const m of migrations) {
+      if (m.version < 7) {
+        db.prepare(
+          "INSERT OR IGNORE INTO migration_checksums (version, filename, checksum) VALUES (?, ?, ?)",
+        ).run(m.version, m.filename, sha256(m.sql));
+      }
     }
   }
 
@@ -168,6 +197,71 @@ export async function applyMigrations(
   repoRoot?: string,
 ): Promise<number[]> {
   return backend === "pg" ? applyPgMigrations() : applySqliteMigrations(repoRoot);
+}
+
+/**
+ * Verify that stored migration checksums match the current migration file contents.
+ * Returns valid=true if all checksums match (or no checksums stored yet).
+ */
+export async function verifyMigrationChecksums(
+  backend: "pg" | "sqlite",
+  repoRoot?: string,
+): Promise<{ valid: boolean; mismatches: string[] }> {
+  const migrations = await loadMigrationFiles(backend);
+  const migrationMap = new Map(migrations.map((m) => [m.version, m]));
+  const mismatches: string[] = [];
+
+  if (backend === "pg") {
+    const pg = await getPg();
+    let rows: { version: number; checksum: string | null; filename: string | null }[];
+    try {
+      rows = (await pg.unsafe(
+        "SELECT version, checksum, filename FROM schema_version WHERE checksum IS NOT NULL",
+      )) as { version: number; checksum: string | null; filename: string | null }[];
+    } catch {
+      // checksum column may not exist yet
+      return { valid: true, mismatches: [] };
+    }
+
+    for (const row of rows) {
+      const m = migrationMap.get(row.version);
+      if (!m) {
+        mismatches.push(`v${row.version}: migration file missing`);
+        continue;
+      }
+      const currentChecksum = sha256(m.sql);
+      if (row.checksum && row.checksum !== currentChecksum) {
+        mismatches.push(`v${row.version} (${m.filename}): checksum mismatch`);
+      }
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    let rows: { version: number; checksum: string; filename: string }[];
+    try {
+      rows = db.prepare("SELECT version, checksum, filename FROM migration_checksums").all() as {
+        version: number;
+        checksum: string;
+        filename: string;
+      }[];
+    } catch {
+      // table may not exist yet
+      return { valid: true, mismatches: [] };
+    }
+
+    for (const row of rows) {
+      const m = migrationMap.get(row.version);
+      if (!m) {
+        mismatches.push(`v${row.version}: migration file missing`);
+        continue;
+      }
+      const currentChecksum = sha256(m.sql);
+      if (row.checksum !== currentChecksum) {
+        mismatches.push(`v${row.version} (${m.filename}): checksum mismatch`);
+      }
+    }
+  }
+
+  return { valid: mismatches.length === 0, mismatches };
 }
 
 /**
