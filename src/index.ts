@@ -130,10 +130,6 @@ async function extractAndStoreImports(
       file_path: string;
     }[];
     for (const r of rows) fileIdMap.set(r.file_path, r.id);
-
-    db.prepare(
-      "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = ?)",
-    ).run(repoId);
   }
 
   // Collect all edges first, then write atomically
@@ -196,9 +192,16 @@ async function extractAndStoreImports(
       `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
        VALUES (?, ?, ?, ?)`,
     );
-    for (const e of edgesToInsert) {
-      sqliteStmt.run(e.sourceId, e.importedModule, e.resolvedId, e.language);
-    }
+    sqliteDb.transaction(() => {
+      sqliteDb
+        .prepare(
+          "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = ?)",
+        )
+        .run(repoId);
+      for (const e of edgesToInsert) {
+        sqliteStmt.run(e.sourceId, e.importedModule, e.resolvedId, e.language);
+      }
+    })();
   }
   console.log(`  ${edgesToInsert.length} import edges stored.`);
 }
@@ -1665,7 +1668,12 @@ async function main() {
               console.error("Usage: codeindex token revoke --id <token_id>");
               process.exit(1);
             }
-            await revokeToken(repoRoot, parseInt(id));
+            const parsedId = parseInt(id, 10);
+            if (isNaN(parsedId)) {
+              console.error("Error: --id must be a numeric token ID");
+              process.exit(1);
+            }
+            await revokeToken(repoRoot, parsedId);
             console.log(`Token ${id} revoked.`);
             break;
           }
