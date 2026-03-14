@@ -987,7 +987,7 @@ async function cmdExport(repoRoot: string, outPath: string, opts: ExportOptions 
 // status command
 // ---------------------------------------------------------------------------
 
-async function cmdStatus(repoRoot: string, showCost = false) {
+async function cmdStatus(repoRoot: string, showCost = false, showQuality = false) {
   const config = await loadConfig(repoRoot);
 
   if (config.store === "pg") {
@@ -1075,6 +1075,22 @@ async function cmdStatus(repoRoot: string, showCost = false) {
       }
       console.log("  " + "-".repeat(75));
       console.log(`  Total: $${totalCost.toFixed(4)}`);
+    }
+  }
+
+  // Quality metrics
+  if (showQuality) {
+    try {
+      const report = await runQualityCheck(repoRoot);
+      console.log("\nQuality Report:");
+      console.log(`  Status: ${report.passed ? "PASS" : "FAIL"}`);
+      console.log(`  Dataset queries: ${report.queryCount}`);
+      for (const r of report.results) {
+        const icon = r.result.passed ? "PASS" : "FAIL";
+        console.log(`  [${icon}] ${r.policy}: ${r.result.message}`);
+      }
+    } catch (err) {
+      console.log(`\nQuality check failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }
@@ -1843,7 +1859,7 @@ async function main() {
       }
 
       case "status":
-        await cmdStatus(repoRoot, hasFlag(parsed, "cost"));
+        await cmdStatus(repoRoot, hasFlag(parsed, "cost"), hasFlag(parsed, "quality"));
         break;
 
       case "telemetry":
