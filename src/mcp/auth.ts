@@ -61,7 +61,24 @@ export async function validateRepoScope(
   session: AuthSession,
 ): Promise<boolean> {
   if (session.repoIds === null) return true; // full access
-  if (!repoPath || repoPath === repoRoot) return true; // default repo always allowed for now
+  if (!repoPath || repoPath === repoRoot) {
+    // Look up the default repo's ID and check it against token scope
+    const config = await loadConfig(repoRoot);
+    if (config.store === "pg") {
+      const rows = (await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot])) as {
+        id: string;
+      }[];
+      if (rows.length === 0) return false;
+      return session.repoIds.includes(parseInt(rows[0].id));
+    } else {
+      const db = await getSqlite(repoRoot);
+      const row = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoRoot) as {
+        id: number;
+      } | null;
+      if (!row) return false;
+      return session.repoIds.includes(row.id);
+    }
+  }
 
   // Look up the repo ID for the given path
   const config = await loadConfig(repoRoot);
