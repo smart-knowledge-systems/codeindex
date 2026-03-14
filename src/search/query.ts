@@ -1217,8 +1217,11 @@ async function attachCrossRepoEdges(
     const edgeParams: unknown[] = [];
     if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
       const placeholders = scopedRepoIds.map((_, i) => `$${i + 1}`).join(",");
-      edgeQuery += ` WHERE source_repo_id IN (${placeholders}) AND target_repo_id IN (${placeholders})`;
-      edgeParams.push(...scopedRepoIds);
+      const placeholders2 = scopedRepoIds
+        .map((_, i) => `$${i + 1 + scopedRepoIds.length}`)
+        .join(",");
+      edgeQuery += ` WHERE (source_repo_id IN (${placeholders}) OR target_repo_id IN (${placeholders2}))`;
+      edgeParams.push(...scopedRepoIds, ...scopedRepoIds);
     }
     const allEdges = (await pgUnsafe(edgeQuery, edgeParams)) as {
       source_repo_id: string;
@@ -1265,7 +1268,7 @@ async function attachCrossRepoEdges(
     const edgeBindings: number[] = [];
     if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
       const placeholders = scopedRepoIds.map(() => "?").join(",");
-      edgeQuery += ` WHERE source_repo_id IN (${placeholders}) AND target_repo_id IN (${placeholders})`;
+      edgeQuery += ` WHERE (source_repo_id IN (${placeholders}) OR target_repo_id IN (${placeholders}))`;
       edgeBindings.push(...scopedRepoIds, ...scopedRepoIds);
     }
     edgeQuery += ` GROUP BY source_repo_id, target_repo_id`;
