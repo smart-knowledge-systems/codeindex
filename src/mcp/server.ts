@@ -1,3 +1,4 @@
+import path from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { statSync } from "fs";
@@ -133,26 +134,33 @@ async function getStatus(repoRoot: string, showCost: boolean): Promise<StatusRes
 // Staleness check — compare indexed_at vs file mtime
 // ---------------------------------------------------------------------------
 
-async function batchGetIndexedAt(repoRoot: string): Promise<Map<string, string>> {
+async function batchGetIndexedAt(
+  repoRoot: string,
+  filePaths: string[],
+): Promise<Map<string, string>> {
   const map = new Map<string, string>();
+  if (filePaths.length === 0) return map;
+
   const config = await loadConfig(repoRoot);
   if (config.store === "pg") {
+    const placeholders = filePaths.map((_, i) => `$${i + 2}`).join(",");
     const rows = (await pgUnsafe(
       `SELECT f.file_path, f.indexed_at::text AS indexed_at
        FROM files f JOIN repos r ON r.id = f.repo_id
-       WHERE r.root_path = $1`,
-      [repoRoot],
+       WHERE r.root_path = $1 AND f.file_path IN (${placeholders})`,
+      [repoRoot, ...filePaths],
     )) as { file_path: string; indexed_at: string }[];
     for (const r of rows) map.set(r.file_path, r.indexed_at);
   } else {
     const db = await getSqlite(repoRoot);
+    const placeholders = filePaths.map(() => "?").join(",");
     const rows = db
       .prepare(
         `SELECT f.file_path, f.indexed_at
          FROM files f JOIN repos r ON r.id = f.repo_id
-         WHERE r.root_path = ?`,
+         WHERE r.root_path = ? AND f.file_path IN (${placeholders})`,
       )
-      .all(repoRoot) as { file_path: string; indexed_at: string }[];
+      .all(repoRoot, ...filePaths) as { file_path: string; indexed_at: string }[];
     for (const r of rows) map.set(r.file_path, r.indexed_at);
   }
   return map;
@@ -162,7 +170,8 @@ async function enrichResults(
   repoRoot: string,
   results: SearchResult[],
 ): Promise<Array<SearchResult & { indexedAt?: string; stale?: boolean }>> {
-  const indexedAtMap = await batchGetIndexedAt(repoRoot);
+  const filePaths = results.filter((r) => r.type !== "commit").map((r) => r.filePath);
+  const indexedAtMap = await batchGetIndexedAt(repoRoot, filePaths);
   const enriched = [];
   for (const r of results) {
     if (r.type === "commit") {
@@ -271,7 +280,7 @@ export function createMcpServer(defaultRepoRoot: string): McpServer {
     },
     async ({ repoPath, threshold, agentsMdPath }) => {
       const repoRoot = repoPath ?? defaultRepoRoot;
-      const mdPath = agentsMdPath ?? "AGENTS.md";
+      const mdPath = agentsMdPath ?? path.join(repoRoot, "AGENTS.md");
 
       const results = await detectDrift(repoRoot, mdPath, threshold ?? undefined);
 
