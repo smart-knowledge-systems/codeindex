@@ -231,30 +231,46 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       explain: z.boolean().optional().describe("Include per-result score breakdown"),
     },
     async ({ query, topN, minScore, lang, dir, since, scope, explain }) => {
-      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "search" });
-      const repoRoot = defaultRepoRoot;
-      const results = await search(repoRoot, query, {
-        topN: topN ?? undefined,
-        minScore: minScore ?? undefined,
-        lang: lang ? lang.split(",") : undefined,
-        dir: dir ? dir.split(",") : undefined,
-        since: since ?? undefined,
-        scope: scope === "all" ? "all" : scope ? scope.split(",") : "project",
-        explain: explain ?? false,
-        includeSkeleton: true,
-        includeSummary: true,
-      });
+      try {
+        recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "search" });
+        const repoRoot = defaultRepoRoot;
+        const results = await search(repoRoot, query, {
+          topN: topN ?? undefined,
+          minScore: minScore ?? undefined,
+          lang: lang ? lang.split(",") : undefined,
+          dir: dir ? dir.split(",") : undefined,
+          since: since ?? undefined,
+          scope: scope === "all" ? "all" : scope ? scope.split(",") : "project",
+          explain: explain ?? false,
+          includeSkeleton: true,
+          includeSummary: true,
+        });
 
-      const enriched = await enrichResults(repoRoot, results);
+        const enriched = await enrichResults(repoRoot, results);
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(enriched, null, 2),
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(enriched, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = formatError(err);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                error: message,
+                code: err instanceof CodeindexError ? err.code : undefined,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
     },
   );
 
@@ -332,28 +348,44 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       cost: z.boolean().optional().describe("Include token usage and cost breakdown"),
     },
     async ({ repoPath, cost }) => {
-      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "status" });
-      if (session) {
-        const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
+      try {
+        recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "status" });
+        if (session) {
+          const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
+          if (!allowed) {
+            return {
+              content: [
+                { type: "text" as const, text: "Error: access denied — repo not in token scope" },
+              ],
+            };
+          }
         }
-      }
-      const repoRoot = repoPath ?? defaultRepoRoot;
-      const status = await getStatus(repoRoot, cost ?? false);
+        const repoRoot = repoPath ?? defaultRepoRoot;
+        const status = await getStatus(repoRoot, cost ?? false);
 
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(status, null, 2),
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(status, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = formatError(err);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                error: message,
+                code: err instanceof CodeindexError ? err.code : undefined,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
     },
   );
 

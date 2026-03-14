@@ -29,6 +29,7 @@ import { extractImports, resolveImport } from "./index/imports";
 import { discoverCrossRepoEdges } from "./index/cross-repo";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import type { SearchOptions } from "./search/types";
+import { formatError } from "./errors";
 import { logEvent } from "./logging";
 import { resetTelemetry } from "./telemetry";
 
@@ -1942,6 +1943,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error(formatError(err));
   process.exit(1);
 });
