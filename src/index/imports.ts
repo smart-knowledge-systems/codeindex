@@ -253,7 +253,7 @@ function extractZigImports(content: string): ImportEdge[] {
 function extractElixirImports(content: string): ImportEdge[] {
   const edges: ImportEdge[] = [];
   // alias Module.Name
-  const aliasRe = /alias\s+([\w.]+)/g;
+  const aliasRe = /alias\s+([\w.]+)(?!\.\{)/g;
   for (const match of content.matchAll(aliasRe)) {
     const mod = match[1].replace(/\.$/, ""); // strip trailing dot from destructuring prefix
     if (mod) edges.push({ importedModule: mod, language: "elixir" });
