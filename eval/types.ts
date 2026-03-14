@@ -9,6 +9,8 @@ export interface EvalQuery {
   tags?: string[];
   repo?: string;
   language?: string;
+  addedAt?: string; // ISO date when query was added
+  lastValidated?: string; // ISO date when last validated
 }
 
 export interface SummaryAssessment {

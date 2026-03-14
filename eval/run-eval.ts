@@ -3,6 +3,7 @@ import path from "path";
 import { search } from "../src/search/query";
 import type { SearchOptions, ScoringConfig } from "../src/search/types";
 import type { EvalQuery, EvalResult, EvalSummary } from "./types";
+import { validateDataset, printValidationReport } from "./maintenance";
 
 // ---------------------------------------------------------------------------
 // Metrics
@@ -186,6 +187,7 @@ async function main() {
   let datasetFile = "dataset.json";
   let filterRepo: string | undefined;
   let filterLang: string | undefined;
+  let validate = false;
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -210,6 +212,9 @@ async function main() {
       case "--filter-lang":
         filterLang = args[++i];
         break;
+      case "--validate":
+        validate = true;
+        break;
     }
   }
 
@@ -224,6 +229,16 @@ async function main() {
   }
   if (filterLang) {
     dataset = dataset.filter((q) => !q.language || q.language === filterLang);
+  }
+
+  // Validate dataset if requested
+  if (validate) {
+    const validationResult = validateDataset(repoRoot, dataset);
+    printValidationReport(validationResult);
+    if (validationResult.stale.length > 0) {
+      console.log(`\nSkipping ${validationResult.stale.length} stale queries.`);
+      dataset = validationResult.valid;
+    }
   }
 
   fs.mkdirSync(outputDir, { recursive: true });
