@@ -82,6 +82,14 @@ function removeRateBucket(sessionId: string): void {
   rateBuckets.delete(sessionId);
 }
 
+// Periodically evict stale rate buckets that were not cleaned up on close
+setInterval(() => {
+  const threshold = Date.now() - REFILL_INTERVAL_MS * 2;
+  for (const [id, bucket] of rateBuckets) {
+    if (bucket.lastRefill < threshold) rateBuckets.delete(id);
+  }
+}, REFILL_INTERVAL_MS).unref();
+
 // ---------------------------------------------------------------------------
 // Transports
 // ---------------------------------------------------------------------------
