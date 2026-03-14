@@ -845,26 +845,36 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
-        const joinCol = dir === "dependencies" ? "source_file_id" : "resolved_file_id";
-        const selectCol = dir === "dependencies" ? "resolved_file_id" : "source_file_id";
         const repoFilter = scopedRepoIds ? `AND nf.repo_id = ANY($4::int[])` : "";
         const params: unknown[] = [repoRoot, filePath, depth];
         if (scopedRepoIds) params.push(scopedRepoIds);
-        const rows = await pgUnsafe(
-          `WITH RECURSIVE chain AS (
-             SELECT f.id, f.file_path, 0 AS depth
-             FROM files f JOIN repos r ON r.id = f.repo_id
-             WHERE r.root_path = $1 AND f.file_path = $2
-           UNION ALL
-             SELECT nf.id, nf.file_path, c.depth + 1
-             FROM chain c
-             JOIN file_imports fi ON fi.${joinCol} = c.id
-             JOIN files nf ON nf.id = fi.${selectCol}
-             WHERE c.depth < $3 ${repoFilter}
-           )
-           SELECT DISTINCT file_path, depth FROM chain ORDER BY depth`,
-          params,
-        );
+        const query =
+          dir === "dependencies"
+            ? `WITH RECURSIVE chain AS (
+                 SELECT f.id, f.file_path, 0 AS depth
+                 FROM files f JOIN repos r ON r.id = f.repo_id
+                 WHERE r.root_path = $1 AND f.file_path = $2
+               UNION ALL
+                 SELECT nf.id, nf.file_path, c.depth + 1
+                 FROM chain c
+                 JOIN file_imports fi ON fi.source_file_id = c.id
+                 JOIN files nf ON nf.id = fi.resolved_file_id
+                 WHERE c.depth < $3 ${repoFilter}
+               )
+               SELECT DISTINCT file_path, depth FROM chain ORDER BY depth`
+            : `WITH RECURSIVE chain AS (
+                 SELECT f.id, f.file_path, 0 AS depth
+                 FROM files f JOIN repos r ON r.id = f.repo_id
+                 WHERE r.root_path = $1 AND f.file_path = $2
+               UNION ALL
+                 SELECT nf.id, nf.file_path, c.depth + 1
+                 FROM chain c
+                 JOIN file_imports fi ON fi.resolved_file_id = c.id
+                 JOIN files nf ON nf.id = fi.source_file_id
+                 WHERE c.depth < $3 ${repoFilter}
+               )
+               SELECT DISTINCT file_path, depth FROM chain ORDER BY depth`;
+        const rows = await pgUnsafe(query, params);
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
       } else {
         // SQLite: iterative approach since recursive CTEs with dynamic column names are awkward
@@ -1053,19 +1063,21 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
       if (config.store === "pg") {
         const query = scopedRepoIds
-          ? `SELECT f.file_path, f.skeleton, r.name AS repo_name
+          ? `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
              FROM files f
              JOIN repos r ON r.id = f.repo_id
              WHERE f.skeleton LIKE $1
                AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
                     OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
-               AND r.id = ANY($2::int[])`
-          : `SELECT f.file_path, f.skeleton, r.name AS repo_name
+               AND r.id = ANY($2::int[])
+             LIMIT 100`
+          : `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
              FROM files f
              JOIN repos r ON r.id = f.repo_id
              WHERE f.skeleton LIKE $1
                AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
-                    OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')`;
+                    OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
+             LIMIT 100`;
         const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
         const rows = await pgUnsafe(query, params);
         return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
@@ -1075,25 +1087,27 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           const placeholders = scopedRepoIds.map(() => "?").join(",");
           const rows = db
             .prepare(
-              `SELECT f.file_path, f.skeleton, r.name AS repo_name
+              `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
                FROM files f
                JOIN repos r ON r.id = f.repo_id
                WHERE f.skeleton LIKE ?
                  AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
                       OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
-                 AND r.id IN (${placeholders})`,
+                 AND r.id IN (${placeholders})
+               LIMIT 100`,
             )
             .all(pattern, ...scopedRepoIds);
           return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
         } else {
           const rows = db
             .prepare(
-              `SELECT f.file_path, f.skeleton, r.name AS repo_name
+              `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
                FROM files f
                JOIN repos r ON r.id = f.repo_id
                WHERE f.skeleton LIKE ?
                  AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
-                      OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')`,
+                      OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
+               LIMIT 100`,
             )
             .all(pattern);
           return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
