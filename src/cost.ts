@@ -11,7 +11,7 @@ export const PRICING: Record<string, { input: number; output?: number }> = {
   "text-embedding-3-small": { input: 0.02 },
   "text-embedding-3-large": { input: 0.13 },
   "nomic-embed-text": { input: 0 }, // local model, no API cost
-  haiku: { input: 0.25, output: 1.25 },
+  haiku: { input: 1.0, output: 5.0 },
 };
 
 // ---------------------------------------------------------------------------
