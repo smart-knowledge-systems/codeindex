@@ -187,5 +187,205 @@
     "expectedFiles": ["src/intent.ts", "src/drift.ts"],
     "description": "Query about the intent layer feature",
     "tags": ["prose"]
+  },
+  {
+    "id": "kotlin-data-class",
+    "query": "Kotlin data class with properties",
+    "expectedFiles": ["test/fixtures/sample.kt"],
+    "description": "Kotlin data class declaration with constructor properties",
+    "tags": ["kotlin", "language-specific"],
+    "language": "kotlin"
+  },
+  {
+    "id": "kotlin-sealed-class",
+    "query": "Kotlin sealed class hierarchy",
+    "expectedFiles": ["test/fixtures/sample.kt"],
+    "description": "Kotlin sealed class with subtype variants",
+    "tags": ["kotlin", "language-specific"],
+    "language": "kotlin"
+  },
+  {
+    "id": "kotlin-extension-function",
+    "query": "Kotlin extension function on existing type",
+    "expectedFiles": ["test/fixtures/sample.kt"],
+    "description": "Extension function adding methods to existing classes",
+    "tags": ["kotlin", "language-specific"],
+    "language": "kotlin"
+  },
+  {
+    "id": "kotlin-coroutine-suspend",
+    "query": "Kotlin coroutine suspend function",
+    "expectedFiles": ["test/fixtures/sample.kt"],
+    "description": "Suspend function for Kotlin coroutines",
+    "tags": ["kotlin", "language-specific"],
+    "language": "kotlin"
+  },
+  {
+    "id": "kotlin-companion-object",
+    "query": "Kotlin companion object with factory method",
+    "expectedFiles": ["test/fixtures/sample.kt"],
+    "description": "Companion object pattern for static-like members",
+    "tags": ["kotlin", "language-specific"],
+    "language": "kotlin"
+  },
+  {
+    "id": "swift-protocol-conformance",
+    "query": "Swift protocol conformance and extension",
+    "expectedFiles": ["test/fixtures/sample.swift"],
+    "description": "Swift protocol declaration with conforming extension",
+    "tags": ["swift", "language-specific"],
+    "language": "swift"
+  },
+  {
+    "id": "swift-struct-memberwise-init",
+    "query": "Swift struct with memberwise initializer",
+    "expectedFiles": ["test/fixtures/sample.swift"],
+    "description": "Swift struct with properties and custom init",
+    "tags": ["swift", "language-specific"],
+    "language": "swift"
+  },
+  {
+    "id": "swift-enum-associated-values",
+    "query": "Swift enum with associated values",
+    "expectedFiles": ["test/fixtures/sample.swift"],
+    "description": "Swift enum cases with associated value types",
+    "tags": ["swift", "language-specific"],
+    "language": "swift"
+  },
+  {
+    "id": "swift-async-await",
+    "query": "Swift async await concurrency",
+    "expectedFiles": ["test/fixtures/sample.swift"],
+    "description": "Swift structured concurrency with async/await",
+    "tags": ["swift", "language-specific"],
+    "language": "swift"
+  },
+  {
+    "id": "swift-property-wrapper",
+    "query": "Swift property wrapper declaration",
+    "expectedFiles": ["test/fixtures/sample.swift"],
+    "description": "Swift @propertyWrapper for custom property behavior",
+    "tags": ["swift", "language-specific"],
+    "language": "swift"
+  },
+  {
+    "id": "ruby-class-inheritance",
+    "query": "Ruby class with inheritance and mixins",
+    "expectedFiles": ["test/fixtures/sample.rb"],
+    "description": "Ruby class inheriting from parent with module include",
+    "tags": ["ruby", "language-specific"],
+    "language": "ruby"
+  },
+  {
+    "id": "ruby-module-mixin",
+    "query": "Ruby module as mixin with instance methods",
+    "expectedFiles": ["test/fixtures/sample.rb"],
+    "description": "Ruby module defining reusable behavior via include",
+    "tags": ["ruby", "language-specific"],
+    "language": "ruby"
+  },
+  {
+    "id": "ruby-block-yield",
+    "query": "Ruby method with block yield",
+    "expectedFiles": ["test/fixtures/sample.rb"],
+    "description": "Ruby method accepting a block and yielding to it",
+    "tags": ["ruby", "language-specific"],
+    "language": "ruby"
+  },
+  {
+    "id": "ruby-attr-accessor",
+    "query": "Ruby attr_accessor and attr_reader declarations",
+    "expectedFiles": ["test/fixtures/sample.rb"],
+    "description": "Ruby attribute accessor macros for property access",
+    "tags": ["ruby", "language-specific"],
+    "language": "ruby"
+  },
+  {
+    "id": "ruby-proc-lambda",
+    "query": "Ruby proc and lambda callable objects",
+    "expectedFiles": ["test/fixtures/sample.rb"],
+    "description": "Ruby Proc and lambda for first-class functions",
+    "tags": ["ruby", "language-specific"],
+    "language": "ruby"
+  },
+  {
+    "id": "php-class-interface",
+    "query": "PHP class implementing interface",
+    "expectedFiles": ["test/fixtures/sample.php"],
+    "description": "PHP class with interface implementation",
+    "tags": ["php", "language-specific"],
+    "language": "php"
+  },
+  {
+    "id": "php-trait-usage",
+    "query": "PHP trait definition and usage",
+    "expectedFiles": ["test/fixtures/sample.php"],
+    "description": "PHP trait for horizontal code reuse",
+    "tags": ["php", "language-specific"],
+    "language": "php"
+  },
+  {
+    "id": "php-namespace-use",
+    "query": "PHP namespace declaration and use statement",
+    "expectedFiles": ["test/fixtures/sample.php"],
+    "description": "PHP namespace organization with use imports",
+    "tags": ["php", "language-specific"],
+    "language": "php"
+  },
+  {
+    "id": "php-enum-backed",
+    "query": "PHP backed enum with string values",
+    "expectedFiles": ["test/fixtures/sample.php"],
+    "description": "PHP 8.1 backed enum with string or int backing type",
+    "tags": ["php", "language-specific"],
+    "language": "php"
+  },
+  {
+    "id": "php-constructor-promotion",
+    "query": "PHP constructor property promotion",
+    "expectedFiles": ["test/fixtures/sample.php"],
+    "description": "PHP 8.0 constructor promotion for concise property declaration",
+    "tags": ["php", "language-specific"],
+    "language": "php"
+  },
+  {
+    "id": "lua-table-constructor",
+    "query": "Lua table constructor and metatables",
+    "expectedFiles": ["test/fixtures/sample.lua"],
+    "description": "Lua table creation with metatable for OOP patterns",
+    "tags": ["lua", "language-specific"],
+    "language": "lua"
+  },
+  {
+    "id": "lua-closure-upvalue",
+    "query": "Lua closure capturing upvalues",
+    "expectedFiles": ["test/fixtures/sample.lua"],
+    "description": "Lua function closure with captured local variables",
+    "tags": ["lua", "language-specific"],
+    "language": "lua"
+  },
+  {
+    "id": "lua-coroutine-resume",
+    "query": "Lua coroutine create and resume",
+    "expectedFiles": ["test/fixtures/sample.lua"],
+    "description": "Lua coroutine for cooperative multitasking",
+    "tags": ["lua", "language-specific"],
+    "language": "lua"
+  },
+  {
+    "id": "lua-module-require",
+    "query": "Lua module pattern with require",
+    "expectedFiles": ["test/fixtures/sample.lua"],
+    "description": "Lua module export pattern using return table",
+    "tags": ["lua", "language-specific"],
+    "language": "lua"
+  },
+  {
+    "id": "lua-metamethod-index",
+    "query": "Lua __index metamethod for inheritance",
+    "expectedFiles": ["test/fixtures/sample.lua"],
+    "description": "Lua __index metamethod enabling prototype-based inheritance",
+    "tags": ["lua", "language-specific"],
+    "language": "lua"
   }
 ]
