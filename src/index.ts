@@ -32,6 +32,7 @@ import { runQualityCheck } from "./check/quality-runner";
 import { extractImports, resolveImport } from "./index/imports";
 import { discoverCrossRepoEdges } from "./index/cross-repo";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
+import { xrefSymbol, formatXrefTable, formatXrefJson } from "./xref";
 import type { SearchOptions } from "./search/types";
 import { formatError } from "./errors";
 import { logEvent } from "./logging";
@@ -1678,6 +1679,8 @@ Commands:
     --port <n>         Port for SSE transport (default 3100)
   graph                Visualize cross-repo dependency graph
     --format <f>       json|mermaid|dot (default: mermaid)
+  xref <symbol>        Cross-reference a symbol across repos
+    --format <f>       json|table (default: table)
   doctor               Check environment and configuration
 
 Options:
@@ -1709,6 +1712,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
     "Usage: codeindex token <create|list|revoke>\n\nSubcommands:\n  create --name <name> --repos <id,id> [--expires <ISO>]\n  list                  List all tokens\n  revoke --id <N>       Revoke a token",
   graph:
     "Usage: codeindex graph [options]\n\nOptions:\n  --format <f>          Output format: mermaid (default), json, dot",
+  xref: "Usage: codeindex xref <symbol> [options]\n\nOptions:\n  --format <f>          Output format: table (default), json",
   "mcp-config":
     "Usage: codeindex mcp-config [options]\n\nOptions:\n  --transport <t>       stdio (default) or sse\n  --port <n>            Port for SSE transport (default 3100)",
   config:
@@ -2104,6 +2108,22 @@ async function main() {
       case "graph": {
         const graphFormat = flag(parsed, "format") ?? "mermaid";
         await cmdGraph(repoRoot, graphFormat);
+        break;
+      }
+
+      case "xref": {
+        const symbolName = parsed.positional[0];
+        if (!symbolName) {
+          console.error("Usage: codeindex xref <symbol> [--format json|table]");
+          process.exit(1);
+        }
+        const xrefFormat = flag(parsed, "format") ?? "table";
+        const xrefResult = await xrefSymbol(repoRoot, symbolName);
+        if (xrefFormat === "json") {
+          console.log(formatXrefJson(xrefResult));
+        } else {
+          console.log(formatXrefTable(xrefResult));
+        }
         break;
       }
 
