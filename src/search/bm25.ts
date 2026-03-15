@@ -48,16 +48,11 @@ const STOPWORDS = new Set([
 ]);
 
 export function tokenize(text: string): string[] {
-  // CamelCase split first (before lowercasing), then lowercase + split
   const camelSplit = text.replace(/([a-z])([A-Z])/g, "$1 $2");
-  const raw = camelSplit.toLowerCase().split(/[^a-z0-9]+/);
-  const tokens: string[] = [];
-  for (const word of raw) {
-    if (word.length >= 2 && !STOPWORDS.has(word)) {
-      tokens.push(word);
-    }
-  }
-  return tokens;
+  return camelSplit
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 2 && !STOPWORDS.has(word));
 }
 
 export interface BM25Index {
