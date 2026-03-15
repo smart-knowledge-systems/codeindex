@@ -145,7 +145,8 @@ export const indexCommits: IndexCommitsStage = async (
           insertCommitEmb.run(commitId, serializeEmbedding(cr.embedding));
         } else {
           const row = (selectCommit.all(repoId, cr.hash) as { id: number }[]).find(() => true);
-          commitId = row!.id;
+          if (!row) continue;
+          commitId = row.id;
         }
 
         const fileRow = (selectFile.all(repoId, cr.relPath) as { id: number }[]).find(() => true);
