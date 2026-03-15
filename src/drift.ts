@@ -24,10 +24,6 @@ interface SqliteRepoRow {
   id: number;
 }
 
-interface PgDirEmbeddingRow {
-  summary_embedding: string | null;
-}
-
 interface SqliteDirEmbeddingRow {
   dir_id: number;
   embedding: Buffer | null;
@@ -125,41 +121,60 @@ async function getRepoId(repoRoot: string, store: string): Promise<number> {
   }
 }
 
-async function getSummaryEmbedding(
-  repoId: number,
-  dirPath: string,
-  store: string,
-  repoRoot: string,
-): Promise<number[] | null> {
-  if (store === "pg") {
-    const rows = (await pgUnsafe(
-      `SELECT summary_embedding FROM directories WHERE repo_id = $1 AND dir_path = $2`,
-      [repoId, dirPath],
-    )) as PgDirEmbeddingRow[];
-    if (rows.length === 0) return null;
-    const embStr = rows[0].summary_embedding;
-    if (!embStr) return null;
-    // PG vector format: "[0.1,0.2,...]"
-    return JSON.parse(embStr) as number[];
-  } else {
-    const db = await getSqlite(repoRoot);
-    const dirRows = db
-      .prepare(`SELECT id FROM directories WHERE repo_id = ? AND dir_path = ?`)
-      .all(repoId, dirPath) as { id: number }[];
-    if (dirRows.length === 0) return null;
-    const dirId = dirRows[0].id;
-
-    const embRows = db
-      .prepare(`SELECT dir_id, embedding FROM dir_summary_embeddings WHERE dir_id = ?`)
-      .all(dirId) as SqliteDirEmbeddingRow[];
-    if (embRows.length === 0 || !embRows[0].embedding) return null;
-    return deserializeEmbedding(Buffer.from(embRows[0].embedding));
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Orchestration: compute drift results
 // ---------------------------------------------------------------------------
+
+/** Batch-fetch all summary embeddings for the given directory paths. */
+async function getBatchSummaryEmbeddings(
+  repoId: number,
+  dirPaths: string[],
+  store: string,
+  repoRoot: string,
+): Promise<Map<string, number[]>> {
+  const result = new Map<string, number[]>();
+  if (dirPaths.length === 0) return result;
+
+  if (store === "pg") {
+    const rows = (await pgUnsafe(
+      `SELECT dir_path, summary_embedding FROM directories WHERE repo_id = $1 AND dir_path = ANY($2)`,
+      [repoId, dirPaths],
+    )) as { dir_path: string; summary_embedding: string | null }[];
+    for (const row of rows) {
+      if (row.summary_embedding) {
+        result.set(row.dir_path, JSON.parse(row.summary_embedding) as number[]);
+      }
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    const placeholders = dirPaths.map(() => "?").join(",");
+    const dirRows = db
+      .prepare(
+        `SELECT id, dir_path FROM directories WHERE repo_id = ? AND dir_path IN (${placeholders})`,
+      )
+      .all(repoId, ...dirPaths) as { id: number; dir_path: string }[];
+
+    if (dirRows.length > 0) {
+      const dirIdToPath = new Map(dirRows.map((r) => [r.id, r.dir_path]));
+      const embPlaceholders = dirRows.map(() => "?").join(",");
+      const embRows = db
+        .prepare(
+          `SELECT dir_id, embedding FROM dir_summary_embeddings WHERE dir_id IN (${embPlaceholders})`,
+        )
+        .all(...dirRows.map((r) => r.id)) as SqliteDirEmbeddingRow[];
+      for (const row of embRows) {
+        if (row.embedding) {
+          const dirPath = dirIdToPath.get(row.dir_id);
+          if (dirPath) {
+            result.set(dirPath, deserializeEmbedding(Buffer.from(row.embedding)));
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
 
 async function computeDriftResults(
   sections: AgentsMdSection[],
@@ -174,19 +189,23 @@ async function computeDriftResults(
     sectionsWithContent.length > 0 ? await embed(sectionsWithContent.map((s) => s.content)) : [];
   const embeddingMap = buildEmbeddingMap(sectionsWithContent, sectionEmbeddings);
 
-  const results: DriftResult[] = [];
-  for (const section of sections) {
+  // Batch-fetch all DB embeddings in one query instead of N+1
+  const dbEmbeddings = await getBatchSummaryEmbeddings(
+    repoId,
+    sectionsWithContent.map((s) => s.dirPath),
+    store,
+    repoRoot,
+  );
+
+  return sections.map((section) => {
     if (section.content.length === 0) {
-      results.push({ dirPath: section.dirPath, status: "missing" });
-      continue;
+      return { dirPath: section.dirPath, status: "missing" as const };
     }
 
     const sectionEmbedding = embeddingMap.get(section.dirPath)!;
-    const dbEmbedding = await getSummaryEmbedding(repoId, section.dirPath, store, repoRoot);
-    results.push(classifySection(section, sectionEmbedding, dbEmbedding, threshold));
-  }
-
-  return results;
+    const dbEmbedding = dbEmbeddings.get(section.dirPath) ?? null;
+    return classifySection(section, sectionEmbedding, dbEmbedding, threshold);
+  });
 }
 
 // ---------------------------------------------------------------------------
