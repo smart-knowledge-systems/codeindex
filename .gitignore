@@ -17,6 +17,9 @@ eval/results/*.json
 !eval/results/baseline.json
 !eval/results/ablation.json
 
+# Local multi-repo eval (not committed)
+eval/local/
+
 # Claude Code
 .claude/*
 !.claude/skills/
