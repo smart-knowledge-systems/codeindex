@@ -158,7 +158,7 @@ async function getSummaryEmbedding(
 }
 
 // ---------------------------------------------------------------------------
-// Pure core: compute drift results
+// Orchestration: compute drift results
 // ---------------------------------------------------------------------------
 
 async function computeDriftResults(
