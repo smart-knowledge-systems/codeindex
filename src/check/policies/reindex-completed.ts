@@ -8,7 +8,7 @@ async function hasEmbeddings(ctx: PolicyContext): Promise<boolean> {
     "SELECT count(*) AS cnt FROM cost_events WHERE repo_id = ? AND operation = 'embed'",
     [ctx.repoId],
   );
-  return row.cnt > 0;
+  return row!.cnt > 0;
 }
 
 export const reindexCompleted: HealthPolicy = {

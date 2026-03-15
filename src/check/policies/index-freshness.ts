@@ -19,7 +19,7 @@ async function getCounts(
     "SELECT count(*) AS cnt FROM files WHERE repo_id = ? AND indexed_at < ?",
     [ctx.repoId, cutoffIso],
   );
-  return { totalCount: total.cnt, staleCount: stale.cnt };
+  return { totalCount: total!.cnt, staleCount: stale!.cnt };
 }
 
 export const indexFreshness: HealthPolicy = {

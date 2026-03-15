@@ -46,7 +46,7 @@ async function getCounts(ctx: PolicyContext): Promise<{ missing: number; total: 
     `SELECT count(*) AS cnt FROM files WHERE repo_id = ? AND file_type IN (${placeholders}) AND skeleton IS NULL`,
     params,
   );
-  return { total: totalRow.cnt, missing: missingRow.cnt };
+  return { total: totalRow!.cnt, missing: missingRow!.cnt };
 }
 
 export const skeletonFailures: HealthPolicy = {

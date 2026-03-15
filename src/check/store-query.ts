@@ -30,11 +30,11 @@ export async function storeQueryOne<T>(
   pgSql: string,
   sqliteSql: string,
   params: (string | number | bigint | boolean | null | Uint8Array)[],
-): Promise<T> {
+): Promise<T | undefined> {
   if (ctx.store === "pg") {
     const rows = (await pgUnsafe(pgSql, params)) as T[];
     return rows[0];
   }
   const db = await getSqlite(ctx.repoRoot);
-  return db.prepare(sqliteSql).get(...params) as T;
+  return db.prepare(sqliteSql).get(...params) as T | undefined;
 }

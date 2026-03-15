@@ -16,7 +16,7 @@ async function getCounts(ctx: PolicyContext): Promise<{ totalDirs: number; withS
     "SELECT count(*) AS cnt FROM directories WHERE repo_id = ? AND summary IS NOT NULL",
     [ctx.repoId],
   );
-  return { totalDirs: total.cnt, withSummary: summarized.cnt };
+  return { totalDirs: total!.cnt, withSummary: summarized!.cnt };
 }
 
 export const summaryCompleteness: HealthPolicy = {
