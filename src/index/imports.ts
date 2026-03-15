@@ -418,6 +418,25 @@ function resolveRubyImport(
  * Maps dotted package (e.g., com.example.MyClass) to directory path
  * and checks src/main/java/ and src/main/kotlin/ convention directories.
  */
+// Pre-built index mapping directory paths to representative JVM files
+const jvmDirIndexCache = new WeakMap<Set<string>, Map<string, string>>();
+
+function getJvmDirIndex(allFiles: Set<string>): Map<string, string> {
+  const cached = jvmDirIndexCache.get(allFiles);
+  if (cached) return cached;
+  const index = new Map<string, string>();
+  for (const file of allFiles) {
+    if (file.endsWith(".kt") || file.endsWith(".java") || file.endsWith(".kts")) {
+      const dir = path.dirname(file);
+      if (!index.has(dir)) {
+        index.set(dir, file);
+      }
+    }
+  }
+  jvmDirIndexCache.set(allFiles, index);
+  return index;
+}
+
 function resolveJvmImport(importPath: string, allFiles: Set<string>): string | null {
   // Convert dots to path separators
   const filePath = importPath.replace(/\./g, "/");
@@ -436,17 +455,14 @@ function resolveJvmImport(importPath: string, allFiles: Set<string>): string | n
       const candidate = prefix + cleanPath + ext;
       if (allFiles.has(candidate)) return candidate;
     }
+  }
 
-    // Also try as a directory (package-level import)
-    for (const ext of extensions) {
-      // Look for any file in the package directory
-      const dirPrefix = prefix + cleanPath + "/";
-      for (const file of allFiles) {
-        if (file.startsWith(dirPrefix) && file.endsWith(ext)) {
-          return file;
-        }
-      }
-    }
+  // Fall back to directory-level lookup using pre-built index
+  const dirIndex = getJvmDirIndex(allFiles);
+  for (const prefix of prefixes) {
+    const dirPath = (prefix + cleanPath).replace(/\/$/, "") || ".";
+    const match = dirIndex.get(dirPath);
+    if (match) return match;
   }
 
   return null;
