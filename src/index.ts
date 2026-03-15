@@ -17,21 +17,30 @@ import { walkRepo, MAX_FILE_SIZE } from "./index/walker";
 import { extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
 import { scanForSecrets } from "./index/secrets";
-import { embed, embedSingle, getProvider } from "./index/embedder";
-import { getRepoOrigin, getRepoName, getFileCommits, getChangedFiles } from "./index/commits";
-import { buildDirectoryIndex, updateAffectedDirectories } from "./index/directories";
+import { embedSingle, getProvider } from "./index/embedder";
+import { getRepoOrigin, getRepoName, getChangedFiles } from "./index/commits";
+import { updateAffectedDirectories } from "./index/directories";
 import { search, searchChanged } from "./search/query";
 import { installHook } from "./hooks/post-commit";
 import { exportToSqlite, type ExportOptions } from "./db/export";
-import { setCurrentRepo, getProjectedCost, checkCostCap } from "./cost";
+import { setCurrentRepo, getProjectedCost } from "./cost";
 import { generateIntent } from "./intent";
 import { detectDrift } from "./drift";
 import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
 import { parallelReindex } from "./index/parallel";
 import { runHealthCheck } from "./check/runner";
 import { runQualityCheck } from "./check/quality-runner";
-import { extractImports, resolveImport } from "./index/imports";
+import { extractImports } from "./index/imports";
 import { discoverCrossRepoEdges } from "./index/cross-repo";
+import {
+  collectFiles,
+  embedFiles,
+  storeFiles,
+  pruneStale,
+  indexCommits,
+  summarizeDirs,
+} from "./pipeline";
+import type { PipelineContext, SummaryProvider } from "./pipeline";
 import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import { xrefSymbol, formatXrefTable, formatXrefJson } from "./xref";
 import type { SearchOptions } from "./search/types";
@@ -115,100 +124,71 @@ async function ensureRepo(repoRoot: string): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// import graph extraction
+// collect a specific subset of files (for cmdUpdate)
 // ---------------------------------------------------------------------------
 
-async function extractAndStoreImports(
-  repoRoot: string,
-  repoId: number,
-  allFiles: Set<string>,
-  store: "pg" | "sqlite",
-): Promise<void> {
-  // Build file ID map
-  const fileIdMap = new Map<string, number>();
+async function collectChangedFiles(
+  ctx: PipelineContext,
+  relPaths: string[],
+): Promise<import("./pipeline").CollectedFile[]> {
+  const { repoRoot, repoId, config, formatter, store } = ctx;
 
+  // Load existing hashes for dedup
+  const existingHashes = new Map<string, string>();
   if (store === "pg") {
-    const rows = (await pgUnsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
+    const rows = (await pgUnsafe("SELECT file_path, content_hash FROM files WHERE repo_id = $1", [
       repoId,
-    ])) as { id: string; file_path: string }[];
-    for (const r of rows) fileIdMap.set(r.file_path, parseInt(r.id));
+    ])) as { file_path: string; content_hash: string }[];
+    for (const r of rows) existingHashes.set(r.file_path, r.content_hash);
   } else {
     const db = await getSqlite(repoRoot);
-    const rows = db.prepare("SELECT id, file_path FROM files WHERE repo_id = ?").all(repoId) as {
-      id: number;
-      file_path: string;
-    }[];
-    for (const r of rows) fileIdMap.set(r.file_path, r.id);
+    const rows = db
+      .prepare("SELECT file_path, content_hash FROM files WHERE repo_id = ?")
+      .all(repoId) as { file_path: string; content_hash: string }[];
+    for (const r of rows) existingHashes.set(r.file_path, r.content_hash);
   }
 
-  // Collect all edges first, then write atomically
-  const edgesToInsert: Array<{
-    sourceId: number;
-    importedModule: string;
-    resolvedId: number | null;
-    language: string;
-  }> = [];
+  const collected: import("./pipeline").CollectedFile[] = [];
 
-  for (const relPath of allFiles) {
-    const sourceId = fileIdMap.get(relPath);
-    if (!sourceId) continue;
-
+  for (const relPath of relPaths) {
     const absPath = path.join(repoRoot, relPath);
-    let content: string;
-    try {
-      content = (await Bun.file(absPath).text()).replace(/\0/g, "");
-    } catch {
+    const file = Bun.file(absPath);
+    if (file.size > MAX_FILE_SIZE) continue;
+
+    const content = (await file.text()).replace(/\0/g, "");
+
+    const scan = scanForSecrets(content);
+    if (scan.hasSecrets) {
+      console.warn(`  SKIP ${relPath}: potential secrets (${scan.patterns.join(", ")})`);
       continue;
     }
 
-    const edges = extractImports(relPath, content);
-    if (edges.length === 0) continue;
+    const ext = path.extname(relPath).toLowerCase() || ".txt";
+    const { hash } = await formatAndHash(content, formatter);
 
-    for (const edge of edges) {
-      const resolved = resolveImport(edge.importedModule, relPath, edge.language, allFiles);
-      const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
-      edgesToInsert.push({
-        sourceId,
-        importedModule: edge.importedModule,
-        resolvedId,
-        language: edge.language,
-      });
-    }
-  }
+    if (existingHashes.get(relPath) === hash) continue;
 
-  if (store === "pg") {
-    const pg = await getPg();
-    await pg.begin(async (tx) => {
-      await tx.unsafe(
-        "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1)",
-        [repoId],
-      );
-      for (const e of edgesToInsert) {
-        await tx.unsafe(
-          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
-           VALUES ($1, $2, $3, $4)`,
-          [e.sourceId, e.importedModule, e.resolvedId, e.language],
-        );
-      }
-    });
-  } else {
-    const sqliteDb = await getSqlite(repoRoot);
-    const sqliteStmt = sqliteDb.prepare(
-      `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
-       VALUES (?, ?, ?, ?)`,
+    const { text: skeleton, entries } = await extractSkeletonWithEntries(
+      relPath,
+      content,
+      config.skeletonFallbackLines,
     );
-    sqliteDb.transaction(() => {
-      sqliteDb
-        .prepare(
-          "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = ?)",
-        )
-        .run(repoId);
-      for (const e of edgesToInsert) {
-        sqliteStmt.run(e.sourceId, e.importedModule, e.resolvedId, e.language);
-      }
-    })();
+    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
+    const importEdges = extractImports(relPath, content);
+
+    collected.push({
+      relPath,
+      absPath,
+      fileType: ext,
+      contentHash: hash,
+      content,
+      skeleton,
+      skeletonEntries,
+      importEdges,
+    });
   }
-  console.log(`  ${edgesToInsert.length} import edges stored.`);
+
+  return collected;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,78 +265,37 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
 
   await initParser();
 
+  const ctx: PipelineContext = {
+    repoRoot,
+    repoId,
+    config,
+    formatter,
+    store: config.store,
+    dryRun,
+    force,
+  };
+
+  // Collect files needing re-embedding
+  const collected = await collectFiles(ctx);
+
+  // Walk repo for the full file list (needed for prune/commits/summarize)
   const allFiles: string[] = [];
-  let indexed = 0;
-  let skipped = 0;
-
-  // Collect all files first for batch embedding
-  const filesToEmbed: {
-    filePath: string;
-    skeleton: string;
-    skeletonEntries: string | null;
-    hash: string;
-    fileType: string;
-  }[] = [];
-
   for await (const relPath of walkRepo(repoRoot)) {
     const absPath = path.join(repoRoot, relPath);
-    const file = Bun.file(absPath);
-    if (file.size > MAX_FILE_SIZE) {
-      skipped++;
-      continue;
+    if (Bun.file(absPath).size <= MAX_FILE_SIZE) {
+      allFiles.push(relPath);
     }
-    allFiles.push(relPath);
-    const content = (await file.text()).replace(/\0/g, "");
-
-    const scan = scanForSecrets(content);
-    if (scan.hasSecrets) {
-      console.warn(`  SKIP ${relPath}: potential secrets (${scan.patterns.join(", ")})`);
-      skipped++;
-      continue;
-    }
-
-    const ext = path.extname(relPath).toLowerCase() || ".txt";
-
-    const { hash } = await formatAndHash(content, formatter);
-
-    // Check if already indexed with same hash
-    if (config.store === "pg") {
-      const existing = await pgUnsafe(
-        "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2 AND content_hash = $3",
-        [repoId, relPath, hash],
-      );
-      if (existing.length > 0) {
-        skipped++;
-        continue;
-      }
-    } else {
-      const db = await getSqlite(repoRoot);
-      const existing = db
-        .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ? AND content_hash = ?")
-        .all(repoId, relPath, hash) as { id: number }[];
-      if (existing.length > 0) {
-        skipped++;
-        continue;
-      }
-    }
-
-    const { text: skeleton, entries } = await extractSkeletonWithEntries(
-      relPath,
-      content,
-      config.skeletonFallbackLines,
-    );
-    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
-    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
   }
 
   if (dryRun) {
-    console.log(`Files: ${filesToEmbed.length} would be indexed, ${skipped} unchanged`);
-    for (const f of filesToEmbed) {
-      console.log(`  ${f.filePath} (${f.fileType})`);
+    const skipped = allFiles.length - collected.length;
+    console.log(`Files: ${collected.length} would be indexed, ${skipped} unchanged`);
+    for (const f of collected) {
+      console.log(`  ${f.relPath} (${f.fileType})`);
     }
     const projected = getProjectedCost(
-      filesToEmbed.length,
-      filesToEmbed.length * 3,
+      collected.length,
+      collected.length * 3,
       config.embedding.model,
     );
     console.log(`\nProjected cost:`);
@@ -372,304 +311,37 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
     return;
   }
 
-  // Batch embed all skeletons
-  if (filesToEmbed.length > 0) {
-    process.stderr.write(`Indexing: 0/${filesToEmbed.length} files...`);
-    const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
-
-    if (config.store === "pg") {
-      const pg = await getPg();
-      await pg.begin(async (tx) => {
-        for (let i = 0; i < filesToEmbed.length; i++) {
-          const f = filesToEmbed[i];
-          const embedding = embeddings[i];
-          await tx.unsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
-             ON CONFLICT (repo_id, file_path) DO UPDATE SET
-               content_hash = EXCLUDED.content_hash,
-               skeleton = EXCLUDED.skeleton,
-               skeleton_entries = EXCLUDED.skeleton_entries,
-               file_type = EXCLUDED.file_type,
-               embedding = EXCLUDED.embedding,
-               indexed_at = now()`,
-            [
-              repoId,
-              f.filePath,
-              f.hash,
-              f.skeleton,
-              f.skeletonEntries,
-              f.fileType,
-              `[${embedding.join(",")}]`,
-            ],
-          );
-          indexed++;
-          if (indexed % 10 === 0 || indexed === filesToEmbed.length) {
-            process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
-          }
-        }
-      });
-    } else {
-      const db = await getSqlite(repoRoot);
-      const insertFile = db.prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (repo_id, file_path) DO UPDATE SET
-           content_hash = excluded.content_hash,
-           skeleton = excluded.skeleton,
-           skeleton_entries = excluded.skeleton_entries,
-           file_type = excluded.file_type,
-           indexed_at = datetime('now')
-         RETURNING id`,
-      );
-      const deleteEmb = db.prepare(`DELETE FROM file_embeddings WHERE file_id = ?`);
-      const insertEmb = db.prepare(
-        `INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)`,
-      );
-      db.transaction(() => {
-        for (let i = 0; i < filesToEmbed.length; i++) {
-          const f = filesToEmbed[i];
-          const embedding = embeddings[i];
-          const row = insertFile.get(
-            repoId,
-            f.filePath,
-            f.hash,
-            f.skeleton,
-            f.skeletonEntries,
-            f.fileType,
-          ) as {
-            id: number;
-          };
-          deleteEmb.run(row.id);
-          insertEmb.run(row.id, serializeEmbedding(embedding));
-          indexed++;
-          if (indexed % 10 === 0 || indexed === filesToEmbed.length) {
-            process.stderr.write(`\rIndexing: ${indexed}/${filesToEmbed.length} files...`);
-          }
-        }
-      })();
-    }
-    process.stderr.write("\n");
+  // Embed → store
+  const embedded = await embedFiles(ctx, collected);
+  const costExceeded = collected.length > 0 && embedded.length === 0;
+  if (costExceeded) {
+    return;
   }
+  const indexed = embedded.length;
+  const skipped = allFiles.length - indexed;
 
+  if (embedded.length > 0) {
+    await storeFiles(ctx, embedded);
+  }
   console.log(`Files: ${indexed} indexed, ${skipped} skipped (unchanged)`);
 
-  // Check cost cap after embedding batch
-  if (config.costCap.maxCostPerReindex != null) {
-    const cap = await checkCostCap(repoRoot, repoId);
-    if (cap.current >= (config.costCap.warnAt ?? Infinity)) {
-      console.warn(
-        `Cost warning: $${cap.current.toFixed(4)} spent (limit: $${cap.limit?.toFixed(4)})`,
-      );
-    }
-    if (cap.exceeded) {
-      console.error(
-        `Cost cap exceeded: $${cap.current.toFixed(4)} >= $${cap.limit?.toFixed(4)}. Aborting reindex.`,
-      );
-      return;
-    }
-  }
-
-  // Index commits for each file
+  // Index commits
   console.log("Indexing commits...");
-  let commitCount = 0;
-
-  // Collect all commit data first (including async embedding)
-  type CommitRecord = {
-    relPath: string;
-    hash: string;
-    message: string;
-    date: string;
-    rank: number;
-    embedding: number[] | null;
-  };
-  const commitRecords: CommitRecord[] = [];
-  const seenHashes = new Set<string>();
-
-  for (const relPath of allFiles) {
-    const fileCommits = await getFileCommits(repoRoot, relPath, config.scoring.commitDepth);
-    for (let rank = 0; rank < fileCommits.length; rank++) {
-      const c = fileCommits[rank];
-      let embedding: number[] | null = null;
-      if (!seenHashes.has(c.hash)) {
-        // Check if commit already exists in DB
-        const exists =
-          config.store === "pg"
-            ? (
-                await pgUnsafe("SELECT id FROM commits WHERE repo_id = $1 AND commit_hash = $2", [
-                  repoId,
-                  c.hash,
-                ])
-              ).length > 0
-            : (
-                (await getSqlite(repoRoot))
-                  .prepare("SELECT id FROM commits WHERE repo_id = ? AND commit_hash = ?")
-                  .all(repoId, c.hash) as { id: number }[]
-              ).length > 0;
-        if (!exists) {
-          embedding = await embedSingle(c.message);
-        }
-        seenHashes.add(c.hash);
-      }
-      commitRecords.push({
-        relPath,
-        hash: c.hash,
-        message: c.message,
-        date: c.date,
-        rank,
-        embedding,
-      });
-    }
-  }
-
-  // Write all commit data in a transaction
-  if (commitRecords.length > 0) {
-    if (config.store === "pg") {
-      const pg = await getPg();
-      await pg.begin(async (tx) => {
-        for (const cr of commitRecords) {
-          let commitId: number;
-          if (cr.embedding) {
-            const inserted = await tx.unsafe(
-              `INSERT INTO commits (repo_id, commit_hash, message, embedding, authored_at)
-               VALUES ($1, $2, $3, $4::vector, $5)
-               ON CONFLICT (repo_id, commit_hash) DO UPDATE SET
-                 message = EXCLUDED.message,
-                 embedding = EXCLUDED.embedding
-               RETURNING id`,
-              [repoId, cr.hash, cr.message, `[${cr.embedding.join(",")}]`, cr.date],
-            );
-            commitId = inserted[0].id as number;
-            commitCount++;
-          } else {
-            const existing = await tx.unsafe(
-              "SELECT id FROM commits WHERE repo_id = $1 AND commit_hash = $2",
-              [repoId, cr.hash],
-            );
-            commitId = existing[0].id as number;
-          }
-          const fileRows = await tx.unsafe(
-            "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
-            [repoId, cr.relPath],
-          );
-          if (fileRows.length > 0) {
-            await tx.unsafe(
-              `INSERT INTO file_commits (file_id, commit_id, recency)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = EXCLUDED.recency`,
-              [fileRows[0].id, commitId, cr.rank + 1],
-            );
-          }
-        }
-      });
-    } else {
-      const db = await getSqlite(repoRoot);
-      const upsertCommit = db.prepare(
-        `INSERT INTO commits (repo_id, commit_hash, message, authored_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT (repo_id, commit_hash) DO UPDATE SET message = excluded.message
-         RETURNING id`,
-      );
-      const deleteCommitEmb = db.prepare(`DELETE FROM commit_embeddings WHERE commit_id = ?`);
-      const insertCommitEmb = db.prepare(
-        `INSERT INTO commit_embeddings (commit_id, embedding) VALUES (?, ?)`,
-      );
-      const selectCommit = db.prepare(
-        "SELECT id FROM commits WHERE repo_id = ? AND commit_hash = ?",
-      );
-      const selectFile = db.prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?");
-      const upsertLink = db.prepare(
-        `INSERT INTO file_commits (file_id, commit_id, recency)
-         VALUES (?, ?, ?)
-         ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = excluded.recency`,
-      );
-
-      db.transaction(() => {
-        for (const cr of commitRecords) {
-          let commitId: number;
-          if (cr.embedding) {
-            const row = upsertCommit.get(repoId, cr.hash, cr.message, cr.date) as { id: number };
-            commitId = row.id;
-            deleteCommitEmb.run(commitId);
-            insertCommitEmb.run(commitId, serializeEmbedding(cr.embedding));
-            commitCount++;
-          } else {
-            const rows = selectCommit.all(repoId, cr.hash) as { id: number }[];
-            commitId = rows[0].id;
-          }
-          const fileRows = selectFile.all(repoId, cr.relPath) as { id: number }[];
-          if (fileRows.length > 0) {
-            upsertLink.run(fileRows[0].id, commitId, cr.rank + 1);
-          }
-        }
-      })();
-    }
-  }
+  const commitCount = await indexCommits(ctx, allFiles);
   console.log(`Commits: ${commitCount} embedded`);
 
-  // Prune stale entries (files removed, filtered by extension, or oversized)
-  const allFileSet = new Set(allFiles);
-  let pruned = 0;
-  if (config.store === "pg") {
-    const rows = (await pgUnsafe("SELECT file_path FROM files WHERE repo_id = $1", [repoId])) as {
-      file_path: string;
-    }[];
-    const stalePaths = rows.filter((r) => !allFileSet.has(r.file_path)).map((r) => r.file_path);
-    if (stalePaths.length > 0) {
-      const pg = await getPg();
-      await pg.begin(async (tx) => {
-        for (const fp of stalePaths) {
-          await tx.unsafe(
-            "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
-            [repoId, fp],
-          );
-          await tx.unsafe(
-            "DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
-            [repoId, fp],
-          );
-          await tx.unsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [repoId, fp]);
-        }
-      });
-      pruned = stalePaths.length;
-    }
-  } else {
-    const db = await getSqlite(repoRoot);
-    const rows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
-      file_path: string;
-    }[];
-    const stalePaths = rows.filter((r) => !allFileSet.has(r.file_path)).map((r) => r.file_path);
-    if (stalePaths.length > 0) {
-      const selectId = db.prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?");
-      const delImports = db.prepare("DELETE FROM file_imports WHERE source_file_id = ?");
-      const delEmbeddings = db.prepare("DELETE FROM file_embeddings WHERE file_id = ?");
-      const delCommits = db.prepare("DELETE FROM file_commits WHERE file_id = ?");
-      const delFile = db.prepare("DELETE FROM files WHERE id = ?");
-      db.transaction(() => {
-        for (const fp of stalePaths) {
-          const fileRows = selectId.all(repoId, fp) as { id: number }[];
-          if (fileRows.length > 0) {
-            const fileId = fileRows[0].id;
-            delImports.run(fileId);
-            delEmbeddings.run(fileId);
-            delCommits.run(fileId);
-            delFile.run(fileId);
-          }
-        }
-      })();
-      pruned = stalePaths.length;
-    }
-  }
+  // Prune stale entries
+  const pruned = await pruneStale(ctx, new Set(allFiles));
   if (pruned > 0) console.log(`Pruned ${pruned} stale entries`);
 
-  // Build directory index
+  // Build directory index / summarize
   console.log("Building directory index...");
-  await buildDirectoryIndex(repoRoot, repoId, allFiles);
+  const nullSummaryProvider: SummaryProvider = {
+    name: "none",
+    summarizeDirectory: async () => null,
+  };
+  await summarizeDirs(ctx, allFiles, nullSummaryProvider);
   console.log("Directory index complete.");
-
-  // Extract and store import edges
-  console.log("Extracting import graph...");
-  await extractAndStoreImports(repoRoot, repoId, new Set(allFiles), config.store);
-  console.log("Import graph complete.");
 
   logEvent({ event: "reindex", repo: repoRoot, files_indexed: indexed, files_skipped: skipped });
   console.log("Reindex complete.");
@@ -689,20 +361,12 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
 
   const changedFiles = files.length > 0 ? files : await getChangedFiles(repoRoot, commitHash);
 
-  // Process changed files
-  const filesToEmbed: {
-    filePath: string;
-    skeleton: string;
-    skeletonEntries: string | null;
-    hash: string;
-    fileType: string;
-  }[] = [];
-
+  // Handle deletions inline — pipeline stages only process existing files
+  const existingFiles: string[] = [];
   for (const relPath of changedFiles) {
     const absPath = path.join(repoRoot, relPath);
     const file = Bun.file(absPath);
     if (!(await file.exists())) {
-      // File was deleted — remove from index
       if (config.store === "pg") {
         await pgUnsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [
           repoId,
@@ -721,111 +385,35 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
           })();
         }
       }
-      continue;
-    }
-
-    if (file.size > MAX_FILE_SIZE) continue;
-
-    const content = await file.text();
-
-    const scan = scanForSecrets(content);
-    if (scan.hasSecrets) {
-      console.warn(`  SKIP ${relPath}: potential secrets (${scan.patterns.join(", ")})`);
-      continue;
-    }
-
-    const ext = path.extname(relPath).toLowerCase() || ".txt";
-    const { hash } = await formatAndHash(content, formatter);
-
-    if (config.store === "pg") {
-      const existing = await pgUnsafe(
-        "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2 AND content_hash = $3",
-        [repoId, relPath, hash],
-      );
-      if (existing.length > 0) continue;
     } else {
-      const db = await getSqlite(repoRoot);
-      const existing = db
-        .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ? AND content_hash = ?")
-        .all(repoId, relPath, hash) as { id: number }[];
-      if (existing.length > 0) continue;
+      existingFiles.push(relPath);
     }
-
-    const { text: skeleton, entries } = await extractSkeletonWithEntries(
-      relPath,
-      content,
-      config.skeletonFallbackLines,
-    );
-    const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
-    filesToEmbed.push({ filePath: relPath, skeleton, skeletonEntries, hash, fileType: ext });
   }
 
-  if (filesToEmbed.length > 0) {
-    const embeddings = await embed(filesToEmbed.map((f) => f.skeleton));
+  if (existingFiles.length === 0 && !commitHash) {
+    console.log("Updated 0 files.");
+    return;
+  }
 
-    if (config.store === "pg") {
-      const pg = await getPg();
-      await pg.begin(async (tx) => {
-        for (let i = 0; i < filesToEmbed.length; i++) {
-          const f = filesToEmbed[i];
-          const embedding = embeddings[i];
-          await tx.unsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
-             ON CONFLICT (repo_id, file_path) DO UPDATE SET
-               content_hash = EXCLUDED.content_hash,
-               skeleton = EXCLUDED.skeleton,
-               skeleton_entries = EXCLUDED.skeleton_entries,
-               file_type = EXCLUDED.file_type,
-               embedding = EXCLUDED.embedding,
-               indexed_at = now()`,
-            [
-              repoId,
-              f.filePath,
-              f.hash,
-              f.skeleton,
-              f.skeletonEntries,
-              f.fileType,
-              `[${embedding.join(",")}]`,
-            ],
-          );
-        }
-      });
-    } else {
-      const db = await getSqlite(repoRoot);
-      const insertFile = db.prepare(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (repo_id, file_path) DO UPDATE SET
-           content_hash = excluded.content_hash,
-           skeleton = excluded.skeleton,
-           skeleton_entries = excluded.skeleton_entries,
-           file_type = excluded.file_type,
-           indexed_at = datetime('now')
-         RETURNING id`,
-      );
-      const deleteEmb2 = db.prepare(`DELETE FROM file_embeddings WHERE file_id = ?`);
-      const insertEmb = db.prepare(
-        `INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)`,
-      );
-      db.transaction(() => {
-        for (let i = 0; i < filesToEmbed.length; i++) {
-          const f = filesToEmbed[i];
-          const embedding = embeddings[i];
-          const row = insertFile.get(
-            repoId,
-            f.filePath,
-            f.hash,
-            f.skeleton,
-            f.skeletonEntries,
-            f.fileType,
-          ) as {
-            id: number;
-          };
-          deleteEmb2.run(row.id);
-          insertEmb.run(row.id, serializeEmbedding(embedding));
-        }
-      })();
+  const ctx: PipelineContext = {
+    repoRoot,
+    repoId,
+    config,
+    formatter,
+    store: config.store,
+    dryRun: false,
+    force: false,
+  };
+
+  // Collect only the specified changed files (not a full repo walk)
+  // We run collectFiles with force=false — it will dedup by hash internally
+  // but we restrict to changedFiles by collecting them manually here.
+  const collected = await collectChangedFiles(ctx, existingFiles);
+
+  if (collected.length > 0) {
+    const embedded = await embedFiles(ctx, collected);
+    if (embedded.length > 0) {
+      await storeFiles(ctx, embedded);
     }
   }
 
@@ -910,7 +498,7 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
   // Update affected directories
   await updateAffectedDirectories(repoRoot, repoId, changedFiles);
 
-  console.log(`Updated ${filesToEmbed.length} files.`);
+  console.log(`Updated ${collected.length} files.`);
 }
 
 async function getCommitMessage(repoRoot: string, hash: string): Promise<string | null> {

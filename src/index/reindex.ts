@@ -2,13 +2,14 @@ import path from "path";
 import { loadConfig, detectFormatter } from "../config";
 import { withRepoScope } from "../db/rls";
 import { getSqlite } from "../db/sqlite";
-import { serializeEmbedding } from "../db/util";
 import { extractSkeletonWithEntries, initParser } from "./skeleton";
 import { formatAndHash } from "./formatter";
 import { scanForSecrets } from "./secrets";
-import { embed } from "./embedder";
 import { updateAffectedDirectories } from "./directories";
-import { extractImports, resolveImport } from "./imports";
+import { extractImports } from "./imports";
+import { MAX_FILE_SIZE } from "./walker";
+import { embedFiles, storeFiles } from "../pipeline";
+import type { PipelineContext, CollectedFile } from "../pipeline";
 
 /** Pre-built file index for import resolution, reusable across batch calls. */
 export interface FileIndex {
@@ -96,6 +97,8 @@ export async function reindexSingleFile(
     return true;
   }
 
+  if (file.size > MAX_FILE_SIZE) return false;
+
   const content = (await file.text()).replace(/\0/g, "");
 
   const scan = scanForSecrets(content);
@@ -131,112 +134,39 @@ export async function reindexSingleFile(
     config.skeletonFallbackLines,
   );
   const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
-
-  const [embedding] = await embed([skeleton]);
-
-  // Extract imports for the updated file
   const importEdges = extractImports(relPath, content);
 
-  if (config.store === "pg") {
-    await withRepoScope([repoId], async (tx) => {
-      const rows = (await tx.unsafe(
-        `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
-         ON CONFLICT (repo_id, file_path) DO UPDATE SET
-           content_hash = EXCLUDED.content_hash,
-           skeleton = EXCLUDED.skeleton,
-           skeleton_entries = EXCLUDED.skeleton_entries,
-           file_type = EXCLUDED.file_type,
-           embedding = EXCLUDED.embedding,
-           indexed_at = now()
-         RETURNING id`,
-        [repoId, relPath, hash, skeleton, skeletonEntries, ext, `[${embedding.join(",")}]`],
-      )) as { id: number }[];
-      const fileId = rows[0].id;
+  const collected: CollectedFile = {
+    relPath,
+    absPath,
+    fileType: ext,
+    contentHash: hash,
+    content,
+    skeleton,
+    skeletonEntries,
+    importEdges,
+  };
 
-      // Refresh file_imports for this file
-      await tx.unsafe("DELETE FROM file_imports WHERE source_file_id = $1", [fileId]);
-      if (importEdges.length > 0) {
-        // Use pre-built index or load via the pinned transaction (not the pool)
-        let idx: FileIndex;
-        if (fileIndex) {
-          idx = fileIndex;
-        } else {
-          const allFileRows = (await tx.unsafe(
-            "SELECT id, file_path FROM files WHERE repo_id = $1",
-            [repoId],
-          )) as { id: number; file_path: string }[];
-          idx = {
-            allFiles: new Set(allFileRows.map((r) => r.file_path)),
-            fileIdMap: new Map(allFileRows.map((r) => [r.file_path, r.id])),
-          };
-        }
+  const ctx: PipelineContext = {
+    repoRoot,
+    repoId,
+    config,
+    formatter,
+    store: config.store,
+    dryRun: false,
+    force: false,
+  };
 
-        for (const edge of importEdges) {
-          const resolved = resolveImport(edge.importedModule, relPath, edge.language, idx.allFiles);
-          const resolvedId = resolved ? (idx.fileIdMap.get(resolved) ?? null) : null;
-          await tx.unsafe(
-            `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
-             VALUES ($1, $2, $3, $4)`,
-            [fileId, edge.importedModule, resolvedId, edge.language],
-          );
-        }
-      }
-    });
-  } else {
-    const db = await getSqlite(repoRoot);
-    db.transaction(() => {
-      const row = db
-        .prepare(
-          `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT (repo_id, file_path) DO UPDATE SET
-             content_hash = excluded.content_hash,
-             skeleton = excluded.skeleton,
-             skeleton_entries = excluded.skeleton_entries,
-             file_type = excluded.file_type,
-             indexed_at = datetime('now')
-           RETURNING id`,
-        )
-        .get(repoId, relPath, hash, skeleton, skeletonEntries, ext) as { id: number };
+  const embedded = await embedFiles(ctx, [collected]);
+  if (embedded.length === 0) return false; // cost cap exceeded
 
-      db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(row.id);
-      db.prepare("INSERT INTO file_embeddings (file_id, embedding) VALUES (?, ?)").run(
-        row.id,
-        serializeEmbedding(embedding),
-      );
-
-      // Refresh file_imports for this file
-      db.prepare("DELETE FROM file_imports WHERE source_file_id = ?").run(row.id);
-      if (importEdges.length > 0) {
-        let idx: FileIndex;
-        if (fileIndex) {
-          idx = fileIndex;
-        } else {
-          const allFileRows = db
-            .prepare("SELECT id, file_path FROM files WHERE repo_id = ?")
-            .all(repoId) as { id: number; file_path: string }[];
-          idx = {
-            allFiles: new Set(allFileRows.map((r) => r.file_path)),
-            fileIdMap: new Map(allFileRows.map((r) => [r.file_path, r.id])),
-          };
-        }
-
-        const insertStmt = db.prepare(
-          `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
-           VALUES (?, ?, ?, ?)`,
-        );
-        for (const edge of importEdges) {
-          const resolved = resolveImport(edge.importedModule, relPath, edge.language, idx.allFiles);
-          const resolvedId = resolved ? (idx.fileIdMap.get(resolved) ?? null) : null;
-          insertStmt.run(row.id, edge.importedModule, resolvedId, edge.language);
-        }
-      }
-    })();
-  }
+  await storeFiles(ctx, embedded);
 
   // Update affected directories
   await updateAffectedDirectories(repoRoot, repoId, [relPath]);
+
+  // Suppress unused parameter warning — fileIndex kept for API compatibility
+  void fileIndex;
 
   return true;
 }
