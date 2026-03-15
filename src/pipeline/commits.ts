@@ -104,7 +104,7 @@ export const indexCommits: IndexCommitsStage = async (
             repoId,
             cr.relPath,
           ])) as { id: number }[]
-        ).find(() => true);
+        ).at(0);
         if (fileRow) {
           await tx.unsafe(
             `INSERT INTO file_commits (file_id, commit_id, recency)
@@ -144,12 +144,12 @@ export const indexCommits: IndexCommitsStage = async (
           deleteCommitEmb.run(commitId);
           insertCommitEmb.run(commitId, serializeEmbedding(cr.embedding));
         } else {
-          const row = (selectCommit.all(repoId, cr.hash) as { id: number }[]).find(() => true);
+          const row = (selectCommit.all(repoId, cr.hash) as { id: number }[]).at(0);
           if (!row) continue;
           commitId = row.id;
         }
 
-        const fileRow = (selectFile.all(repoId, cr.relPath) as { id: number }[]).find(() => true);
+        const fileRow = (selectFile.all(repoId, cr.relPath) as { id: number }[]).at(0);
         if (fileRow) {
           upsertLink.run(fileRow.id, commitId, cr.rank + 1);
         }
