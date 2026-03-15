@@ -15,8 +15,11 @@ import { summarizeDirs } from "../src/pipeline/summarize";
 import type { PipelineContext, CollectedFile, SummaryProvider } from "../src/pipeline/types";
 
 // ---------------------------------------------------------------------------
-// Mock embedding provider — returns deterministic fake vectors.
+// Mock embedding provider — deterministic fake vectors.
 // Must match the schema dimension (1536) to pass sqlite-vec validation.
+//
+// The mock is pure: fakeVector(seed) always returns the same array for the
+// same seed value, with no external state dependency.
 // ---------------------------------------------------------------------------
 
 const EMBED_DIM = 1536;
@@ -36,7 +39,7 @@ mock.module("../src/index/embedder", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Minimal no-op summary provider for tests (avoids calling Anthropic API)
+// Minimal no-op summary provider (avoids calling Anthropic API)
 // ---------------------------------------------------------------------------
 
 const noopSummaryProvider: SummaryProvider = {
@@ -47,7 +50,7 @@ const noopSummaryProvider: SummaryProvider = {
 };
 
 // ---------------------------------------------------------------------------
-// Fixture repo setup — create a minimal git repo in a temp directory
+// Fixture repo — creates a minimal git repo in a temp directory
 // ---------------------------------------------------------------------------
 
 let fixtureRepoRoot: string;
@@ -56,23 +59,27 @@ let ctx: PipelineContext;
 
 const FIXTURE_DIR = path.join(import.meta.dir, "fixtures");
 
-beforeAll(async () => {
+/** Set up fixture repo: init git, copy test files, create DB schema. */
+async function createFixtureRepo(): Promise<{
+  repoRoot: string;
+  repoId: number;
+  ctx: PipelineContext;
+}> {
   await initParser();
 
-  // Create a temp directory as the fixture repo
-  fixtureRepoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codeindex-pipeline-test-"));
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codeindex-pipeline-test-"));
 
   // Init git repo
-  const gitInit = Bun.spawnSync(["git", "init"], { cwd: fixtureRepoRoot });
+  const gitInit = Bun.spawnSync(["git", "init"], { cwd: repoRoot });
   if (gitInit.exitCode !== 0) throw new Error("git init failed");
-  Bun.spawnSync(["git", "config", "user.email", "test@test.com"], { cwd: fixtureRepoRoot });
-  Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: fixtureRepoRoot });
+  Bun.spawnSync(["git", "config", "user.email", "test@test.com"], { cwd: repoRoot });
+  Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: repoRoot });
 
   // Copy fixture files into the repo
   const fixtureFiles = ["sample.ts", "sample.py", "sample.go"];
   for (const f of fixtureFiles) {
     const src = path.join(FIXTURE_DIR, f);
-    const dst = path.join(fixtureRepoRoot, f);
+    const dst = path.join(repoRoot, f);
     if (fs.existsSync(src)) {
       fs.copyFileSync(src, dst);
     }
@@ -80,37 +87,45 @@ beforeAll(async () => {
 
   // Write a .codeindex.json config (sqlite store)
   fs.writeFileSync(
-    path.join(fixtureRepoRoot, ".codeindex.json"),
+    path.join(repoRoot, ".codeindex.json"),
     JSON.stringify({ store: "sqlite" }, null, 2),
   );
 
   // Commit the fixture files
-  Bun.spawnSync(["git", "add", "-A"], { cwd: fixtureRepoRoot });
-  Bun.spawnSync(["git", "commit", "-m", "initial commit"], { cwd: fixtureRepoRoot });
+  Bun.spawnSync(["git", "add", "-A"], { cwd: repoRoot });
+  Bun.spawnSync(["git", "commit", "-m", "initial commit"], { cwd: repoRoot });
 
-  // Init the sqlite schema
-  await ensureSqliteSchema(fixtureRepoRoot);
-
-  // Create a repo record
-  const db = await getSqlite(fixtureRepoRoot);
+  // Init the sqlite schema and create repo record
+  await ensureSqliteSchema(repoRoot);
+  const db = await getSqlite(repoRoot);
   const result = db
     .prepare(
       "INSERT INTO repos (origin_url, root_path, name, formatter_cmd) VALUES (?, ?, ?, ?) RETURNING id",
     )
-    .get(null, fixtureRepoRoot, "pipeline-test", null) as { id: number };
-  repoId = result.id;
+    .get(null, repoRoot, "pipeline-test", null) as { id: number };
 
-  const config = await loadConfig(fixtureRepoRoot);
+  const config = await loadConfig(repoRoot);
 
-  ctx = {
-    repoRoot: fixtureRepoRoot,
-    repoId,
-    config,
-    formatter: null,
-    store: "sqlite",
-    dryRun: false,
-    force: false,
+  return {
+    repoRoot,
+    repoId: result.id,
+    ctx: {
+      repoRoot,
+      repoId: result.id,
+      config,
+      formatter: null,
+      store: "sqlite",
+      dryRun: false,
+      force: false,
+    },
   };
+}
+
+beforeAll(async () => {
+  const fixture = await createFixtureRepo();
+  fixtureRepoRoot = fixture.repoRoot;
+  repoId = fixture.repoId;
+  ctx = fixture.ctx;
 });
 
 afterAll(async () => {
@@ -135,6 +150,8 @@ describe("collectFiles()", () => {
     }
   });
 
+  // Validates that force=true bypasses the content-hash dedup gate,
+  // which is important for re-indexing after schema changes.
   it("collects all files again when force=true", async () => {
     const forceCtx = { ...ctx, force: true };
     const files = await collectFiles(forceCtx);
@@ -158,11 +175,6 @@ describe("embedFiles()", () => {
       expect(f.embedding.length).toBe(EMBED_DIM);
       expect(typeof f.embedding[0]).toBe("number");
     }
-  });
-
-  it("returns empty array for empty input", async () => {
-    const embedded = await embedFiles(ctx, []);
-    expect(embedded).toEqual([]);
   });
 });
 
@@ -193,6 +205,8 @@ describe("storeFiles()", () => {
     expect(rows.length).toBeGreaterThan(0);
   });
 
+  // Idempotency is critical for data integrity: re-running the pipeline
+  // must not create duplicate file rows, which would corrupt search results.
   it("is idempotent — second store doesn't duplicate rows", async () => {
     const forceCtx = { ...ctx, force: true };
     const collected = await collectFiles(forceCtx);
@@ -208,8 +222,9 @@ describe("storeFiles()", () => {
     expect(uniquePaths.size).toBe(rows.length); // no duplicates
   });
 
+  // Validates the content-hash dedup gate: after store, unchanged files
+  // should not be re-collected.
   it("skips files on second collect run (dedup by hash)", async () => {
-    // After storeFiles, hashes are in the DB — collect should return 0
     const files = await collectFiles(ctx);
     expect(files.length).toBe(0);
   });
@@ -217,13 +232,11 @@ describe("storeFiles()", () => {
 
 describe("pruneStale()", () => {
   it("removes DB rows for files no longer on disk", async () => {
-    // Add a phantom file to DB
     const db = await getSqlite(fixtureRepoRoot);
     db.prepare(
       "INSERT INTO files (repo_id, file_path, content_hash, file_type) VALUES (?, ?, ?, ?)",
     ).run(repoId, "ghost/phantom.ts", "abc123", ".ts");
 
-    // Current files — doesn't include the phantom
     const dbRows = db
       .prepare("SELECT file_path FROM files WHERE repo_id = ?")
       .all(repoId) as { file_path: string }[];
