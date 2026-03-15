@@ -47,6 +47,11 @@ const VALID_DOMAINS = new Set([
   "infra",
   "web",
   "index",
+  "check",
+  "pipeline",
+  "search",
+  "mcp",
+  "cost",
 ]);
 
 interface LogEvent {
