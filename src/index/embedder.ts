@@ -2,6 +2,7 @@ import type { EmbeddingProvider } from "./embedding-provider";
 import type { CodeindexConfig } from "../search/types";
 import { OpenAIEmbeddingProvider } from "./providers/openai";
 import { OllamaEmbeddingProvider } from "./providers/ollama";
+import { RemoteEmbeddingProvider } from "./providers/remote";
 import { logEvent } from "../logging";
 
 const MAX_EMBED_CHARS = 4_000; // ~8000 tokens max; code averages ~2 tokens/char
@@ -24,16 +25,20 @@ export function getProvider(config?: CodeindexConfig): EmbeddingProvider {
     return p;
   }
 
-  const { provider, model, dimensions, ollamaUrl } = config.embedding;
-  const key = `${provider}:${model}:${dimensions}:${ollamaUrl ?? ""}`;
+  const { provider, model, dimensions, ollamaUrl, remoteUrl, remoteAuth } = config.embedding;
+  const key = `${provider}:${model}:${dimensions}:${ollamaUrl ?? ""}:${remoteUrl ?? ""}`;
 
   const cached = _providers.get(key);
   if (cached) return cached;
 
-  const p =
-    provider === "ollama"
-      ? new OllamaEmbeddingProvider(model, dimensions, ollamaUrl)
-      : new OpenAIEmbeddingProvider(model, dimensions);
+  let p: EmbeddingProvider;
+  if (provider === "ollama") {
+    p = new OllamaEmbeddingProvider(model, dimensions, ollamaUrl);
+  } else if (provider === "remote") {
+    p = new RemoteEmbeddingProvider(model, dimensions, remoteUrl, remoteAuth);
+  } else {
+    p = new OpenAIEmbeddingProvider(model, dimensions);
+  }
   _providers.set(key, p);
 
   return p;
