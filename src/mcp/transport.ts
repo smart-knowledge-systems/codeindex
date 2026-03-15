@@ -191,6 +191,7 @@ export async function startSSE(
   });
 
   httpServer.listen(port, () => {
+    process.stderr.write(`codeindex MCP server listening on port ${port} (SSE)\n`);
     logEvent({ event: "infra.server.started", port, protocol: "sse" });
   });
 
