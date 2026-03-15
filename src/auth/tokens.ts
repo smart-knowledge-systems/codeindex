@@ -55,10 +55,16 @@ function sqliteRowToTokenInfo(
 
 /** Group access rows into a Map<tokenId, repoId[]>. */
 function buildAccessMap(rows: { token_id: number; repo_id: number }[]): Map<number, number[]> {
-  return rows.reduce((acc, row) => {
-    const list = acc.get(row.token_id) ?? [];
-    return acc.set(row.token_id, [...list, row.repo_id]);
-  }, new Map<number, number[]>());
+  const result = new Map<number, number[]>();
+  for (const row of rows) {
+    let list = result.get(row.token_id);
+    if (!list) {
+      list = [];
+      result.set(row.token_id, list);
+    }
+    list.push(row.repo_id);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
