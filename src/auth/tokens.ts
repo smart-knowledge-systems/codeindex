@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { pgUnsafe } from "../db/pg";
+import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { loadConfig } from "../config";
 import { logEvent } from "../logging";
@@ -99,22 +99,23 @@ export async function createToken(
   const hash = hashToken(plaintext);
 
   if (config.store === "pg") {
-    await pgUnsafe("BEGIN");
+    const pg = await getPg();
     try {
-      const rows = (await pgUnsafe(
-        `INSERT INTO access_tokens (token_hash, name, expires_at) VALUES ($1, $2, $3) RETURNING id`,
-        [hash, name, expiresAt ?? null],
-      )) as { id: string }[];
-      const tokenId = parseInt(rows[0].id);
-      for (const repoId of repoIds) {
-        await pgUnsafe(`INSERT INTO token_repo_access (token_id, repo_id) VALUES ($1, $2)`, [
-          tokenId,
-          repoId,
-        ]);
-      }
-      await pgUnsafe("COMMIT");
+      await pg.begin(async (tx) => {
+        const rows = (await tx.unsafe(
+          `INSERT INTO access_tokens (token_hash, name, expires_at) VALUES ($1, $2, $3) RETURNING id`,
+          [hash, name, expiresAt ?? null],
+        )) as { id: string }[];
+        const tokenId = parseInt(rows[0].id);
+        if (repoIds.length > 0) {
+          const values = repoIds.map((_, i) => `($1, $${i + 2})`).join(", ");
+          await tx.unsafe(`INSERT INTO token_repo_access (token_id, repo_id) VALUES ${values}`, [
+            tokenId,
+            ...repoIds,
+          ]);
+        }
+      });
     } catch (err) {
-      await pgUnsafe("ROLLBACK");
       logEvent({
         event: "auth.token.create",
         outcome: "error",
@@ -133,11 +134,12 @@ export async function createToken(
         .prepare(`INSERT INTO access_tokens (token_hash, name, expires_at) VALUES (?, ?, ?)`)
         .run(hash, name, expiresAt ?? null);
       const tokenId = Number(result.lastInsertRowid);
-      const insertAccess = db.prepare(
-        `INSERT INTO token_repo_access (token_id, repo_id) VALUES (?, ?)`,
-      );
-      for (const repoId of repoIds) {
-        insertAccess.run(tokenId, repoId);
+      if (repoIds.length > 0) {
+        const placeholders = repoIds.map(() => "(?, ?)").join(", ");
+        const params = repoIds.flatMap((repoId) => [tokenId, repoId]);
+        db.prepare(`INSERT INTO token_repo_access (token_id, repo_id) VALUES ${placeholders}`).run(
+          ...params,
+        );
       }
     })();
   }
@@ -172,22 +174,21 @@ export async function validateToken(
 
   if (config.store === "pg") {
     const rows = (await pgUnsafe(
-      `SELECT id, revoked, expires_at FROM access_tokens WHERE token_hash = $1`,
+      `SELECT t.id, t.revoked, t.expires_at, array_agg(tra.repo_id) AS repo_ids
+       FROM access_tokens t
+       LEFT JOIN token_repo_access tra ON tra.token_id = t.id
+       WHERE t.token_hash = $1
+       GROUP BY t.id`,
       [hash],
-    )) as { id: string; revoked: boolean; expires_at: string | null }[];
+    )) as { id: string; revoked: boolean; expires_at: string | null; repo_ids: number[] | null }[];
     if (rows.length === 0) return reject("not_found");
 
     const row = rows[0];
     if (row.revoked) return reject("revoked");
     if (isExpired(row.expires_at, now)) return reject("expired");
 
-    const accessRows = (await pgUnsafe(
-      `SELECT repo_id FROM token_repo_access WHERE token_id = $1`,
-      [parseInt(row.id)],
-    )) as { repo_id: string }[];
-
     logEvent({ event: "auth.token.validate", outcome: "success" });
-    return accessRows.map((r) => parseInt(r.repo_id));
+    return row.repo_ids?.filter((id) => id !== null) ?? [];
   }
 
   const db = await getSqlite(repoRoot);
