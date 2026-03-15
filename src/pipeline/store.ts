@@ -36,38 +36,33 @@ export const storeFiles: StoreFilesStage = async (
   if (store === "pg") {
     const pg = await getPg();
     await pg.begin(async (tx) => {
-      // Upsert all files, collecting id→path mappings
-      const upsertedEntries = await Promise.all(
-        files.map(async (f) => {
-          const rows = (await tx.unsafe(
-            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
-             ON CONFLICT (repo_id, file_path) DO UPDATE SET
-               content_hash = EXCLUDED.content_hash,
-               skeleton = EXCLUDED.skeleton,
-               skeleton_entries = EXCLUDED.skeleton_entries,
-               file_type = EXCLUDED.file_type,
-               embedding = EXCLUDED.embedding,
-               indexed_at = now()
-             RETURNING id`,
-            [
-              repoId,
-              f.relPath,
-              f.contentHash,
-              f.skeleton,
-              f.skeletonEntries,
-              f.fileType,
-              `[${f.embedding.join(",")}]`,
-            ],
-          )) as { id: number }[];
-          const upserted = rows.find(() => true);
-          return upserted ? ([f.relPath, upserted.id] as const) : null;
-        }),
-      );
-
-      const fileIdMap = new Map<string, number>(
-        upsertedEntries.filter((e): e is NonNullable<typeof e> => e != null),
-      );
+      // Upsert all files sequentially (single tx connection), collecting id→path mappings
+      const fileIdMap = new Map<string, number>();
+      for (const f of files) {
+        const rows = (await tx.unsafe(
+          `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
+           ON CONFLICT (repo_id, file_path) DO UPDATE SET
+             content_hash = EXCLUDED.content_hash,
+             skeleton = EXCLUDED.skeleton,
+             skeleton_entries = EXCLUDED.skeleton_entries,
+             file_type = EXCLUDED.file_type,
+             embedding = EXCLUDED.embedding,
+             indexed_at = now()
+           RETURNING id`,
+          [
+            repoId,
+            f.relPath,
+            f.contentHash,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+            `[${f.embedding.join(",")}]`,
+          ],
+        )) as { id: number }[];
+        const upserted = rows.at(0);
+        if (upserted) fileIdMap.set(f.relPath, upserted.id);
+      }
 
       // Load existing files not in this batch for import resolution
       const existingRows = (await tx.unsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
