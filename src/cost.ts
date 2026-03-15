@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { pgUnsafe } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
 import { loadConfig } from "./config";
+import { logEvent } from "./logging";
 
 // ---------------------------------------------------------------------------
 // Pricing constants (USD per 1M tokens)
@@ -35,16 +36,39 @@ export function withCostContext<T>(ctx: CostContext, fn: () => T | Promise<T>): 
   return costStorage.run(ctx, fn);
 }
 
-/** @deprecated Use `withCostContext` instead — kept for single-worker compat. */
+/**
+ * Set the cost context for the current async execution context.
+ * Prefer `withCostContext` for scoped usage; this is kept for callers
+ * that set context once at the start of a command.
+ */
 export function setCurrentRepo(repoId: number, repoRoot: string, store?: "pg" | "sqlite"): void {
-  // no-op when running inside withCostContext; falls back to legacy for
-  // callers that haven't migrated yet.
-  if (!costStorage.getStore()) {
-    _legacyCtx = { repoId, repoRoot, store };
-  }
+  costStorage.enterWith({ repoId, repoRoot, store });
 }
 
-let _legacyCtx: CostContext | null = null;
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
+
+/** Compute USD cost from token counts and model pricing. */
+function computeCostUsd(model: string, tokensIn: number, tokensOut: number): number {
+  const pricing = PRICING[model] ?? null;
+  if (!pricing) return 0;
+  const inputCost = (tokensIn * pricing.input) / 1_000_000;
+  const outputCost = pricing.output != null ? (tokensOut * pricing.output) / 1_000_000 : 0;
+  return inputCost + outputCost;
+}
+
+/** Normalize a raw cost-summary row (from either pg or sqlite) into a CostSummaryRow. */
+function normalizeCostRow(r: Record<string, unknown>): CostSummaryRow {
+  return {
+    operation: r.operation as string,
+    model: r.model as string,
+    totalTokensIn: Number(r.total_tokens_in),
+    totalTokensOut: Number(r.total_tokens_out),
+    totalCostUsd: Number(r.total_cost_usd),
+    eventCount: Number(r.event_count),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Record a cost event
@@ -56,19 +80,19 @@ export async function recordCost(
   tokensIn: number,
   tokensOut: number,
 ): Promise<void> {
-  const ctx = costStorage.getStore() ?? _legacyCtx;
-  if (!ctx) return;
+  const ctx = costStorage.getStore();
+  if (!ctx) {
+    logEvent({
+      event: "cost.record.skipped",
+      reason: "no_context",
+      operation,
+      model,
+    });
+    return;
+  }
 
   const { repoId, repoRoot, store: ctxStore } = ctx;
-
-  const pricing = model in PRICING ? PRICING[model as keyof typeof PRICING] : null;
-  let costUsd = 0;
-  if (pricing) {
-    costUsd = (tokensIn * pricing.input) / 1_000_000;
-    if (pricing.output != null) {
-      costUsd += (tokensOut * pricing.output) / 1_000_000;
-    }
-  }
+  const costUsd = computeCostUsd(model, tokensIn, tokensOut);
 
   const store = ctxStore ?? (await loadConfig(repoRoot)).store;
   if (store === "pg") {
@@ -90,6 +114,32 @@ export async function recordCost(
 // Cost cap check
 // ---------------------------------------------------------------------------
 
+async function fetchCostSumPg(repoId?: number): Promise<number> {
+  const whereClause = repoId != null ? "AND repo_id = $1" : "";
+  const params = repoId != null ? [repoId] : [];
+  const rows = await pgUnsafe(
+    `SELECT COALESCE(SUM(cost_usd), 0) AS total
+     FROM cost_events
+     WHERE created_at >= now() - interval '60 minutes' ${whereClause}`,
+    params,
+  );
+  return Number(rows[0].total);
+}
+
+async function fetchCostSumSqlite(repoRoot: string, repoId?: number): Promise<number> {
+  const db = await getSqlite(repoRoot);
+  const whereClause = repoId != null ? "AND repo_id = ?" : "";
+  const params = repoId != null ? [repoId] : [];
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total
+       FROM cost_events
+       WHERE created_at >= datetime('now', '-60 minutes') ${whereClause}`,
+    )
+    .get(...params) as { total: number };
+  return row.total;
+}
+
 export async function checkCostCap(
   repoRoot: string,
   repoId?: number,
@@ -97,32 +147,10 @@ export async function checkCostCap(
   const config = await loadConfig(repoRoot);
   const limit = config.costCap.maxCostPerReindex;
 
-  // Query total cost for this session (last 60 minutes as session window)
-  const current = await (async () => {
-    if (config.store === "pg") {
-      const whereClause = repoId != null ? "AND repo_id = $1" : "";
-      const params = repoId != null ? [repoId] : [];
-      const rows = await pgUnsafe(
-        `SELECT COALESCE(SUM(cost_usd), 0) AS total
-         FROM cost_events
-         WHERE created_at >= now() - interval '60 minutes' ${whereClause}`,
-        params,
-      );
-      return Number(rows[0].total);
-    } else {
-      const db = await getSqlite(repoRoot);
-      const whereClause = repoId != null ? "AND repo_id = ?" : "";
-      const params = repoId != null ? [repoId] : [];
-      const row = db
-        .prepare(
-          `SELECT COALESCE(SUM(cost_usd), 0) AS total
-           FROM cost_events
-           WHERE created_at >= datetime('now', '-60 minutes') ${whereClause}`,
-        )
-        .get(...params) as { total: number };
-      return row.total;
-    }
-  })();
+  const current =
+    config.store === "pg"
+      ? await fetchCostSumPg(repoId)
+      : await fetchCostSumSqlite(repoRoot, repoId);
 
   return {
     exceeded: limit != null && current >= limit,
@@ -175,6 +203,13 @@ export interface CostSummaryRow {
   eventCount: number;
 }
 
+const COST_SUMMARY_SQL = `SELECT operation, model,
+        SUM(tokens_in) AS total_tokens_in,
+        SUM(tokens_out) AS total_tokens_out,
+        SUM(cost_usd) AS total_cost_usd,
+        COUNT(*) AS event_count
+ FROM cost_events`;
+
 export async function getCostSummary(repoRoot: string, repoId?: number): Promise<CostSummaryRow[]> {
   const config = await loadConfig(repoRoot);
 
@@ -182,56 +217,19 @@ export async function getCostSummary(repoRoot: string, repoId?: number): Promise
     const whereClause = repoId != null ? "WHERE repo_id = $1" : "";
     const params = repoId != null ? [repoId] : [];
     const rows = await pgUnsafe(
-      `SELECT operation, model,
-              SUM(tokens_in)::bigint AS total_tokens_in,
-              SUM(tokens_out)::bigint AS total_tokens_out,
-              SUM(cost_usd) AS total_cost_usd,
-              COUNT(*)::bigint AS event_count
-       FROM cost_events
-       ${whereClause}
-       GROUP BY operation, model
-       ORDER BY total_cost_usd DESC`,
+      `${COST_SUMMARY_SQL} ${whereClause} GROUP BY operation, model ORDER BY total_cost_usd DESC`,
       params,
     );
-    return rows.map((r: Record<string, unknown>) => ({
-      operation: r.operation as string,
-      model: r.model as string,
-      totalTokensIn: Number(r.total_tokens_in),
-      totalTokensOut: Number(r.total_tokens_out),
-      totalCostUsd: Number(r.total_cost_usd),
-      eventCount: Number(r.event_count),
-    }));
-  } else {
-    const db = await getSqlite(repoRoot);
-    const whereClause = repoId != null ? "WHERE repo_id = ?" : "";
-    const params = repoId != null ? [repoId] : [];
-    const rows = db
-      .prepare(
-        `SELECT operation, model,
-                SUM(tokens_in) AS total_tokens_in,
-                SUM(tokens_out) AS total_tokens_out,
-                SUM(cost_usd) AS total_cost_usd,
-                COUNT(*) AS event_count
-         FROM cost_events
-         ${whereClause}
-         GROUP BY operation, model
-         ORDER BY total_cost_usd DESC`,
-      )
-      .all(...params) as {
-      operation: string;
-      model: string;
-      total_tokens_in: number;
-      total_tokens_out: number;
-      total_cost_usd: number;
-      event_count: number;
-    }[];
-    return rows.map((r) => ({
-      operation: r.operation,
-      model: r.model,
-      totalTokensIn: r.total_tokens_in,
-      totalTokensOut: r.total_tokens_out,
-      totalCostUsd: r.total_cost_usd,
-      eventCount: r.event_count,
-    }));
+    return rows.map((r: Record<string, unknown>) => normalizeCostRow(r));
   }
+
+  const db = await getSqlite(repoRoot);
+  const whereClause = repoId != null ? "WHERE repo_id = ?" : "";
+  const params = repoId != null ? [repoId] : [];
+  const rows = db
+    .prepare(
+      `${COST_SUMMARY_SQL} ${whereClause} GROUP BY operation, model ORDER BY total_cost_usd DESC`,
+    )
+    .all(...params) as Record<string, unknown>[];
+  return rows.map(normalizeCostRow);
 }
