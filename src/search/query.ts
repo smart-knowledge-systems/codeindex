@@ -246,6 +246,7 @@ interface FileScoreOutput {
   readonly parentBoost: number;
   readonly lengthPenalty: number;
   readonly normalizedBM25: number;
+  readonly resolvedScoring: ScoringConfig;
 }
 
 /** Pure: compute all score components for a single file result. */
@@ -276,7 +277,7 @@ function computeFileScore(input: FileScoreInput): FileScoreOutput {
       ? (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
       : semanticScore;
 
-  return { finalScore, commitBoost, parentBoost, lengthPenalty, normalizedBM25 };
+  return { finalScore, commitBoost, parentBoost, lengthPenalty, normalizedBM25, resolvedScoring: fileScoring };
 }
 
 /** Pure: compute directory score with child-to-parent boost. */
@@ -608,7 +609,7 @@ async function searchPgInTransaction(
       ...(repoId !== currentRepoId && { repoId: row.repo_id }),
       ...(includeSkeleton && row.skeleton && { skeleton: row.skeleton }),
       ...(commitIds && commitIds.length > 0 && { commitIds }),
-      ...(options.explain && { explanation: buildFileExplanation(fileSim, score, scoring) }),
+      ...(options.explain && { explanation: buildFileExplanation(fileSim, score, score.resolvedScoring) }),
     });
   }
 
@@ -889,7 +890,7 @@ async function searchSqlite(
       ...(row.repo_id !== currentRepoId && { repoId: String(row.repo_id) }),
       ...(includeSkeleton && row.skeleton && { skeleton: row.skeleton }),
       ...(commitIds && commitIds.length > 0 && { commitIds }),
-      ...(options.explain && { explanation: buildFileExplanation(fileSim, score, scoring) }),
+      ...(options.explain && { explanation: buildFileExplanation(fileSim, score, score.resolvedScoring) }),
     });
   }
 
