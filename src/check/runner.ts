@@ -43,16 +43,14 @@ export async function runHealthCheck(repoRoot: string): Promise<CheckReport> {
   const { repoId, repoName } = await resolveRepoId(repoRoot, store);
 
   const ctx: PolicyContext = { repoRoot, repoId, config, store };
-  const results: CheckReport["results"] = [];
 
-  for (const policy of ALL_POLICIES) {
-    const result = await policy.check(ctx);
-    results.push({
+  const results = await Promise.all(
+    ALL_POLICIES.map(async (policy) => ({
       policy: policy.name,
       severity: policy.severity,
-      result,
-    });
-  }
+      result: await policy.check(ctx),
+    })),
+  );
 
   const hasError = results.some((r) => r.severity === "error" && !r.result.passed);
 
