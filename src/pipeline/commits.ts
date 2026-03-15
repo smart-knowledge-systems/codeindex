@@ -14,6 +14,26 @@ type CommitRecord = {
   embedding: number[] | null;
 };
 
+async function commitExists(
+  repoId: number,
+  hash: string,
+  store: string,
+  repoRoot: string,
+): Promise<boolean> {
+  if (store === "pg") {
+    const rows = await pgUnsafe("SELECT id FROM commits WHERE repo_id = $1 AND commit_hash = $2", [
+      repoId,
+      hash,
+    ]);
+    return rows.length > 0;
+  }
+  const db = await getSqlite(repoRoot);
+  const row = db
+    .prepare("SELECT id FROM commits WHERE repo_id = ? AND commit_hash = ?")
+    .get(repoId, hash) as { id: number } | undefined;
+  return row !== undefined;
+}
+
 /**
  * Walk git log for all files, embed new commit messages, and upsert
  * commit records and file_commits links into the DB.
@@ -24,7 +44,6 @@ export const indexCommits: IndexCommitsStage = async (
   allFiles: string[],
 ): Promise<number> => {
   const { repoRoot, repoId, config, store } = ctx;
-  let commitCount = 0;
 
   const commitRecords: CommitRecord[] = [];
   const seenHashes = new Set<string>();
@@ -36,21 +55,7 @@ export const indexCommits: IndexCommitsStage = async (
       let embedding: number[] | null = null;
 
       if (!seenHashes.has(c.hash)) {
-        // Check if commit already exists in DB
-        const exists =
-          store === "pg"
-            ? (
-                await pgUnsafe("SELECT id FROM commits WHERE repo_id = $1 AND commit_hash = $2", [
-                  repoId,
-                  c.hash,
-                ])
-              ).length > 0
-            : (
-                (await getSqlite(repoRoot))
-                  .prepare("SELECT id FROM commits WHERE repo_id = ? AND commit_hash = ?")
-                  .all(repoId, c.hash) as { id: number }[]
-              ).length > 0;
-
+        const exists = await commitExists(repoId, c.hash, store, repoRoot);
         if (!exists) {
           embedding = await embedSingle(c.message);
         }
@@ -86,7 +91,6 @@ export const indexCommits: IndexCommitsStage = async (
             [repoId, cr.hash, cr.message, `[${cr.embedding.join(",")}]`, cr.date],
           )) as { id: number }[];
           commitId = inserted[0].id;
-          commitCount++;
         } else {
           const existing = (await tx.unsafe(
             "SELECT id FROM commits WHERE repo_id = $1 AND commit_hash = $2",
@@ -95,16 +99,18 @@ export const indexCommits: IndexCommitsStage = async (
           commitId = existing[0].id;
         }
 
-        const fileRows = (await tx.unsafe(
-          "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
-          [repoId, cr.relPath],
-        )) as { id: number }[];
-        if (fileRows.length > 0) {
+        const fileRow = (
+          (await tx.unsafe("SELECT id FROM files WHERE repo_id = $1 AND file_path = $2", [
+            repoId,
+            cr.relPath,
+          ])) as { id: number }[]
+        ).find(() => true);
+        if (fileRow) {
           await tx.unsafe(
             `INSERT INTO file_commits (file_id, commit_id, recency)
              VALUES ($1, $2, $3)
              ON CONFLICT (file_id, commit_id) DO UPDATE SET recency = EXCLUDED.recency`,
-            [fileRows[0].id, commitId, cr.rank + 1],
+            [fileRow.id, commitId, cr.rank + 1],
           );
         }
       }
@@ -137,19 +143,22 @@ export const indexCommits: IndexCommitsStage = async (
           commitId = row.id;
           deleteCommitEmb.run(commitId);
           insertCommitEmb.run(commitId, serializeEmbedding(cr.embedding));
-          commitCount++;
         } else {
-          const rows = selectCommit.all(repoId, cr.hash) as { id: number }[];
-          commitId = rows[0].id;
+          const row = (selectCommit.all(repoId, cr.hash) as { id: number }[]).find(() => true);
+          commitId = row!.id;
         }
 
-        const fileRows = selectFile.all(repoId, cr.relPath) as { id: number }[];
-        if (fileRows.length > 0) {
-          upsertLink.run(fileRows[0].id, commitId, cr.rank + 1);
+        const fileRow = (selectFile.all(repoId, cr.relPath) as { id: number }[]).find(() => true);
+        if (fileRow) {
+          upsertLink.run(fileRow.id, commitId, cr.rank + 1);
         }
       }
     })();
   }
 
-  return commitCount;
+  // Compute count from collected data instead of mutable accumulator
+  const uniqueEmbeddedHashes = new Set(
+    commitRecords.filter((cr) => cr.embedding !== null).map((cr) => cr.hash),
+  );
+  return uniqueEmbeddedHashes.size;
 };
