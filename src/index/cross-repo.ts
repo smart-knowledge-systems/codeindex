@@ -3,6 +3,7 @@ import path from "path";
 import { loadConfig } from "../config";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
+import { logEvent } from "../logging";
 
 export interface CrossRepoEdge {
   sourceRepoId: number;
@@ -28,19 +29,21 @@ interface RepoFile {
  * - Python: dotted imports matched against file paths in other repos
  */
 export async function discoverCrossRepoEdges(repoRoot: string): Promise<CrossRepoEdge[]> {
+  const start = performance.now();
   const config = await loadConfig(repoRoot);
-  const edges: CrossRepoEdge[] = [];
 
-  if (config.store === "pg") {
-    await discoverPg(edges);
-  } else {
-    await discoverSqlite(repoRoot, edges);
-  }
+  const edges = config.store === "pg" ? await discoverPg() : await discoverSqlite(repoRoot);
+
+  logEvent({
+    event: "index.discovery.cross_repo.complete",
+    edges_discovered: edges.length,
+    duration_ms: Math.round(performance.now() - start),
+  });
 
   return edges;
 }
 
-async function discoverPg(edges: CrossRepoEdge[]): Promise<void> {
+async function discoverPg(): Promise<CrossRepoEdge[]> {
   // Get all unresolved imports
   const unresolved = (await pgUnsafe(
     `SELECT fi.id, fi.source_file_id, f.repo_id AS source_repo_id,
@@ -57,7 +60,7 @@ async function discoverPg(edges: CrossRepoEdge[]): Promise<void> {
     source_file_path: string;
   }[];
 
-  if (unresolved.length === 0) return;
+  if (unresolved.length === 0) return [];
 
   // Get all files from all repos for cross-repo resolution
   const allFiles = (await pgUnsafe(
@@ -90,6 +93,8 @@ async function discoverPg(edges: CrossRepoEdge[]): Promise<void> {
     for (const repoId of sourceRepoIds) {
       await pgUnsafe("DELETE FROM cross_repo_edges WHERE source_repo_id = $1", [repoId]);
     }
+
+    const edges: CrossRepoEdge[] = [];
 
     for (const imp of unresolved) {
       const sourceRepoId = parseInt(imp.source_repo_id);
@@ -132,13 +137,19 @@ async function discoverPg(edges: CrossRepoEdge[]): Promise<void> {
     }
 
     await pgUnsafe("COMMIT");
+    return edges;
   } catch (err) {
     await pgUnsafe("ROLLBACK");
+    logEvent({
+      event: "index.discovery.cross_repo.error",
+      "error.type": "transaction_rollback",
+      "error.message": err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
 }
 
-async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise<void> {
+async function discoverSqlite(repoRoot: string): Promise<CrossRepoEdge[]> {
   const db = await getSqlite(repoRoot);
 
   const unresolved = db
@@ -158,7 +169,7 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
     source_file_path: string;
   }[];
 
-  if (unresolved.length === 0) return;
+  if (unresolved.length === 0) return [];
 
   const allFiles = db
     .prepare(`SELECT f.id AS file_id, f.repo_id, f.file_path FROM files f`)
@@ -186,6 +197,7 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
   );
 
   // Wrap DELETE + INSERT in a transaction for atomicity
+  const edges: CrossRepoEdge[] = [];
   const replaceEdges = db.transaction(() => {
     // Scope delete to repos with unresolved imports, not full-table wipe
     const sourceRepoIds = [...new Set(unresolved.map((u) => u.source_repo_id))];
@@ -226,29 +238,29 @@ async function discoverSqlite(repoRoot: string, edges: CrossRepoEdge[]): Promise
     }
   });
   replaceEdges();
+  return edges;
 }
 
 /**
  * Load the package.json "name" field for each repo, keyed by repo ID.
+ * Returns a new Map built from resolved entries (no shared mutation).
  */
 async function loadPackageNames(
   repos: { id: number; rootPath: string }[],
 ): Promise<Map<number, string>> {
-  const names = new Map<number, string>();
-  await Promise.all(
-    repos.map(async (repo) => {
+  const entries = await Promise.all(
+    repos.map(async (repo): Promise<[number, string] | null> => {
       try {
         const raw = await fs.readFile(path.join(repo.rootPath, "package.json"), "utf-8");
         const pkg = JSON.parse(raw);
-        if (typeof pkg.name === "string" && pkg.name.length > 0) {
-          names.set(repo.id, pkg.name);
-        }
+        return typeof pkg.name === "string" && pkg.name.length > 0 ? [repo.id, pkg.name] : null;
       } catch {
         // No package.json or unreadable — skip
+        return null;
       }
     }),
   );
-  return names;
+  return new Map(entries.filter((e): e is [number, string] => e !== null));
 }
 
 /**
