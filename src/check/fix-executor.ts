@@ -13,5 +13,5 @@ export async function runAutoFix(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _failedPolicies: Array<{ policy: string; result: PolicyResult }>,
 ): Promise<FixResult[]> {
-  return [{ fixed: false, message: "Auto-fix not yet implemented — telemetry gate not met" }];
+  return [];
 }
