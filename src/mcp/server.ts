@@ -1000,48 +1000,30 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
         const startFilePath = (filePathStmt.get(startRow.id) as { file_path: string }).file_path;
 
-        // BFS traversal using reduce-style iteration over depth levels
-        type BfsState = {
-          visited: Map<number, { file_path: string; depth: number }>;
-          frontier: number[];
-          currentDepth: number;
-        };
+        // BFS traversal using imperative loop
+        const visited = new Map<number, { file_path: string; depth: number }>();
+        visited.set(startRow.id, { file_path: startFilePath, depth: 0 });
+        let frontier = [startRow.id];
+        let currentDepth = 0;
 
-        const expandFrontier = (state: BfsState): BfsState => {
-          const nextDepth = state.currentDepth + 1;
-          const newEntries = state.frontier.flatMap((id) => {
-            const nexts = importStmt.all(id) as { next_id: number }[];
-            return nexts
-              .filter((n) => !state.visited.has(n.next_id))
-              .filter((n) => !scopedFileIds || scopedFileIds.has(n.next_id))
-              .map((n) => {
-                const fp = (filePathStmt.get(n.next_id) as { file_path: string }).file_path;
-                return { id: n.next_id, file_path: fp, depth: nextDepth };
-              });
-          });
-
-          const nextVisited = new Map(state.visited);
+        while (frontier.length > 0 && currentDepth < depth) {
+          const nextDepth = currentDepth + 1;
           const nextFrontier: number[] = [];
-          for (const entry of newEntries) {
-            if (!nextVisited.has(entry.id)) {
-              nextVisited.set(entry.id, { file_path: entry.file_path, depth: entry.depth });
-              nextFrontier.push(entry.id);
+          for (const id of frontier) {
+            const nexts = importStmt.all(id) as { next_id: number }[];
+            for (const n of nexts) {
+              if (visited.has(n.next_id)) continue;
+              if (scopedFileIds && !scopedFileIds.has(n.next_id)) continue;
+              const fp = (filePathStmt.get(n.next_id) as { file_path: string }).file_path;
+              visited.set(n.next_id, { file_path: fp, depth: nextDepth });
+              nextFrontier.push(n.next_id);
             }
           }
-          return { visited: nextVisited, frontier: nextFrontier, currentDepth: nextDepth };
-        };
-
-        let state: BfsState = {
-          visited: new Map([[startRow.id, { file_path: startFilePath, depth: 0 }]]),
-          frontier: [startRow.id],
-          currentDepth: 0,
-        };
-
-        while (state.frontier.length > 0 && state.currentDepth < depth) {
-          state = expandFrontier(state);
+          frontier = nextFrontier;
+          currentDepth = nextDepth;
         }
 
-        const results = [...state.visited.values()].sort((a, b) => a.depth - b.depth);
+        const results = [...visited.values()].sort((a, b) => a.depth - b.depth);
         return mcpSuccess(results);
       }
     },
