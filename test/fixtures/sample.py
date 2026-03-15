@@ -5,6 +5,7 @@ from dataclasses import dataclass
 @dataclass
 class Config:
     """Application configuration."""
+
     host: str = "localhost"
     port: int = 8080
 

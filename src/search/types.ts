@@ -82,8 +82,10 @@ export interface CodeindexConfig {
   embedding: {
     model: string;
     dimensions: number;
-    provider: "openai" | "ollama";
+    provider: "openai" | "ollama" | "remote";
     ollamaUrl?: string;
+    remoteUrl?: string;
+    remoteAuth?: string;
   };
   scoring: ScoringConfig;
   formatter: string | null;

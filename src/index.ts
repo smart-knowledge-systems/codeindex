@@ -26,7 +26,15 @@ import { exportToSqlite, type ExportOptions } from "./db/export";
 import { setCurrentRepo, getProjectedCost } from "./cost";
 import { generateIntent } from "./intent";
 import { detectDrift } from "./drift";
-import { repoAdd, repoRemove, repoList, repoGetAll, repoStatus, repoPurge } from "./repo";
+import {
+  repoAdd,
+  repoRemove,
+  repoList,
+  repoGetAll,
+  repoGetByName,
+  repoStatus,
+  repoPurge,
+} from "./repo";
 import { parallelReindex } from "./index/parallel";
 import { runHealthCheck } from "./check/runner";
 import { runQualityCheck } from "./check/quality-runner";
@@ -1479,8 +1487,23 @@ async function main() {
       case "reindex": {
         const budgetStr = flag(parsed, "budget");
         const scope = flag(parsed, "scope");
+        const repoName = flag(parsed, "repo");
 
-        if (scope === "all") {
+        if (repoName) {
+          const repo = await repoGetByName(repoRoot, repoName);
+          if (!repo) {
+            console.error(
+              `Repo "${repoName}" not found. Use \`codeindex repo list\` to see registered repos.`,
+            );
+            process.exit(1);
+          }
+          await cmdReindex(
+            repo.root_path,
+            hasFlag(parsed, "dry-run"),
+            budgetStr ? parseFloat(budgetStr) : undefined,
+            hasFlag(parsed, "force"),
+          );
+        } else if (scope === "all") {
           const allRepos = await repoGetAll(repoRoot);
           if (allRepos.length === 0) {
             console.error("No repos registered. Use `codeindex repo add <path>` first.");
