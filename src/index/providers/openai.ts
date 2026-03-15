@@ -43,7 +43,11 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
         text_count: texts.length,
       });
 
-      return response.data.sort((a, b) => a.index - b.index).map((item) => item.embedding);
+      const embeddings = new Array<number[]>(response.data.length);
+      for (const item of response.data) {
+        embeddings[item.index] = item.embedding;
+      }
+      return embeddings;
     } catch (err) {
       const isRateLimit = err instanceof OpenAI.APIError && err.status === 429;
       if (isRateLimit && attempt < MAX_RETRIES) {
