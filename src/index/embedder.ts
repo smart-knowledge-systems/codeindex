@@ -12,41 +12,54 @@ function sanitize(text: string): string {
   return text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
 }
 
-const _providers = new Map<string, EmbeddingProvider>();
 const DEFAULT_KEY = "openai:text-embedding-3-small:1536:";
+
+/** Build a cache key from embedding config. */
+function providerCacheKey(config?: CodeindexConfig): string {
+  if (!config) return DEFAULT_KEY;
+  const { provider, model, dimensions, ollamaUrl, remoteUrl } = config.embedding;
+  return `${provider}:${model}:${dimensions}:${ollamaUrl ?? ""}:${remoteUrl ?? ""}`;
+}
+
+/** Construct a new provider from config (pure factory — no caching). */
+function createProvider(config?: CodeindexConfig): EmbeddingProvider {
+  if (!config) return new OpenAIEmbeddingProvider();
+  const { provider, model, dimensions, ollamaUrl, remoteUrl, remoteAuth } = config.embedding;
+  if (provider === "ollama") return new OllamaEmbeddingProvider(model, dimensions, ollamaUrl);
+  if (provider === "remote")
+    return new RemoteEmbeddingProvider(model, dimensions, remoteUrl, remoteAuth);
+  return new OpenAIEmbeddingProvider(model, dimensions);
+}
+
+/**
+ * Provider cache — encapsulated singleton store.
+ * Providers are stateless network clients, so caching avoids redundant instantiation.
+ */
+const providerCache = (() => {
+  const cache = new Map<string, EmbeddingProvider>();
+  return {
+    getOrCreate(config?: CodeindexConfig): EmbeddingProvider {
+      const key = providerCacheKey(config);
+      const cached = cache.get(key);
+      if (cached) return cached;
+      const provider = createProvider(config);
+      cache.set(key, provider);
+      return provider;
+    },
+    clear(): void {
+      cache.clear();
+    },
+  };
+})();
 
 /** Get or create the configured embedding provider. */
 export function getProvider(config?: CodeindexConfig): EmbeddingProvider {
-  if (!config) {
-    const cached = _providers.get(DEFAULT_KEY);
-    if (cached) return cached;
-    const p = new OpenAIEmbeddingProvider();
-    _providers.set(DEFAULT_KEY, p);
-    return p;
-  }
-
-  const { provider, model, dimensions, ollamaUrl, remoteUrl, remoteAuth } = config.embedding;
-  const key = `${provider}:${model}:${dimensions}:${ollamaUrl ?? ""}:${remoteUrl ?? ""}`;
-
-  const cached = _providers.get(key);
-  if (cached) return cached;
-
-  let p: EmbeddingProvider;
-  if (provider === "ollama") {
-    p = new OllamaEmbeddingProvider(model, dimensions, ollamaUrl);
-  } else if (provider === "remote") {
-    p = new RemoteEmbeddingProvider(model, dimensions, remoteUrl, remoteAuth);
-  } else {
-    p = new OpenAIEmbeddingProvider(model, dimensions);
-  }
-  _providers.set(key, p);
-
-  return p;
+  return providerCache.getOrCreate(config);
 }
 
 /** Reset all cached providers. */
 export function resetProvider(): void {
-  _providers.clear();
+  providerCache.clear();
 }
 
 export async function embed(
@@ -55,7 +68,7 @@ export async function embed(
 ): Promise<number[][]> {
   const input = (Array.isArray(texts) ? texts : [texts]).map(sanitize);
   const result = await getProvider(config).embed(input);
-  logEvent({ event: "embed", text_count: input.length });
+  logEvent({ event: "index.embed.complete", text_count: input.length });
   return result;
 }
 
