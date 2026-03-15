@@ -77,46 +77,67 @@ const DEFAULT_IGNORED = [
   "composer.lock",
 ];
 
-async function loadIgnoreFile(filePath: string): Promise<string[]> {
+// ---------------------------------------------------------------------------
+// Result type for explicit error handling
+// ---------------------------------------------------------------------------
+
+type LoadResult = { ok: true; lines: string[] } | { ok: false; error: Error };
+
+async function loadIgnoreFile(filePath: string): Promise<LoadResult> {
   try {
     const file = Bun.file(filePath);
     if (await file.exists()) {
       const text = await file.text();
-      return text.split("\n");
+      return { ok: true, lines: text.split("\n") };
     }
-  } catch {
-    // ignore missing/unreadable files
+    return { ok: true, lines: [] };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err : new Error(String(err)) };
   }
-  return [];
 }
+
+// ---------------------------------------------------------------------------
+// Pure filtering logic — separated from I/O
+// ---------------------------------------------------------------------------
+
+type Ignore = ReturnType<typeof ignore>;
+
+/** Check whether a path should be yielded based on ignore rules and extension. */
+function isIndexable(entry: string, hardIg: Ignore, softIg: Ignore): boolean {
+  if (hardIg.ignores(entry) || softIg.ignores(entry)) return false;
+  const ext = path.extname(entry).toLowerCase();
+  // Extensionless files (Dockerfile, Makefile, etc.) pass through
+  if (ext && !INDEXABLE_EXTENSIONS.has(ext)) return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Repo walker — yields relative paths of indexable files
+// ---------------------------------------------------------------------------
 
 export async function* walkRepo(repoRoot: string): AsyncGenerator<string> {
   const hardIg = ignore();
   hardIg.add(HARD_IGNORED);
 
   // Soft defaults → .gitignore → .indexignore (later patterns override earlier)
-  const ig = ignore();
-  ig.add(DEFAULT_IGNORED);
+  const softIg = ignore();
+  softIg.add(DEFAULT_IGNORED);
 
-  const gitignorePatterns = await loadIgnoreFile(path.join(repoRoot, ".gitignore"));
-  if (gitignorePatterns.length > 0) {
-    ig.add(gitignorePatterns);
+  const gitResult = await loadIgnoreFile(path.join(repoRoot, ".gitignore"));
+  if (gitResult.ok && gitResult.lines.length > 0) {
+    softIg.add(gitResult.lines);
   }
 
-  const indexignorePatterns = await loadIgnoreFile(path.join(repoRoot, ".indexignore"));
-  if (indexignorePatterns.length > 0) {
-    ig.add(indexignorePatterns);
+  const indexResult = await loadIgnoreFile(path.join(repoRoot, ".indexignore"));
+  if (indexResult.ok && indexResult.lines.length > 0) {
+    softIg.add(indexResult.lines);
   }
 
   const glob = new Bun.Glob("**/*");
 
   for await (const entry of glob.scan({ cwd: repoRoot, onlyFiles: true, followSymlinks: false })) {
-    if (hardIg.ignores(entry) || ig.ignores(entry)) continue;
-
-    // Extensionless files (Dockerfile, Makefile, etc.) pass through
-    const ext = path.extname(entry).toLowerCase();
-    if (ext && !INDEXABLE_EXTENSIONS.has(ext)) continue;
-
-    yield entry;
+    if (isIndexable(entry, hardIg, softIg)) {
+      yield entry;
+    }
   }
 }
