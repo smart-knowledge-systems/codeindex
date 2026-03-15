@@ -128,14 +128,22 @@ export async function* walkRepo(repoRoot: string): AsyncGenerator<string> {
   if (gitResult.ok && gitResult.lines.length > 0) {
     softIg.add(gitResult.lines);
   } else if (!gitResult.ok) {
-    logEvent({ event: "index.walker.ignore_error", file: ".gitignore", "error.message": gitResult.error.message });
+    logEvent({
+      event: "index.walker.ignore_error",
+      file: ".gitignore",
+      "error.message": gitResult.error.message,
+    });
   }
 
   const indexResult = await loadIgnoreFile(path.join(repoRoot, ".indexignore"));
   if (indexResult.ok && indexResult.lines.length > 0) {
     softIg.add(indexResult.lines);
   } else if (!indexResult.ok) {
-    logEvent({ event: "index.walker.ignore_error", file: ".indexignore", "error.message": indexResult.error.message });
+    logEvent({
+      event: "index.walker.ignore_error",
+      file: ".indexignore",
+      "error.message": indexResult.error.message,
+    });
   }
 
   const glob = new Bun.Glob("**/*");
