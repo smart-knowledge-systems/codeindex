@@ -64,10 +64,11 @@ function buildConsumerMatches(rows: Array<Record<string, unknown>>, score: numbe
 
 /** Group matches by repo name. */
 function groupByRepo(matches: XrefMatch[]): Record<string, XrefMatch[]> {
-  return matches.reduce<Record<string, XrefMatch[]>>((acc, m) => {
-    const key = m.repoName;
-    return { ...acc, [key]: [...(acc[key] ?? []), m] };
-  }, {});
+  const result: Record<string, XrefMatch[]> = {};
+  for (const m of matches) {
+    (result[m.repoName] ??= []).push(m);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
