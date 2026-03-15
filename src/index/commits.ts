@@ -87,13 +87,13 @@ export async function getChangedFiles(repoRoot: string, commitHash?: string): Pr
 
 function parseCommitOutput(output: string): CommitEntry[] {
   const lines = output.trim().split("\n");
-  return lines.reduce<CommitEntry[]>((acc, _line, i) => {
-    if (i % 3 !== 0 || i + 2 >= lines.length) return acc;
+  const result: CommitEntry[] = [];
+  for (let i = 0; i + 2 < lines.length; i += 3) {
     const hash = lines[i].trim();
-    const message = lines[i + 1].trim();
-    const date = lines[i + 2].trim();
-    return hash.length > 0 ? [...acc, { hash, message, date }] : acc;
-  }, []);
+    if (hash.length === 0) continue;
+    result.push({ hash, message: lines[i + 1].trim(), date: lines[i + 2].trim() });
+  }
+  return result;
 }
 
 export async function getFileCommits(
