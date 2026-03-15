@@ -7,12 +7,19 @@ import { serializeEmbedding } from "../db/util";
 import { loadConfig } from "../config";
 import { recordCost } from "../cost";
 import { generateSummary as anthropicGenerateSummary } from "./providers/anthropic";
+import { logEvent, hashPath } from "../logging";
+
+type SummaryProviderKind = "claude-cli" | "anthropic-sdk";
 
 export async function buildDirectoryIndex(
   repoRoot: string,
   repoId: number,
   filePaths: string[],
 ): Promise<void> {
+  const start = performance.now();
+  const summaryProvider: SummaryProviderKind =
+    (process.env.CODEINDEX_SUMMARY_PROVIDER as SummaryProviderKind) ?? "anthropic-sdk";
+
   // Collect all unique directories from file paths, bottom-up
   const dirSet = new Set<string>();
   for (const fp of filePaths) {
@@ -32,10 +39,37 @@ export async function buildDirectoryIndex(
   });
 
   const summaryCache = new Map<string, string>();
+  let summariesGenerated = 0;
+  let cacheHits = 0;
 
   for (const dirPath of dirs) {
-    await processDirectory(repoRoot, repoId, dirPath, filePaths, summaryCache);
+    const result = await processDirectory(
+      repoRoot,
+      repoId,
+      dirPath,
+      filePaths,
+      summaryCache,
+      summaryProvider,
+    );
+    if (result.summary) {
+      summaryCache.set(dirPath, result.summary);
+    }
+    if (result.cacheHit) cacheHits++;
+    else summariesGenerated++;
   }
+
+  logEvent({
+    event: "index.directory.build.complete",
+    directories_processed: dirs.length,
+    summaries_generated: summariesGenerated,
+    cache_hits: cacheHits,
+    duration_ms: Math.round(performance.now() - start),
+  });
+}
+
+interface ProcessDirectoryResult {
+  summary: string | null;
+  cacheHit: boolean;
 }
 
 async function processDirectory(
@@ -43,8 +77,9 @@ async function processDirectory(
   repoId: number,
   dirPath: string,
   allFiles: string[],
-  summaryCache: Map<string, string>,
-): Promise<void> {
+  summaryCache: ReadonlyMap<string, string>,
+  summaryProvider: SummaryProviderKind,
+): Promise<ProcessDirectoryResult> {
   // Get immediate child files (not recursive)
   const childFiles = allFiles.filter((fp) => {
     const parent = path.dirname(fp);
@@ -52,49 +87,60 @@ async function processDirectory(
   });
 
   // Get immediate child directories
-  const childDirSet = new Set<string>();
-  for (const fp of allFiles) {
-    const parts = fp.split("/");
-    if (dirPath === ".") {
-      if (parts.length > 1) childDirSet.add(parts[0]);
-    } else if (fp.startsWith(dirPath + "/")) {
-      const rest = fp.slice(dirPath.length + 1);
-      const sub = rest.split("/")[0];
-      if (rest.includes("/")) childDirSet.add(dirPath + "/" + sub);
-    }
-  }
+  const childDirs = [
+    ...new Set(
+      allFiles.flatMap((fp) => {
+        if (dirPath === ".") {
+          const parts = fp.split("/");
+          return parts.length > 1 ? [parts[0]] : [];
+        }
+        if (fp.startsWith(dirPath + "/")) {
+          const rest = fp.slice(dirPath.length + 1);
+          return rest.includes("/") ? [dirPath + "/" + rest.split("/")[0]] : [];
+        }
+        return [];
+      }),
+    ),
+  ];
 
   // Fetch skeletons and content hashes for immediate child files from db
   const config = await loadConfig(repoRoot);
-  const skeletons: string[] = [];
-  const hashParts: string[] = [];
-  for (const fp of childFiles) {
-    if (config.store === "pg") {
-      const rows = await pgUnsafe(
-        "SELECT skeleton, content_hash FROM files WHERE repo_id = $1 AND file_path = $2",
-        [repoId, fp],
-      );
-      if (rows.length > 0) {
-        if (rows[0].skeleton) skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
-        hashParts.push(`${fp}:${rows[0].content_hash}`);
+  const fileData = await Promise.all(
+    childFiles.map(async (fp) => {
+      if (config.store === "pg") {
+        const rows = await pgUnsafe(
+          "SELECT skeleton, content_hash FROM files WHERE repo_id = $1 AND file_path = $2",
+          [repoId, fp],
+        );
+        if (rows.length > 0) {
+          return {
+            skeleton: rows[0].skeleton ? `--- ${fp} ---\n${rows[0].skeleton}` : null,
+            hashPart: `${fp}:${rows[0].content_hash}`,
+          };
+        }
+      } else {
+        const db = await getSqlite(repoRoot);
+        const rows = db
+          .prepare("SELECT skeleton, content_hash FROM files WHERE repo_id = ? AND file_path = ?")
+          .all(repoId, fp) as { skeleton: string | null; content_hash: string }[];
+        if (rows.length > 0) {
+          return {
+            skeleton: rows[0].skeleton ? `--- ${fp} ---\n${rows[0].skeleton}` : null,
+            hashPart: `${fp}:${rows[0].content_hash}`,
+          };
+        }
       }
-    } else {
-      const db = await getSqlite(repoRoot);
-      const rows = db
-        .prepare("SELECT skeleton, content_hash FROM files WHERE repo_id = ? AND file_path = ?")
-        .all(repoId, fp) as { skeleton: string | null; content_hash: string }[];
-      if (rows.length > 0) {
-        if (rows[0].skeleton) skeletons.push(`--- ${fp} ---\n${rows[0].skeleton}`);
-        hashParts.push(`${fp}:${rows[0].content_hash}`);
-      }
-    }
-  }
+      return null;
+    }),
+  );
 
+  const skeletons = fileData.filter((d) => d?.skeleton).map((d) => d!.skeleton!);
+  const hashParts = fileData.filter((d) => d !== null).map((d) => d!.hashPart);
   const concatSkeleton = skeletons.join("\n\n");
 
   // Gather child directory summaries and their hashes (already processed, bottom-up)
   const childSummaries: string[] = [];
-  for (const cd of childDirSet) {
+  for (const cd of childDirs) {
     const cached = summaryCache.get(cd);
     if (cached) {
       childSummaries.push(`[${cd}]: ${cached}`);
@@ -131,7 +177,7 @@ async function processDirectory(
     }
   }
 
-  const cacheHit = childrenHash !== null && existingHash === childrenHash && existingSummary;
+  const cacheHit = childrenHash !== null && existingHash === childrenHash && !!existingSummary;
 
   // Embed the concat skeleton
   let concatEmbedding: number[] | null = null;
@@ -139,13 +185,13 @@ async function processDirectory(
     concatEmbedding = await embedSingle(concatSkeleton.slice(0, 4000));
   }
 
-  // Generate summary via claude --print --model haiku (skip on cache hit)
+  // Generate summary (skip on cache hit)
   let summary: string | null;
   if (cacheHit) {
     summary = existingSummary;
-    console.error(`  [cache hit] ${dirPath}`);
+    logEvent({ event: "index.directory.cache_hit", dir_path_hash: hashPath(dirPath) });
   } else {
-    summary = await generateSummary(concatSkeleton, childSummaries);
+    summary = await generateSummary(concatSkeleton, childSummaries, summaryProvider);
   }
 
   // Embed the summary (skip on cache hit)
@@ -153,12 +199,9 @@ async function processDirectory(
   if (summary && !cacheHit) {
     summaryEmbedding = await embedSingle(summary);
   }
-  if (summary) {
-    summaryCache.set(dirPath, summary);
-  }
 
   // Skip upsert entirely on cache hit — existing data is still valid
-  if (cacheHit) return;
+  if (cacheHit) return { summary, cacheHit: true };
 
   // Upsert directory record with children_hash
   if (config.store === "pg") {
@@ -209,6 +252,8 @@ async function processDirectory(
       );
     }
   }
+
+  return { summary, cacheHit: false };
 }
 
 const DIR_SUMMARY_SCHEMA = JSON.stringify({
@@ -250,19 +295,28 @@ async function generateSummaryViaCli(prompt: string): Promise<string | null> {
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
 
-    if (exitCode !== 0) return null;
+    if (exitCode !== 0) {
+      logEvent({
+        event: "index.directory.summary.error",
+        "error.type": "cli_nonzero_exit",
+        "error.code": exitCode,
+      });
+      return null;
+    }
 
     // Estimate haiku tokens from char count (~4 chars per token)
-    const promptChars = prompt.length;
-    const outputChars = stdout.length;
-    const estimatedInputTokens = Math.ceil(promptChars / 4);
-    const estimatedOutputTokens = Math.ceil(outputChars / 4);
+    const estimatedInputTokens = Math.ceil(prompt.length / 4);
+    const estimatedOutputTokens = Math.ceil(stdout.length / 4);
     await recordCost("summarize", "haiku", estimatedInputTokens, estimatedOutputTokens);
 
     const parsed = JSON.parse(stdout);
     return parsed.summary ?? null;
-  } catch {
-    // claude CLI not available or failed — graceful fallback
+  } catch (err) {
+    logEvent({
+      event: "index.directory.summary.error",
+      "error.type": "cli_failure",
+      "error.message": err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
@@ -281,16 +335,23 @@ async function generateSummaryViaSdk(prompt: string): Promise<string | null> {
     } catch {
       return summary;
     }
-  } catch {
+  } catch (err) {
+    logEvent({
+      event: "index.directory.summary.error",
+      "error.type": "sdk_failure",
+      "error.message": err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
 
-async function generateSummary(
+/** Generate a directory summary using the specified provider. */
+function generateSummary(
   concatSkeleton: string,
   childSummaries: string[],
+  provider: SummaryProviderKind,
 ): Promise<string | null> {
-  if (!concatSkeleton && childSummaries.length === 0) return null;
+  if (!concatSkeleton && childSummaries.length === 0) return Promise.resolve(null);
 
   const prompt = [
     "Summarize this directory.",
@@ -303,14 +364,7 @@ async function generateSummary(
     .filter(Boolean)
     .join("\n");
 
-  const provider = process.env.CODEINDEX_SUMMARY_PROVIDER ?? "anthropic-sdk";
-
-  if (provider === "claude-cli") {
-    return generateSummaryViaCli(prompt);
-  }
-
-  // Default: anthropic-sdk
-  return generateSummaryViaSdk(prompt);
+  return provider === "claude-cli" ? generateSummaryViaCli(prompt) : generateSummaryViaSdk(prompt);
 }
 
 export async function updateAffectedDirectories(
@@ -318,6 +372,10 @@ export async function updateAffectedDirectories(
   repoId: number,
   changedFiles: string[],
 ): Promise<void> {
+  const start = performance.now();
+  const summaryProvider: SummaryProviderKind =
+    (process.env.CODEINDEX_SUMMARY_PROVIDER as SummaryProviderKind) ?? "anthropic-sdk";
+
   // Collect all affected directories from changed files
   const affectedDirs = new Set<string>();
   for (const fp of changedFiles) {
@@ -375,7 +433,26 @@ export async function updateAffectedDirectories(
     }
   }
 
+  let summariesRegenerated = 0;
   for (const dirPath of dirs) {
-    await processDirectory(repoRoot, repoId, dirPath, allFilePaths, summaryCache);
+    const result = await processDirectory(
+      repoRoot,
+      repoId,
+      dirPath,
+      allFilePaths,
+      summaryCache,
+      summaryProvider,
+    );
+    if (result.summary) {
+      summaryCache.set(dirPath, result.summary);
+    }
+    if (!result.cacheHit) summariesRegenerated++;
   }
+
+  logEvent({
+    event: "index.directory.update.complete",
+    affected_count: dirs.length,
+    summaries_regenerated: summariesRegenerated,
+    duration_ms: Math.round(performance.now() - start),
+  });
 }
