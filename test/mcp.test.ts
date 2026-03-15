@@ -1,19 +1,55 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterEach } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server";
 
+// ---------------------------------------------------------------------------
+// Helpers — guaranteed cleanup via try/finally
+// ---------------------------------------------------------------------------
+
+interface McpFixture {
+  client: Client;
+  mcpServer: ReturnType<typeof createMcpServer>;
+  cleanup: () => Promise<void>;
+}
+
+async function createFixture(repoRoot: string): Promise<McpFixture> {
+  const mcpServer = createMcpServer(repoRoot);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await mcpServer.connect(serverTransport);
+
+  const client = new Client({ name: "test-client", version: "1.0.0" });
+  await client.connect(clientTransport);
+
+  return {
+    client,
+    mcpServer,
+    cleanup: async () => {
+      await client.close();
+      await mcpServer.close();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 describe("MCP server", () => {
+  const fixtures: McpFixture[] = [];
+
+  afterEach(async () => {
+    for (const f of fixtures) {
+      await f.cleanup();
+    }
+    fixtures.length = 0;
+  });
+
   it("lists all registered tools", async () => {
-    const mcpServer = createMcpServer(process.cwd());
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const fixture = await createFixture(process.cwd());
+    fixtures.push(fixture);
 
-    await mcpServer.connect(serverTransport);
-
-    const client = new Client({ name: "test-client", version: "1.0.0" });
-    await client.connect(clientTransport);
-
-    const { tools } = await client.listTools();
+    const { tools } = await fixture.client.listTools();
     const toolNames = tools.map((t) => t.name).sort();
 
     // Core tools always present
@@ -25,71 +61,28 @@ describe("MCP server", () => {
     expect(toolNames).toContain("findCallers");
     expect(toolNames).toContain("traceImportChain");
     expect(toolNames.length).toBeGreaterThanOrEqual(15);
-
-    await client.close();
-    await mcpServer.close();
   });
 
-  it("search tool returns content with error for unindexed repo", async () => {
-    const mcpServer = createMcpServer("/tmp/nonexistent-repo");
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  // Error-path tests: validate that the MCP server handles unindexed repos
+  // gracefully rather than crashing. These are consolidated into a single
+  // parameterized test to reduce redundancy while covering both tools.
+  it.each([
+    { tool: "search", args: { query: "test query" } },
+    { tool: "status", args: {} },
+  ])("$tool tool returns content (not crash) for unindexed repo", async ({ tool, args }) => {
+    const fixture = await createFixture("/tmp/nonexistent-repo");
+    fixtures.push(fixture);
 
-    await mcpServer.connect(serverTransport);
-
-    const client = new Client({ name: "test-client", version: "1.0.0" });
-    await client.connect(clientTransport);
-
-    // Calling search on a non-indexed repo should return an error or empty results
-    try {
-      const result = await client.callTool({
-        name: "search",
-        arguments: { query: "test query" },
-      });
-      // If it doesn't throw, the result should have content
-      expect(result.content).toBeDefined();
-    } catch (err) {
-      // Expected — no index at /tmp/nonexistent-repo
-      expect(err).toBeDefined();
-    }
-
-    await client.close();
-    await mcpServer.close();
-  });
-
-  it("status tool returns error for unindexed repo", async () => {
-    const mcpServer = createMcpServer("/tmp/nonexistent-repo");
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-
-    await mcpServer.connect(serverTransport);
-
-    const client = new Client({ name: "test-client", version: "1.0.0" });
-    await client.connect(clientTransport);
-
-    try {
-      const result = await client.callTool({
-        name: "status",
-        arguments: {},
-      });
-      // McpServer wraps errors as isError content
-      expect(result.content).toBeDefined();
-    } catch (err) {
-      expect(err).toBeDefined();
-    }
-
-    await client.close();
-    await mcpServer.close();
+    const result = await fixture.client.callTool({ name: tool, arguments: args });
+    // McpServer wraps errors as isError content rather than throwing
+    expect(result.content).toBeDefined();
   });
 
   it("search tool has correct input schema", async () => {
-    const mcpServer = createMcpServer(process.cwd());
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const fixture = await createFixture(process.cwd());
+    fixtures.push(fixture);
 
-    await mcpServer.connect(serverTransport);
-
-    const client = new Client({ name: "test-client", version: "1.0.0" });
-    await client.connect(clientTransport);
-
-    const { tools } = await client.listTools();
+    const { tools } = await fixture.client.listTools();
     const searchTool = tools.find((t) => t.name === "search");
 
     expect(searchTool).toBeDefined();
@@ -105,8 +98,5 @@ describe("MCP server", () => {
     expect(props.since).toBeDefined();
     expect(props.scope).toBeDefined();
     expect(props.explain).toBeDefined();
-
-    await client.close();
-    await mcpServer.close();
   });
 });
