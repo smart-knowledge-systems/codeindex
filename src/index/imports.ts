@@ -54,36 +54,28 @@ function deduplicateEdges(edges: ImportEdge[]): ImportEdge[] {
   });
 }
 
+/** Collect all regex matches as import edges for a given language. */
+function matchAll(content: string, patterns: RegExp[], language: string): ImportEdge[] {
+  return patterns.flatMap((re) =>
+    [...content.matchAll(re)].map((m) => ({ importedModule: m[1], language })),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // TypeScript / JavaScript
 // ---------------------------------------------------------------------------
 
 function extractTsImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  // import ... from "module"
-  const importFromRe = /import\s+(?:type\s+)?(?:[\s\S]*?)\s+from\s+["']([^"']+)["']/g;
-  for (const match of content.matchAll(importFromRe)) {
-    edges.push({ importedModule: match[1], language: "typescript" });
-  }
-  // import "module" (side-effect)
-  const sideEffectRe = /import\s+["']([^"']+)["']/g;
-  for (const match of content.matchAll(sideEffectRe)) {
-    if (!edges.some((e) => e.importedModule === match[1])) {
-      edges.push({ importedModule: match[1], language: "typescript" });
-    }
-  }
-  // require("module")
-  const requireRe = /require\s*\(\s*["']([^"']+)["']\s*\)/g;
-  for (const match of content.matchAll(requireRe)) {
-    edges.push({ importedModule: match[1], language: "typescript" });
-  }
-  // dynamic import("module")
-  const dynamicRe = /import\s*\(\s*["']([^"']+)["']\s*\)/g;
-  for (const match of content.matchAll(dynamicRe)) {
-    if (!edges.some((e) => e.importedModule === match[1])) {
-      edges.push({ importedModule: match[1], language: "typescript" });
-    }
-  }
+  const edges = matchAll(
+    content,
+    [
+      /import\s+(?:type\s+)?(?:[\s\S]*?)\s+from\s+["']([^"']+)["']/g, // import ... from "module"
+      /import\s+["']([^"']+)["']/g, // import "module" (side-effect)
+      /require\s*\(\s*["']([^"']+)["']\s*\)/g, // require("module")
+      /import\s*\(\s*["']([^"']+)["']\s*\)/g, // dynamic import("module")
+    ],
+    "typescript",
+  );
   return deduplicateEdges(edges);
 }
 
@@ -92,17 +84,14 @@ function extractTsImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractPythonImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  // import module / import module.sub
-  const importRe = /^import\s+([\w.]+)/gm;
-  for (const match of content.matchAll(importRe)) {
-    edges.push({ importedModule: match[1], language: "python" });
-  }
-  // from module import ...
-  const fromRe = /^from\s+([\w.]+)\s+import/gm;
-  for (const match of content.matchAll(fromRe)) {
-    edges.push({ importedModule: match[1], language: "python" });
-  }
+  const edges = matchAll(
+    content,
+    [
+      /^import\s+([\w.]+)/gm, // import module / import module.sub
+      /^from\s+([\w.]+)\s+import/gm, // from module import ...
+    ],
+    "python",
+  );
   return deduplicateEdges(edges);
 }
 
@@ -111,21 +100,16 @@ function extractPythonImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractGoImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
   // Single import: import "path"
-  const singleRe = /import\s+"([^"]+)"/g;
-  for (const match of content.matchAll(singleRe)) {
-    edges.push({ importedModule: match[1], language: "go" });
-  }
+  const singleImports = matchAll(content, [/import\s+"([^"]+)"/g], "go");
+
   // Grouped imports: import ( ... )
   const groupRe = /import\s*\(([\s\S]*?)\)/g;
-  for (const match of content.matchAll(groupRe)) {
-    const pathRe = /"([^"]+)"/g;
-    for (const pathMatch of match[1].matchAll(pathRe)) {
-      edges.push({ importedModule: pathMatch[1], language: "go" });
-    }
-  }
-  return deduplicateEdges(edges);
+  const groupedImports = [...content.matchAll(groupRe)].flatMap((match) =>
+    [...match[1].matchAll(/"([^"]+)"/g)].map((m) => ({ importedModule: m[1], language: "go" })),
+  );
+
+  return deduplicateEdges([...singleImports, ...groupedImports]);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,21 +117,16 @@ function extractGoImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractRustImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  // use crate::module / use module::sub
-  const useRe = /use\s+([\w:]+(?:::[\w*{},\s]+)*)/g;
-  for (const match of content.matchAll(useRe)) {
-    const modulePath = match[1].split("::").slice(0, -1).join("::");
-    if (modulePath) {
-      edges.push({ importedModule: modulePath, language: "rust" });
-    }
-  }
+  // use crate::module / use module::sub — extract parent module path
+  const useEdges = [...content.matchAll(/use\s+([\w:]+(?:::[\w*{},\s]+)*)/g)]
+    .map((match) => match[1].split("::").slice(0, -1).join("::"))
+    .filter((modulePath) => modulePath.length > 0)
+    .map((modulePath) => ({ importedModule: modulePath, language: "rust" }));
+
   // mod module
-  const modRe = /mod\s+(\w+)\s*;/g;
-  for (const match of content.matchAll(modRe)) {
-    edges.push({ importedModule: match[1], language: "rust" });
-  }
-  return deduplicateEdges(edges);
+  const modEdges = matchAll(content, [/mod\s+(\w+)\s*;/g], "rust");
+
+  return deduplicateEdges([...useEdges, ...modEdges]);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,12 +134,9 @@ function extractRustImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractJavaImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  const importRe = /import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/g;
-  for (const match of content.matchAll(importRe)) {
-    edges.push({ importedModule: match[1], language: "java" });
-  }
-  return deduplicateEdges(edges);
+  return deduplicateEdges(
+    matchAll(content, [/import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/g], "java"),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -168,12 +144,7 @@ function extractJavaImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractKotlinImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  const importRe = /import\s+([\w.]+(?:\.\*)?)/g;
-  for (const match of content.matchAll(importRe)) {
-    edges.push({ importedModule: match[1], language: "kotlin" });
-  }
-  return deduplicateEdges(edges);
+  return deduplicateEdges(matchAll(content, [/import\s+([\w.]+(?:\.\*)?)/g], "kotlin"));
 }
 
 // ---------------------------------------------------------------------------
@@ -181,18 +152,16 @@ function extractKotlinImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractRubyImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  // require "module" / require 'module'
-  const requireRe = /require\s+["']([^"']+)["']/g;
-  for (const match of content.matchAll(requireRe)) {
-    edges.push({ importedModule: match[1], language: "ruby" });
-  }
-  // require_relative "module"
-  const relativeRe = /require_relative\s+["']([^"']+)["']/g;
-  for (const match of content.matchAll(relativeRe)) {
-    edges.push({ importedModule: match[1], language: "ruby" });
-  }
-  return deduplicateEdges(edges);
+  return deduplicateEdges(
+    matchAll(
+      content,
+      [
+        /require\s+["']([^"']+)["']/g, // require "module"
+        /require_relative\s+["']([^"']+)["']/g, // require_relative "module"
+      ],
+      "ruby",
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -200,18 +169,16 @@ function extractRubyImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractPhpImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  // use Namespace\Class
-  const useRe = /use\s+([\w\\]+)(?:\s+as\s+\w+)?\s*;/g;
-  for (const match of content.matchAll(useRe)) {
-    edges.push({ importedModule: match[1], language: "php" });
-  }
-  // require/include
-  const reqRe = /(?:require|include)(?:_once)?\s+["']([^"']+)["']/g;
-  for (const match of content.matchAll(reqRe)) {
-    edges.push({ importedModule: match[1], language: "php" });
-  }
-  return deduplicateEdges(edges);
+  return deduplicateEdges(
+    matchAll(
+      content,
+      [
+        /use\s+([\w\\]+)(?:\s+as\s+\w+)?\s*;/g, // use Namespace\Class
+        /(?:require|include)(?:_once)?\s+["']([^"']+)["']/g, // require/include
+      ],
+      "php",
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -219,17 +186,16 @@ function extractPhpImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractLuaImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  const requireRe = /require\s*\(\s*["']([^"']+)["']\s*\)/g;
-  for (const match of content.matchAll(requireRe)) {
-    edges.push({ importedModule: match[1], language: "lua" });
-  }
-  // require without parens: require 'module' (negative lookahead excludes paren variant)
-  const requireNoParenRe = /require\s+(?!\()["']([^"']+)["']/g;
-  for (const match of content.matchAll(requireNoParenRe)) {
-    edges.push({ importedModule: match[1], language: "lua" });
-  }
-  return deduplicateEdges(edges);
+  return deduplicateEdges(
+    matchAll(
+      content,
+      [
+        /require\s*\(\s*["']([^"']+)["']\s*\)/g, // require("module")
+        /require\s+(?!\()["']([^"']+)["']/g, // require 'module' (no parens)
+      ],
+      "lua",
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -237,13 +203,7 @@ function extractLuaImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractZigImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  // @import("module")
-  const importRe = /@import\s*\(\s*"([^"]+)"\s*\)/g;
-  for (const match of content.matchAll(importRe)) {
-    edges.push({ importedModule: match[1], language: "zig" });
-  }
-  return deduplicateEdges(edges);
+  return deduplicateEdges(matchAll(content, [/@import\s*\(\s*"([^"]+)"\s*\)/g], "zig"));
 }
 
 // ---------------------------------------------------------------------------
@@ -251,38 +211,34 @@ function extractZigImports(content: string): ImportEdge[] {
 // ---------------------------------------------------------------------------
 
 function extractElixirImports(content: string): ImportEdge[] {
-  const edges: ImportEdge[] = [];
-  // alias Module.Name
-  const aliasRe = /alias\s+([\w.]+)(?!\.\{)/g;
-  for (const match of content.matchAll(aliasRe)) {
-    const mod = match[1].replace(/\.$/, ""); // strip trailing dot from destructuring prefix
-    if (mod) edges.push({ importedModule: mod, language: "elixir" });
-  }
+  // alias Module.Name (non-destructured)
+  const aliasEdges = [...content.matchAll(/alias\s+([\w.]+)(?!\.\{)/g)]
+    .map((match) => match[1].replace(/\.$/, ""))
+    .filter((mod) => mod.length > 0)
+    .map((mod) => ({ importedModule: mod, language: "elixir" }));
+
   // alias Module.{A, B} — expand destructured aliases
-  const aliasDestructRe = /alias\s+([\w.]+)\.\{([^}]+)\}/g;
-  for (const match of content.matchAll(aliasDestructRe)) {
-    const prefix = match[1];
-    const members = match[2].split(",").map((s) => s.trim());
-    for (const member of members) {
-      if (member) edges.push({ importedModule: `${prefix}.${member}`, language: "elixir" });
-    }
-  }
-  // import Module
-  const importRe = /import\s+([\w.]+)/g;
-  for (const match of content.matchAll(importRe)) {
-    edges.push({ importedModule: match[1], language: "elixir" });
-  }
-  // use Module
-  const useRe = /use\s+([\w.]+)/g;
-  for (const match of content.matchAll(useRe)) {
-    edges.push({ importedModule: match[1], language: "elixir" });
-  }
-  // require Module
-  const requireRe = /require\s+([\w.]+)/g;
-  for (const match of content.matchAll(requireRe)) {
-    edges.push({ importedModule: match[1], language: "elixir" });
-  }
-  return deduplicateEdges(edges);
+  const destructuredEdges = [...content.matchAll(/alias\s+([\w.]+)\.\{([^}]+)\}/g)].flatMap(
+    (match) =>
+      match[2]
+        .split(",")
+        .map((s) => s.trim())
+        .filter((member) => member.length > 0)
+        .map((member) => ({ importedModule: `${match[1]}.${member}`, language: "elixir" })),
+  );
+
+  // import, use, require
+  const otherEdges = matchAll(
+    content,
+    [
+      /import\s+([\w.]+)/g, // import Module
+      /use\s+([\w.]+)/g, // use Module
+      /require\s+([\w.]+)/g, // require Module
+    ],
+    "elixir",
+  );
+
+  return deduplicateEdges([...aliasEdges, ...destructuredEdges, ...otherEdges]);
 }
 
 // ---------------------------------------------------------------------------
