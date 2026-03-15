@@ -5,6 +5,22 @@ import { resolveImport } from "../index/imports";
 import type { PipelineContext, EmbeddedFile, StoreFilesStage } from "./types";
 
 /**
+ * Pure: resolve import edges for a file against a known set of all file paths.
+ * Returns an array of { importedModule, resolvedFilePath, language } records.
+ */
+function resolveFileImports(
+  file: EmbeddedFile,
+  allFiles: Set<string>,
+  fileIdMap: ReadonlyMap<string, number>,
+): Array<{ importedModule: string; resolvedId: number | null; language: string }> {
+  return file.importEdges.map((edge) => {
+    const resolved = resolveImport(edge.importedModule, file.relPath, edge.language, allFiles);
+    const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
+    return { importedModule: edge.importedModule, resolvedId, language: edge.language };
+  });
+}
+
+/**
  * Upsert embedded files into the DB (files + embeddings + import edges).
  * Builds a FileIndex internally for import resolution.
  * Transaction-wrapped for atomicity.
@@ -20,34 +36,38 @@ export const storeFiles: StoreFilesStage = async (
   if (store === "pg") {
     const pg = await getPg();
     await pg.begin(async (tx) => {
-      // Build file ID map for import resolution (after upserts)
-      const fileIdMap = new Map<string, number>();
+      // Upsert all files, collecting id→path mappings
+      const upsertedEntries = await Promise.all(
+        files.map(async (f) => {
+          const rows = (await tx.unsafe(
+            `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
+             ON CONFLICT (repo_id, file_path) DO UPDATE SET
+               content_hash = EXCLUDED.content_hash,
+               skeleton = EXCLUDED.skeleton,
+               skeleton_entries = EXCLUDED.skeleton_entries,
+               file_type = EXCLUDED.file_type,
+               embedding = EXCLUDED.embedding,
+               indexed_at = now()
+             RETURNING id`,
+            [
+              repoId,
+              f.relPath,
+              f.contentHash,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              `[${f.embedding.join(",")}]`,
+            ],
+          )) as { id: number }[];
+          const upserted = rows.find(() => true);
+          return upserted ? ([f.relPath, upserted.id] as const) : null;
+        }),
+      );
 
-      // Upsert all files first
-      for (const f of files) {
-        const rows = (await tx.unsafe(
-          `INSERT INTO files (repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, embedding)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
-           ON CONFLICT (repo_id, file_path) DO UPDATE SET
-             content_hash = EXCLUDED.content_hash,
-             skeleton = EXCLUDED.skeleton,
-             skeleton_entries = EXCLUDED.skeleton_entries,
-             file_type = EXCLUDED.file_type,
-             embedding = EXCLUDED.embedding,
-             indexed_at = now()
-           RETURNING id`,
-          [
-            repoId,
-            f.relPath,
-            f.contentHash,
-            f.skeleton,
-            f.skeletonEntries,
-            f.fileType,
-            `[${f.embedding.join(",")}]`,
-          ],
-        )) as { id: number }[];
-        fileIdMap.set(f.relPath, rows[0].id);
-      }
+      const fileIdMap = new Map<string, number>(
+        upsertedEntries.filter((e): e is NonNullable<typeof e> => e != null),
+      );
 
       // Load existing files not in this batch for import resolution
       const existingRows = (await tx.unsafe("SELECT id, file_path FROM files WHERE repo_id = $1", [
@@ -64,13 +84,12 @@ export const storeFiles: StoreFilesStage = async (
         const fileId = fileIdMap.get(f.relPath);
         if (fileId == null) continue;
         await tx.unsafe("DELETE FROM file_imports WHERE source_file_id = $1", [fileId]);
-        for (const edge of f.importEdges) {
-          const resolved = resolveImport(edge.importedModule, f.relPath, edge.language, allFiles);
-          const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
+        const imports = resolveFileImports(f, allFiles, fileIdMap);
+        for (const imp of imports) {
           await tx.unsafe(
             `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
              VALUES ($1, $2, $3, $4)`,
-            [fileId, edge.importedModule, resolvedId, edge.language],
+            [fileId, imp.importedModule, imp.resolvedId, imp.language],
           );
         }
       }
@@ -98,7 +117,7 @@ export const storeFiles: StoreFilesStage = async (
     );
 
     db.transaction(() => {
-      // Build file ID map: existing files
+      // Build file ID map from existing rows
       const existingRows = db
         .prepare("SELECT id, file_path FROM files WHERE repo_id = ?")
         .all(repoId) as { id: number; file_path: string }[];
@@ -125,10 +144,9 @@ export const storeFiles: StoreFilesStage = async (
         fileIdMap.set(f.relPath, row.id);
 
         deleteImports.run(row.id);
-        for (const edge of f.importEdges) {
-          const resolved = resolveImport(edge.importedModule, f.relPath, edge.language, allFiles);
-          const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;
-          insertImport.run(row.id, edge.importedModule, resolvedId, edge.language);
+        const imports = resolveFileImports(f, allFiles, fileIdMap);
+        for (const imp of imports) {
+          insertImport.run(row.id, imp.importedModule, imp.resolvedId, imp.language);
         }
       }
     })();
