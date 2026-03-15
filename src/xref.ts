@@ -190,7 +190,8 @@ async function xrefSqlite(repoRoot: string, symbol: string): Promise<XrefMatch[]
   if (definitionFileIds.size === 0) return definitionMatches;
 
   // 2. Follow import graph edges to find consumers
-  const placeholders = [...definitionFileIds].map(() => "?").join(",");
+  const fileIdArray = [...definitionFileIds].map(Number);
+  const placeholders = fileIdArray.map(() => "?").join(",");
   const consumers = db
     .prepare(
       `SELECT DISTINCT fi.source_file_id, f.file_path, f.repo_id, r.name as repo_name
@@ -199,7 +200,7 @@ async function xrefSqlite(repoRoot: string, symbol: string): Promise<XrefMatch[]
        JOIN repos r ON f.repo_id = r.id
        WHERE fi.resolved_file_id IN (${placeholders})`,
     )
-    .all(...definitionFileIds) as Array<Record<string, unknown>>;
+    .all(...fileIdArray) as Array<Record<string, unknown>>;
   const consumerMatches = buildConsumerMatches(consumers, 0.5);
 
   // 3. Check cross_repo_edges
@@ -211,7 +212,7 @@ async function xrefSqlite(repoRoot: string, symbol: string): Promise<XrefMatch[]
        JOIN repos r ON f.repo_id = r.id
        WHERE cre.target_file_id IN (${placeholders})`,
     )
-    .all(...definitionFileIds) as Array<Record<string, unknown>>;
+    .all(...fileIdArray) as Array<Record<string, unknown>>;
   const crossEdgeMatches = buildConsumerMatches(crossEdges, 0.4);
 
   return [...definitionMatches, ...consumerMatches, ...crossEdgeMatches];
