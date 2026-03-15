@@ -39,22 +39,6 @@ function countSlashes(s: string): number {
   return count;
 }
 
-function extractFileName(filePath: string): string {
-  const parts = filePath.split("/");
-  return parts[parts.length - 1];
-}
-
-function isChildOf(filePath: string, dirPath: string): boolean {
-  if (dirPath === ".") {
-    // Root directory: immediate children have no "/"
-    return !filePath.includes("/");
-  }
-  const prefix = dirPath.endsWith("/") ? dirPath : dirPath + "/";
-  if (!filePath.startsWith(prefix)) return false;
-  const rest = filePath.slice(prefix.length);
-  return !rest.includes("/");
-}
-
 function summaryNeedsReview(summary: string | null): boolean {
   return summary === null || summary.length < 20;
 }
@@ -134,13 +118,25 @@ export async function generateIntent(repoRoot: string, outPath?: string): Promis
     "> Re-generate with: `codeindex intent --out AGENTS.md`",
   ];
 
+  // Pre-group files by parent directory in O(files)
+  const filesByDir = new Map<string, string[]>();
+  for (const f of files) {
+    const slashIdx = f.file_path.lastIndexOf("/");
+    const parentDir = slashIdx === -1 ? "." : f.file_path.slice(0, slashIdx);
+    const fileName = slashIdx === -1 ? f.file_path : f.file_path.slice(slashIdx + 1);
+    let bucket = filesByDir.get(parentDir);
+    if (!bucket) {
+      bucket = [];
+      filesByDir.set(parentDir, bucket);
+    }
+    bucket.push(fileName);
+  }
+
   const dirSections = sortedDirs.flatMap((dir) => {
     const header = formatDirPath(dir.dir_path);
     const reviewTag = summaryNeedsReview(dir.summary) ? " [REVIEW]" : "";
 
-    const childFiles = files
-      .filter((f) => isChildOf(f.file_path, dir.dir_path))
-      .map((f) => extractFileName(f.file_path));
+    const childFiles = filesByDir.get(dir.dir_path) ?? [];
 
     return [
       "",
