@@ -17,15 +17,11 @@ export function cosineSimilarity(a: number[], b: number[]): number {
     normA += a[i] * a[i];
     normB += b[i] * b[i];
   }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  const denom = Math.sqrt(normA * normB);
   return denom === 0 ? 0 : dot / denom;
 }
 
 /** Deserialize a binary buffer (little-endian floats) back to number[]. */
 export function deserializeEmbedding(buf: Buffer): number[] {
-  const floats: number[] = [];
-  for (let i = 0; i < buf.length; i += 4) {
-    floats.push(buf.readFloatLE(i));
-  }
-  return floats;
+  return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
 }
