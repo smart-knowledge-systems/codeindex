@@ -28,17 +28,12 @@ const PATTERNS: [string, RegExp][] = [
 const BASE64_HEX_RE = /^[A-Za-z0-9+/=\-_]+$/;
 
 function shannonEntropy(s: string): number {
-  const freq = new Map<string, number>();
-  for (const ch of s) {
-    freq.set(ch, (freq.get(ch) ?? 0) + 1);
-  }
-  let entropy = 0;
+  const freq = [...s].reduce((m, ch) => m.set(ch, (m.get(ch) ?? 0) + 1), new Map<string, number>());
   const len = s.length;
-  for (const count of freq.values()) {
+  return [...freq.values()].reduce((entropy, count) => {
     const p = count / len;
-    entropy -= p * Math.log2(p);
-  }
-  return entropy;
+    return entropy - p * Math.log2(p);
+  }, 0);
 }
 
 function hasHighEntropyStrings(content: string): boolean {
