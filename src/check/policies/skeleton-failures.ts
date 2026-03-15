@@ -1,6 +1,5 @@
 import type { HealthPolicy, PolicyContext, PolicyResult } from "../types";
-import { pgUnsafe } from "../../db/pg";
-import { getSqlite } from "../../db/sqlite";
+import { storeQueryOne } from "../store-query";
 
 const SUPPORTED_EXTENSIONS = [
   ".ts",
@@ -26,34 +25,27 @@ const SUPPORTED_EXTENSIONS = [
   ".php",
 ];
 
+/** Build parameterized placeholders for the extension list. */
+function extPlaceholders(store: "pg" | "sqlite"): string {
+  return SUPPORTED_EXTENSIONS.map((_, i) => (store === "pg" ? `$${i + 2}` : "?")).join(",");
+}
+
 async function getCounts(ctx: PolicyContext): Promise<{ missing: number; total: number }> {
-  const extPlaceholders = SUPPORTED_EXTENSIONS.map((_, i) =>
-    ctx.store === "pg" ? `$${i + 2}` : "?",
-  ).join(",");
+  const placeholders = extPlaceholders(ctx.store);
+  const params = [ctx.repoId, ...SUPPORTED_EXTENSIONS];
 
-  if (ctx.store === "pg") {
-    const totalRow = (await pgUnsafe(
-      `SELECT count(*)::int AS cnt FROM files WHERE repo_id = $1 AND file_type IN (${extPlaceholders})`,
-      [ctx.repoId, ...SUPPORTED_EXTENSIONS],
-    )) as { cnt: number }[];
-    const missingRow = (await pgUnsafe(
-      `SELECT count(*)::int AS cnt FROM files WHERE repo_id = $1 AND file_type IN (${extPlaceholders}) AND skeleton IS NULL`,
-      [ctx.repoId, ...SUPPORTED_EXTENSIONS],
-    )) as { cnt: number }[];
-    return { total: totalRow[0].cnt, missing: missingRow[0].cnt };
-  }
-
-  const db = await getSqlite(ctx.repoRoot);
-  const totalRow = db
-    .prepare(
-      `SELECT count(*) AS cnt FROM files WHERE repo_id = ? AND file_type IN (${extPlaceholders})`,
-    )
-    .get(ctx.repoId, ...SUPPORTED_EXTENSIONS) as { cnt: number };
-  const missingRow = db
-    .prepare(
-      `SELECT count(*) AS cnt FROM files WHERE repo_id = ? AND file_type IN (${extPlaceholders}) AND skeleton IS NULL`,
-    )
-    .get(ctx.repoId, ...SUPPORTED_EXTENSIONS) as { cnt: number };
+  const totalRow = await storeQueryOne<{ cnt: number }>(
+    ctx,
+    `SELECT count(*)::int AS cnt FROM files WHERE repo_id = $1 AND file_type IN (${placeholders})`,
+    `SELECT count(*) AS cnt FROM files WHERE repo_id = ? AND file_type IN (${placeholders})`,
+    params,
+  );
+  const missingRow = await storeQueryOne<{ cnt: number }>(
+    ctx,
+    `SELECT count(*)::int AS cnt FROM files WHERE repo_id = $1 AND file_type IN (${placeholders}) AND skeleton IS NULL`,
+    `SELECT count(*) AS cnt FROM files WHERE repo_id = ? AND file_type IN (${placeholders}) AND skeleton IS NULL`,
+    params,
+  );
   return { total: totalRow.cnt, missing: missingRow.cnt };
 }
 

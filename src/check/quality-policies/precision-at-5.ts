@@ -9,6 +9,7 @@ export function precisionAt5(threshold: number): QualityPolicy {
     assert(summary: EvalSummary): QualityResult {
       const actual = summary.avgPrecision5;
       return {
+        tag: "assessed",
         passed: actual >= threshold,
         metric: "avgPrecision5",
         actual,

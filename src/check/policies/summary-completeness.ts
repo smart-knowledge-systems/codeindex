@@ -1,29 +1,21 @@
 import type { HealthPolicy, PolicyContext, PolicyResult } from "../types";
-import { pgUnsafe } from "../../db/pg";
-import { getSqlite } from "../../db/sqlite";
+import { storeQueryOne } from "../store-query";
 
 const MIN_COMPLETENESS = 0.8;
 
 async function getCounts(ctx: PolicyContext): Promise<{ totalDirs: number; withSummary: number }> {
-  if (ctx.store === "pg") {
-    const total = (await pgUnsafe(
-      "SELECT count(*)::int AS cnt FROM directories WHERE repo_id = $1",
-      [ctx.repoId],
-    )) as { cnt: number }[];
-    const summarized = (await pgUnsafe(
-      "SELECT count(*)::int AS cnt FROM directories WHERE repo_id = $1 AND summary IS NOT NULL",
-      [ctx.repoId],
-    )) as { cnt: number }[];
-    return { totalDirs: total[0].cnt, withSummary: summarized[0].cnt };
-  }
-
-  const db = await getSqlite(ctx.repoRoot);
-  const total = db
-    .prepare("SELECT count(*) AS cnt FROM directories WHERE repo_id = ?")
-    .get(ctx.repoId) as { cnt: number };
-  const summarized = db
-    .prepare("SELECT count(*) AS cnt FROM directories WHERE repo_id = ? AND summary IS NOT NULL")
-    .get(ctx.repoId) as { cnt: number };
+  const total = await storeQueryOne<{ cnt: number }>(
+    ctx,
+    "SELECT count(*)::int AS cnt FROM directories WHERE repo_id = $1",
+    "SELECT count(*) AS cnt FROM directories WHERE repo_id = ?",
+    [ctx.repoId],
+  );
+  const summarized = await storeQueryOne<{ cnt: number }>(
+    ctx,
+    "SELECT count(*)::int AS cnt FROM directories WHERE repo_id = $1 AND summary IS NOT NULL",
+    "SELECT count(*) AS cnt FROM directories WHERE repo_id = ? AND summary IS NOT NULL",
+    [ctx.repoId],
+  );
   return { totalDirs: total.cnt, withSummary: summarized.cnt };
 }
 
