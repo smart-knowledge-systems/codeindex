@@ -42,6 +42,8 @@ export function withCostContext<T>(ctx: CostContext, fn: () => T | Promise<T>): 
  * that set context once at the start of a command.
  */
 export function setCurrentRepo(repoId: number, repoRoot: string, store?: "pg" | "sqlite"): void {
+  // Skip if already inside a withCostContext scope to avoid overriding scoped context
+  if (costStorage.getStore()) return;
   costStorage.enterWith({ repoId, repoRoot, store });
 }
 
