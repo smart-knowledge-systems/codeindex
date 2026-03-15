@@ -194,7 +194,7 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
         absPath: repoRoot,
         name: path.basename(repoRoot),
         hasGit: true,
-        hasIndexIgnore: (await import("fs")).existsSync(path.join(repoRoot, ".indexignore")),
+        hasIndexIgnore: existsSync(path.join(repoRoot, ".indexignore")),
         estimatedFileCount: 0,
       },
     ];
