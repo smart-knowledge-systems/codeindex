@@ -1,5 +1,6 @@
 import type { EmbeddingProvider } from "../embedding-provider";
 import { recordCost } from "../../cost";
+import { logEvent } from "../../logging";
 
 const BATCH_SIZE = 64; // Ollama typically handles smaller batches
 const MAX_RETRIES = 3;
@@ -33,26 +34,44 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       const approxTokens = texts.reduce((sum, t) => sum + Math.ceil(t.length / 4), 0);
       await recordCost("embed", this.name, approxTokens, 0);
 
+      logEvent({
+        event: "infra.embed.batch_complete",
+        provider: this.name,
+        text_count: texts.length,
+      });
+
       return data.embeddings;
     } catch (err) {
       if (attempt < MAX_RETRIES) {
         const delay = 1000 * Math.pow(2, attempt);
+        logEvent({
+          event: "infra.embed.retry",
+          provider: this.name,
+          attempt: attempt + 1,
+          delay_ms: delay,
+          "error.message": err instanceof Error ? err.message : String(err),
+        });
         await new Promise((resolve) => setTimeout(resolve, delay));
         return this.embedBatch(texts, attempt + 1);
       }
+      logEvent({
+        event: "infra.embed.failed",
+        provider: this.name,
+        "error.type": err instanceof Error ? err.constructor.name : "unknown",
+        "error.message": err instanceof Error ? err.message : String(err),
+        "error.retriable": false,
+      });
       throw err;
     }
   }
 
   async embed(texts: string[]): Promise<number[][]> {
-    if (texts.length <= BATCH_SIZE) {
-      return this.embedBatch(texts);
-    }
+    const batches = Array.from({ length: Math.ceil(texts.length / BATCH_SIZE) }, (_, i) =>
+      texts.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE),
+    );
     const results: number[][] = [];
-    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-      const chunk = texts.slice(i, i + BATCH_SIZE);
-      const chunkResults = await this.embedBatch(chunk);
-      results.push(...chunkResults);
+    for (const batch of batches) {
+      results.push(...(await this.embedBatch(batch)));
     }
     return results;
   }
