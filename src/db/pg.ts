@@ -1,8 +1,11 @@
 import { SQL } from "bun";
 import { loadConfig } from "../config";
 
+// Singleton — module-level mutable state for the PostgreSQL connection pool.
+// This is an intentional impure boundary; all pg I/O flows through here.
 let _pg: InstanceType<typeof SQL> | null = null;
 
+/** @impure Opens (or returns cached) PostgreSQL connection pool. */
 export async function getPg(): Promise<InstanceType<typeof SQL>> {
   if (_pg) return _pg;
   const config = await loadConfig();
