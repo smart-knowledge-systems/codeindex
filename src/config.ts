@@ -83,9 +83,11 @@ function deepMerge(base: any, override: any): any {
 }
 
 export async function loadConfig(repoRoot?: string): Promise<CodeindexConfig> {
-  const global = await loadJsonFile(GLOBAL_CONFIG_PATH);
   const localPath = repoRoot ? path.join(repoRoot, LOCAL_CONFIG_FILE) : LOCAL_CONFIG_FILE;
-  const local = await loadJsonFile(localPath);
+  const [global, local] = await Promise.all([
+    loadJsonFile(GLOBAL_CONFIG_PATH),
+    loadJsonFile(localPath),
+  ]);
   return deepMerge(
     deepMerge(DEFAULTS, global as Partial<CodeindexConfig>),
     local as Partial<CodeindexConfig>,
