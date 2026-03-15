@@ -40,6 +40,7 @@ interface RepoCache {
 }
 
 const REPO_CACHE_TTL_MS = 60_000;
+const ACCESS_DENIED_MSG = "access denied — repo not in token scope";
 
 const repoCache: RepoCache = { ids: null, fetchedAt: 0, inflight: null };
 
@@ -499,7 +500,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         });
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
-          if (!allowed) return mcpError("access denied — repo not in token scope");
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
         const repoRoot = defaultRepoRoot;
         const results = await search(repoRoot, query, {
@@ -546,7 +547,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         });
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
-          if (!allowed) return mcpError("access denied — repo not in token scope");
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
         const repoRoot = defaultRepoRoot;
 
@@ -624,7 +625,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         });
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
-          if (!allowed) return mcpError("access denied — repo not in token scope");
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
         const repoRoot = defaultRepoRoot;
         const results = await searchChanged(repoRoot, since, query ?? undefined, {
@@ -660,7 +661,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const markdown = await generateIntent(repoRoot);
@@ -687,7 +688,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const mdPath = agentsMdPath ?? path.join(repoRoot, "AGENTS.md");
@@ -714,7 +715,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         });
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-          if (!allowed) return mcpError("access denied — repo not in token scope");
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
         const repoRoot = repoPath ?? defaultRepoRoot;
         const status = await getStatus(repoRoot, cost ?? false, session);
@@ -741,7 +742,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const report = await runHealthCheck(repoRoot);
@@ -765,7 +766,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -814,7 +815,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -866,7 +867,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -923,7 +924,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -1045,7 +1046,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -1131,7 +1132,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -1199,7 +1200,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) return mcpError("access denied — repo not in token scope");
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -1274,7 +1275,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         // Scope validation
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
-          if (!allowed) return mcpError("access denied — repo not in token scope");
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
 
         // Rate limit check (module-level, persists across reconnections, per-session)
