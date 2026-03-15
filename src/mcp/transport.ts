@@ -38,8 +38,8 @@ function setCorsHeaders(res: ServerResponse, req: IncomingMessage): void {
 // ---------------------------------------------------------------------------
 
 interface RateBucket {
-  readonly tokens: number;
-  readonly lastRefill: number;
+  tokens: number;
+  lastRefill: number;
 }
 
 const RATE_LIMIT = 60; // requests per minute
@@ -90,7 +90,8 @@ class RateLimiter {
       return false;
     }
 
-    this.buckets.set(sessionId, { ...refilled, tokens: refilled.tokens - 1 });
+    refilled.tokens--;
+    this.buckets.set(sessionId, refilled);
     return true;
   }
 
