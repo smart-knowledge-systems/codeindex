@@ -42,6 +42,7 @@ const VALUE_FLAGS = new Set([
   "baseline",
   "agents-md",
   "strategy",
+  "top",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {

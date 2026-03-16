@@ -259,6 +259,7 @@ async function main() {
     "install",
     "quiet",
     "batch-size",
+    "top",
   ];
   warnUnknownFlags(parsed, GLOBAL_FLAGS);
 
