@@ -26,11 +26,13 @@ async function resolveRepoId(
     const rows = (await pgUnsafe("SELECT name FROM repos WHERE id = $1", [repoId])) as {
       name: string;
     }[];
+    if (rows.length === 0) throw new Error("Repo not indexed. Run: codeindex reindex");
     return { repoId, repoName: rows[0].name };
   }
 
   const db = await getSqlite(repoRoot);
-  const row = db.prepare("SELECT name FROM repos WHERE id = ?").get(repoId) as { name: string };
+  const row = db.prepare("SELECT name FROM repos WHERE id = ?").get(repoId) as { name: string } | null;
+  if (!row) throw new Error("Repo not indexed. Run: codeindex reindex");
   return { repoId, repoName: row.name };
 }
 
