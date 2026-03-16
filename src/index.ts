@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
 
+import { loadGlobalEnv } from "./env";
+loadGlobalEnv();
+
 import path from "path";
 import { parseArgs, flag, hasFlag, warnUnknownFlags } from "./cli";
 import { loadConfig } from "./config";

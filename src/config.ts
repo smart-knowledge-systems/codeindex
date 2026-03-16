@@ -1,4 +1,5 @@
 import path from "path";
+import os from "os";
 import type { CodeindexConfig } from "./search/types";
 
 const DEFAULTS: CodeindexConfig = {
@@ -49,7 +50,7 @@ const DEFAULTS: CodeindexConfig = {
 };
 
 const GLOBAL_CONFIG_PATH = path.join(
-  process.env.HOME ?? "~",
+  process.env.HOME ?? os.homedir(),
   ".config",
   "codeindex",
   "config.json",
