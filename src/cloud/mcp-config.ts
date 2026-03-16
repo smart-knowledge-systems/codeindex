@@ -65,7 +65,7 @@ async function installToEditor(config: McpConfig, editor: string): Promise<boole
           ...config.mcpServers,
         },
       };
-      await Bun.write(absPath, JSON.stringify(merged, null, 2) + "\n");
+      await Bun.write(absPath, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
       process.stderr.write(`Updated ${absPath}\n`);
       return true;
     }
@@ -76,7 +76,7 @@ async function installToEditor(config: McpConfig, editor: string): Promise<boole
   const dir = path.dirname(absPath);
   const { mkdirSync } = await import("fs");
   mkdirSync(dir, { recursive: true });
-  await Bun.write(absPath, JSON.stringify(config, null, 2) + "\n");
+  await Bun.write(absPath, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
   process.stderr.write(`Created ${absPath}\n`);
   return true;
 }
