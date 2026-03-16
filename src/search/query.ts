@@ -1150,7 +1150,7 @@ export async function search(
   const queryHash = hashQuery(query);
 
   logEvent({
-    event: "infra.search",
+    event: "search.query.complete",
     query_length: query.length,
     query_hash: queryHash,
     result_count: finalResults.length,
