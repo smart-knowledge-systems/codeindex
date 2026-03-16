@@ -21,17 +21,18 @@ function findStalePaths(
 async function prunePg(repoId: number, stalePaths: string[]): Promise<void> {
   const pg = await getPg();
   await pg.begin(async (tx) => {
-    for (const fp of stalePaths) {
-      await tx.unsafe(
-        "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
-        [repoId, fp],
-      );
-      await tx.unsafe(
-        "DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = $2)",
-        [repoId, fp],
-      );
-      await tx.unsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [repoId, fp]);
-    }
+    await tx.unsafe(
+      "DELETE FROM file_imports WHERE source_file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = ANY($2))",
+      [repoId, stalePaths],
+    );
+    await tx.unsafe(
+      "DELETE FROM file_commits WHERE file_id IN (SELECT id FROM files WHERE repo_id = $1 AND file_path = ANY($2))",
+      [repoId, stalePaths],
+    );
+    await tx.unsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = ANY($2)", [
+      repoId,
+      stalePaths,
+    ]);
   });
 }
 
@@ -47,7 +48,7 @@ function pruneSqlite(db: Database, repoId: number, stalePaths: string[]): void {
 
   db.transaction(() => {
     for (const fp of stalePaths) {
-      const fileRow = (selectId.all(repoId, fp) as { id: number }[]).find(() => true);
+      const fileRow = (selectId.all(repoId, fp) as { id: number }[]).at(0);
       if (fileRow) {
         const fileId = fileRow.id;
         delImports.run(fileId);
