@@ -169,7 +169,7 @@ async function strategyRelay(
     await cloud.loadCredentials();
     if (!cloud.isAuthenticated()) return null;
 
-    client = new RelayClient(cloud.baseUrl, "");
+    client = new RelayClient(cloud.baseUrl, cloud.getToken()!);
     await client.connect();
 
     const content = await client.resolve(originUrl, commitHash, filePath);
