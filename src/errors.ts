@@ -5,7 +5,12 @@ export type ErrorCode =
   | "ERR_SCOPE_VIOLATION"
   | "ERR_RATE_LIMITED"
   | "ERR_COST_CAP_EXCEEDED"
-  | "ERR_INVALID_ARGS";
+  | "ERR_INVALID_ARGS"
+  | "ERR_CLOUD_AUTH"
+  | "ERR_CLOUD_RATE_LIMITED"
+  | "ERR_CLOUD_SERVER"
+  | "ERR_CLOUD_NETWORK"
+  | "ERR_CLOUD_OFFLINE";
 
 export class CodeindexError extends Error {
   readonly code: ErrorCode;
