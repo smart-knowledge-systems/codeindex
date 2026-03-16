@@ -111,7 +111,7 @@ export async function handleResolveRequest(req: Request): Promise<Response> {
   }
 
   // Rate limiting
-  if (!checkRateLimit(requester_id)) {
+  if (!checkRateLimit(userId)) {
     return Response.json({ error: "rate limited" }, { status: 429 });
   }
 
