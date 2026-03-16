@@ -20,7 +20,11 @@ export async function cloudLogin(): Promise<void> {
   const client = new CloudClient(CLOUD_URL);
 
   // Start ephemeral server to receive OAuth callback
-  const { promise: tokenPromise, resolve: resolveToken } = Promise.withResolvers<string>();
+  const {
+    promise: tokenPromise,
+    resolve: resolveToken,
+    reject: rejectToken,
+  } = Promise.withResolvers<string>();
 
   const callbackServer = Bun.serve({
     port: 0, // ephemeral port
@@ -58,7 +62,7 @@ export async function cloudLogin(): Promise<void> {
   const timeout = setTimeout(
     () => {
       callbackServer.stop();
-      throw new CloudAuthError("Login timed out — no callback received within 5 minutes");
+      rejectToken(new CloudAuthError("Login timed out — no callback received within 5 minutes"));
     },
     5 * 60 * 1000,
   );
