@@ -1,6 +1,5 @@
-import { loadConfig } from "./config";
-import { pgUnsafe } from "./db/pg";
-import { getSqlite } from "./db/sqlite";
+import { requireRepoId } from "./db/repo-lookup";
+import { getStoreOps } from "./repo";
 import { writeFileSync } from "fs";
 
 interface DirRow {
@@ -9,24 +8,6 @@ interface DirRow {
 }
 
 interface FileRow {
-  file_path: string;
-  file_type: string;
-}
-
-interface PgRepoRow {
-  id: string;
-}
-
-interface SqliteRepoRow {
-  id: number;
-}
-
-interface SqliteDirRow {
-  dir_path: string;
-  summary: string | null;
-}
-
-interface SqliteFileRow {
   file_path: string;
   file_type: string;
 }
@@ -48,65 +29,18 @@ function formatDirPath(dirPath: string): string {
   return dirPath.endsWith("/") ? dirPath : dirPath + "/";
 }
 
-async function intentPg(repoRoot: string): Promise<{ dirs: DirRow[]; files: FileRow[] }> {
-  const repoRows = (await pgUnsafe(`SELECT id FROM repos WHERE root_path = $1`, [
-    repoRoot,
-  ])) as PgRepoRow[];
+export async function generateIntent(repoRoot: string, outPath?: string): Promise<string> {
+  const repoId = await requireRepoId(repoRoot, undefined, `Repo not found for path: ${repoRoot}`);
+  const { ops } = await getStoreOps(repoRoot);
 
-  if (repoRows.length === 0) {
-    throw new Error(`Repo not found for path: ${repoRoot}`);
-  }
-
-  const repoId = parseInt(repoRows[0].id);
-
-  const dirs = (await pgUnsafe(
+  const dirs = await ops.query<DirRow>(
     `SELECT dir_path, summary FROM directories WHERE repo_id = $1 ORDER BY dir_path`,
     [repoId],
-  )) as DirRow[];
-
-  const files = (await pgUnsafe(
+  );
+  const files = await ops.query<FileRow>(
     `SELECT file_path, file_type FROM files WHERE repo_id = $1 ORDER BY file_path`,
     [repoId],
-  )) as FileRow[];
-
-  return { dirs, files };
-}
-
-async function intentSqlite(repoRoot: string): Promise<{ dirs: DirRow[]; files: FileRow[] }> {
-  const db = await getSqlite(repoRoot);
-
-  const repoRows = db
-    .prepare(`SELECT id FROM repos WHERE root_path = ?`)
-    .all(repoRoot) as SqliteRepoRow[];
-
-  if (repoRows.length === 0) {
-    throw new Error(`Repo not found for path: ${repoRoot}`);
-  }
-
-  const repoId = repoRows[0].id;
-
-  const dirs = db
-    .prepare(`SELECT dir_path, summary FROM directories WHERE repo_id = ? ORDER BY dir_path`)
-    .all(repoId) as SqliteDirRow[];
-
-  const files = db
-    .prepare(`SELECT file_path, file_type FROM files WHERE repo_id = ? ORDER BY file_path`)
-    .all(repoId) as SqliteFileRow[];
-
-  return { dirs, files };
-}
-
-export async function generateIntent(repoRoot: string, outPath?: string): Promise<string> {
-  const config = await loadConfig(repoRoot);
-
-  let dirs: DirRow[];
-  let files: FileRow[];
-
-  if (config.store === "pg") {
-    ({ dirs, files } = await intentPg(repoRoot));
-  } else {
-    ({ dirs, files } = await intentSqlite(repoRoot));
-  }
+  );
 
   // Sort directories by depth (number of slashes), shallowest first
   const sortedDirs = [...dirs].sort((a, b) => countSlashes(a.dir_path) - countSlashes(b.dir_path));

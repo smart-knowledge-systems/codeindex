@@ -13,6 +13,7 @@ import {
 import { getPg, pgUnsafe, closePg } from "./db/pg";
 import { getSqlite, closeSqlite } from "./db/sqlite";
 import { serializeEmbedding } from "./db/util";
+import { getRepoIdByPath } from "./db/repo-lookup";
 import { walkRepo, MAX_FILE_SIZE } from "./index/walker";
 import { extractSkeletonWithEntries, initParser } from "./index/skeleton";
 import { formatAndHash } from "./index/formatter";
@@ -838,11 +839,10 @@ async function cmdManifest(repoRoot: string) {
   const config = await loadConfig(repoRoot);
 
   // --- Indexed data from DB ---
+  const repoId = await getRepoIdByPath(repoRoot);
   const dbStats = await (async () => {
+    if (repoId === null) return null;
     if (config.store === "pg") {
-      const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
-      if (repos.length === 0) return null;
-      const repoId = repos[0].id;
       const fc = await pgUnsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [repoId]);
       const fp = (await pgUnsafe(
         "SELECT file_path FROM files WHERE repo_id = $1 ORDER BY file_path",
@@ -860,11 +860,6 @@ async function cmdManifest(repoRoot: string) {
       };
     } else {
       const db = await getSqlite(repoRoot);
-      const repos = db.prepare("SELECT id FROM repos WHERE root_path = ?").all(repoRoot) as {
-        id: number;
-      }[];
-      if (repos.length === 0) return null;
-      const repoId = repos[0].id;
       const fc = db.prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?").get(repoId) as {
         cnt: number;
       };

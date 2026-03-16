@@ -4,8 +4,7 @@ import { extractSkeletonWithEntries } from "../index/skeleton";
 import { formatAndHash } from "../index/formatter";
 import { scanForSecrets } from "../index/secrets";
 import { extractImports } from "../index/imports";
-import { pgUnsafe } from "../db/pg";
-import { getSqlite } from "../db/sqlite";
+import { getStoreOps } from "../repo";
 import { logEvent, hashPath } from "../logging";
 import type { PipelineContext, CollectedFile, CollectStage } from "./types";
 
@@ -67,26 +66,14 @@ async function processFile(
 // Impure shell — I/O for loading hashes and reading files
 // ---------------------------------------------------------------------------
 
-async function loadExistingHashes(
-  repoRoot: string,
-  repoId: number,
-  store: string,
-): Promise<Map<string, string>> {
+async function loadExistingHashes(repoRoot: string, repoId: number): Promise<Map<string, string>> {
+  const { ops } = await getStoreOps(repoRoot);
+  const rows = await ops.query<{ file_path: string; content_hash: string }>(
+    "SELECT file_path, content_hash FROM files WHERE repo_id = $1",
+    [repoId],
+  );
   const hashes = new Map<string, string>();
-
-  if (store === "pg") {
-    const rows = (await pgUnsafe("SELECT file_path, content_hash FROM files WHERE repo_id = $1", [
-      repoId,
-    ])) as { file_path: string; content_hash: string }[];
-    for (const r of rows) hashes.set(r.file_path, r.content_hash);
-  } else {
-    const db = await getSqlite(repoRoot);
-    const rows = db
-      .prepare("SELECT file_path, content_hash FROM files WHERE repo_id = ?")
-      .all(repoId) as { file_path: string; content_hash: string }[];
-    for (const r of rows) hashes.set(r.file_path, r.content_hash);
-  }
-
+  for (const r of rows) hashes.set(r.file_path, r.content_hash);
   return hashes;
 }
 
@@ -98,11 +85,11 @@ async function loadExistingHashes(
 export const collectFiles: CollectStage = async (
   ctx: PipelineContext,
 ): Promise<CollectedFile[]> => {
-  const { repoRoot, repoId, config, store, force } = ctx;
+  const { repoRoot, repoId, config, force } = ctx;
 
   const existingHashes = force
     ? new Map<string, string>()
-    : await loadExistingHashes(repoRoot, repoId, store);
+    : await loadExistingHashes(repoRoot, repoId);
 
   const collected: CollectedFile[] = [];
 

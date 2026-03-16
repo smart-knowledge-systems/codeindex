@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { pgUnsafe } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
 import { loadConfig } from "./config";
+import { getStoreOps } from "./repo";
 import { logEvent } from "./logging";
 
 // ---------------------------------------------------------------------------
@@ -93,23 +94,15 @@ export async function recordCost(
     return;
   }
 
-  const { repoId, repoRoot, store: ctxStore } = ctx;
+  const { repoId, repoRoot } = ctx;
   const costUsd = computeCostUsd(model, tokensIn, tokensOut);
 
-  const store = ctxStore ?? (await loadConfig(repoRoot)).store;
-  if (store === "pg") {
-    await pgUnsafe(
-      `INSERT INTO cost_events (repo_id, operation, model, tokens_in, tokens_out, cost_usd)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [repoId, operation, model, tokensIn, tokensOut, costUsd],
-    );
-  } else {
-    const db = await getSqlite(repoRoot);
-    db.prepare(
-      `INSERT INTO cost_events (repo_id, operation, model, tokens_in, tokens_out, cost_usd)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(repoId, operation, model, tokensIn, tokensOut, costUsd);
-  }
+  const { ops } = await getStoreOps(repoRoot);
+  await ops.run(
+    `INSERT INTO cost_events (repo_id, operation, model, tokens_in, tokens_out, cost_usd)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [repoId, operation, model, tokensIn, tokensOut, costUsd],
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -213,25 +206,12 @@ const COST_SUMMARY_SQL = `SELECT operation, model,
  FROM cost_events`;
 
 export async function getCostSummary(repoRoot: string, repoId?: number): Promise<CostSummaryRow[]> {
-  const config = await loadConfig(repoRoot);
-
-  if (config.store === "pg") {
-    const whereClause = repoId != null ? "WHERE repo_id = $1" : "";
-    const params = repoId != null ? [repoId] : [];
-    const rows = await pgUnsafe(
-      `${COST_SUMMARY_SQL} ${whereClause} GROUP BY operation, model ORDER BY total_cost_usd DESC`,
-      params,
-    );
-    return rows.map((r: Record<string, unknown>) => normalizeCostRow(r));
-  }
-
-  const db = await getSqlite(repoRoot);
-  const whereClause = repoId != null ? "WHERE repo_id = ?" : "";
+  const { ops } = await getStoreOps(repoRoot);
+  const whereClause = repoId != null ? "WHERE repo_id = $1" : "";
   const params = repoId != null ? [repoId] : [];
-  const rows = db
-    .prepare(
-      `${COST_SUMMARY_SQL} ${whereClause} GROUP BY operation, model ORDER BY total_cost_usd DESC`,
-    )
-    .all(...params) as Record<string, unknown>[];
+  const rows = await ops.query<Record<string, unknown>>(
+    `${COST_SUMMARY_SQL} ${whereClause} GROUP BY operation, model ORDER BY total_cost_usd DESC`,
+    params,
+  );
   return rows.map(normalizeCostRow);
 }

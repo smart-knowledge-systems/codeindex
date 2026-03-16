@@ -20,6 +20,7 @@ import { recordEvent } from "../telemetry";
 import { logEvent, getSessionId } from "../logging";
 import { EmbeddingCache } from "./cache";
 import { reindexSingleFile, loadFileIndex } from "../index/reindex";
+import { getRepoIdByPath } from "../db/repo-lookup";
 import type { TransactionSQL } from "bun";
 
 // ---------------------------------------------------------------------------
@@ -420,18 +421,6 @@ function validatePaths(paths: string[], repoRoot: string): string | null {
     }
   }
   return null;
-}
-
-async function lookupRepoId(repoRoot: string, store: string): Promise<number | null> {
-  if (store === "pg") {
-    const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
-    return repos.length > 0 ? (repos[0].id as number) : null;
-  }
-  const db = await getSqlite(repoRoot);
-  const repo = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoRoot) as
-    | { id: number }
-    | undefined;
-  return repo?.id ?? null;
 }
 
 async function refreshFileId(
@@ -1290,7 +1279,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
         // Get repo ID
         const config = await loadConfig(repoRoot);
-        const repoId = await lookupRepoId(repoRoot, config.store);
+        const repoId = await getRepoIdByPath(repoRoot);
         if (repoId === null) return mcpError("Repository not indexed yet");
 
         // Pre-load file index once for import resolution across the batch

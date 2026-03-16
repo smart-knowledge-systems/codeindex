@@ -35,16 +35,22 @@ interface ListRow {
 // Store abstraction — eliminates repeated pg/sqlite branching
 // ---------------------------------------------------------------------------
 
-interface StoreOps {
+export interface StoreOps {
   query: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
   run: (sql: string, params?: unknown[]) => Promise<void>;
 }
 
+/** Convert pg-style `$1, $2, ...` placeholders to sqlite-style `?`. */
+function pgToSqlite(sql: string): string {
+  return sql.replace(/\$\d+/g, "?");
+}
+
 /**
  * Create a store-agnostic query interface based on configuration.
- * All DB operations in this module flow through this adapter.
+ * SQL should use pg-style `$1` placeholders — they are auto-converted
+ * to `?` for SQLite.
  */
-async function getStoreOps(repoRoot: string): Promise<{ store: string; ops: StoreOps }> {
+export async function getStoreOps(repoRoot: string): Promise<{ store: string; ops: StoreOps }> {
   const config = await loadConfig(repoRoot);
 
   if (config.store === "pg") {
@@ -65,9 +71,9 @@ async function getStoreOps(repoRoot: string): Promise<{ store: string; ops: Stor
     store: "sqlite",
     ops: {
       query: async <T>(sql: string, params?: unknown[]) =>
-        db.prepare(sql).all(...((params ?? []) as SqlBindings)) as T[],
+        db.prepare(pgToSqlite(sql)).all(...((params ?? []) as SqlBindings)) as T[],
       run: async (sql: string, params?: unknown[]) => {
-        db.prepare(sql).run(...((params ?? []) as SqlBindings));
+        db.prepare(pgToSqlite(sql)).run(...((params ?? []) as SqlBindings));
       },
     },
   };
