@@ -58,7 +58,7 @@ export async function cmdSearch(
     }
   } else if (format === "pretty") {
     if (results.length === 0) {
-      console.log("No results found.");
+      // zero-result diagnostic is printed below
     } else {
       const multiRepo = new Set(results.map((r) => r.repoName ?? r.repoId)).size > 1;
       for (const r of results) {

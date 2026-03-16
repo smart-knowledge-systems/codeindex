@@ -4,6 +4,11 @@ import { ensurePgSchema, ensureSqliteSchema } from "../db/schema";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { getRepoOrigin, getRepoName } from "../index/commits";
+import { MAX_FILE_SIZE } from "../index/walker";
+import { scanForSecrets } from "../index/secrets";
+import { formatAndHash } from "../index/formatter";
+import { extractSkeletonWithEntries } from "../index/skeleton";
+import { extractImports } from "../index/imports";
 
 export async function ensureRepo(repoRoot: string): Promise<number> {
   const config = await loadConfig(repoRoot);
@@ -55,12 +60,6 @@ export async function collectChangedFiles(
           .all(repoId) as { file_path: string; content_hash: string }[]);
 
   const existingHashes = new Map(hashRows.map((r) => [r.file_path, r.content_hash] as const));
-
-  const { MAX_FILE_SIZE } = await import("../index/walker");
-  const { scanForSecrets } = await import("../index/secrets");
-  const { formatAndHash } = await import("../index/formatter");
-  const { extractSkeletonWithEntries } = await import("../index/skeleton");
-  const { extractImports } = await import("../index/imports");
 
   const collected: import("../pipeline").CollectedFile[] = [];
 
