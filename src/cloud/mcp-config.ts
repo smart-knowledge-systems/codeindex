@@ -90,27 +90,25 @@ export async function cloudMcpConfig(parsed: ParsedArgs): Promise<void> {
     process.exit(1);
   }
 
-  const config = buildMcpConfig(client.baseUrl, "$(cidx cloud token)");
+  // Read the actual token for both print and install modes
+  const credPath = CloudClient.getCredentialsPath();
+  const credFile = Bun.file(credPath);
+  let token = "";
+  try {
+    const creds = (await credFile.json()) as { token: string };
+    token = creds.token;
+  } catch {
+    process.stderr.write("Could not read credentials. Run `cidx cloud login` first.\n");
+    process.exit(1);
+  }
 
-  // Read the actual token for install mode
+  const config = buildMcpConfig(client.baseUrl, token);
+
   if (hasFlag(parsed, "install")) {
-    // Re-read credentials to get the raw token
-    const credPath = CloudClient.getCredentialsPath();
-    const credFile = Bun.file(credPath);
-    let token = "";
-    try {
-      const creds = (await credFile.json()) as { token: string };
-      token = creds.token;
-    } catch {
-      process.stderr.write("Could not read credentials. Run `cidx cloud login` first.\n");
-      process.exit(1);
-    }
-
-    const installConfig = buildMcpConfig(client.baseUrl, token);
     const editor = flag(parsed, "config-name") ?? "claude-code";
 
     try {
-      const ok = await installToEditor(installConfig, editor);
+      const ok = await installToEditor(config, editor);
       if (!ok) process.exit(1);
     } catch (err) {
       process.stderr.write(`Install failed: ${formatError(err)}\n`);
