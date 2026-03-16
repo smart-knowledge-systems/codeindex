@@ -20,7 +20,7 @@ const DEFAULTS: CodeindexConfig = {
   },
   scoring: {
     commitDecay: 0.2,
-    commitDepth: 5,
+    commitDepth: 10,
     alpha: 0.15,
     beta: 0.2,
     gamma: 0.1,
