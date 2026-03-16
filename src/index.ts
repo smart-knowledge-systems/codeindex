@@ -110,6 +110,7 @@ Commands:
     --format <f>       json|mermaid|dot (default: mermaid)
   xref <symbol>        Cross-reference a symbol across repos
     --format <f>       json|table (default: table)
+  auth                 Configure embedding provider credentials
   doctor               Check environment and configuration
   cloud <sub>          Cloud platform commands
     login              Authenticate with cidx cloud
@@ -144,6 +145,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   serve:
     "Usage: codeindex serve [options]\n\nOptions:\n  --transport <t>       stdio (default) or sse\n  --port <n>            Port for SSE transport (default 3100)",
   init: "Usage: codeindex init\n\nInitializes codeindex in the current repository.",
+  auth: "Usage: codeindex auth\n\nInteractively configure embedding provider credentials.\nSupported providers: OpenAI, Ollama.\nCredentials are stored in ~/.config/codeindex/.env",
   doctor: "Usage: codeindex doctor\n\nChecks environment and configuration health.",
   check:
     "Usage: codeindex check [options]\n\nOptions:\n  --json                Output as JSON\n  --quality             Run quality checks\n  --dataset <path>      Quality dataset path\n  --baseline <path>     Quality baseline path",
@@ -543,6 +545,12 @@ async function main() {
       case "telemetry":
         await cmdTelemetry(parsed);
         break;
+
+      case "auth": {
+        const { cmdAuth } = await import("./commands/auth");
+        await cmdAuth();
+        break;
+      }
 
       case "doctor":
         await cmdDoctor(repoRoot);
