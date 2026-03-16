@@ -43,6 +43,8 @@ export interface PipelineContext {
   store: "pg" | "sqlite"; // convenience alias for config.store
   dryRun: boolean; // when true, collect runs but embed/store are skipped
   force: boolean; // when true, collect bypasses content-hash dedup
+  repoVisibility?: "public" | "private" | "unknown";
+  secretOverrideCount?: number; // mutable accumulator
 }
 
 // ---------------------------------------------------------------------------

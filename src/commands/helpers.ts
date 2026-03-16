@@ -6,6 +6,7 @@ import { getSqlite } from "../db/sqlite";
 import { getRepoOrigin, getRepoName } from "../index/commits";
 import { MAX_FILE_SIZE } from "../index/walker";
 import { scanForSecrets } from "../index/secrets";
+import { isPublishedContent } from "../index/public-repo";
 import { formatAndHash } from "../index/formatter";
 import { extractSkeletonWithEntries } from "../index/skeleton";
 import { extractImports } from "../index/imports";
@@ -72,8 +73,15 @@ export async function collectChangedFiles(
 
     const scan = scanForSecrets(content);
     if (scan.hasSecrets) {
-      console.warn(`  SKIP ${relPath}: potential secrets (${scan.patterns.join(", ")})`);
-      continue;
+      if (ctx.repoVisibility === "public" && (await isPublishedContent(ctx.repoRoot, relPath))) {
+        console.warn(
+          `  OVERRIDE ${relPath}: secret patterns [${scan.patterns.join(", ")}] overridden — public repo, published content`,
+        );
+        if (ctx.secretOverrideCount != null) ctx.secretOverrideCount++;
+      } else {
+        console.warn(`  SKIP ${relPath}: potential secrets (${scan.patterns.join(", ")})`);
+        continue;
+      }
     }
 
     const ext = path.extname(relPath).toLowerCase() || ".txt";

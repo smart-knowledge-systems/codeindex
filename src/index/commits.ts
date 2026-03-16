@@ -5,7 +5,9 @@ import { logEvent } from "../logging";
 // Result type — makes success vs failure explicit for callers
 // ---------------------------------------------------------------------------
 
-type GitResult = { ok: true; stdout: string } | { ok: false; error: Error; exitCode: number };
+export type GitResult =
+  | { ok: true; stdout: string }
+  | { ok: false; error: Error; exitCode: number };
 
 // ---------------------------------------------------------------------------
 // Git runner with structured error logging
@@ -17,7 +19,7 @@ interface CommitEntry {
   date: string;
 }
 
-async function runGit(args: string[], operation: string): Promise<GitResult> {
+export async function runGit(args: string[], operation: string): Promise<GitResult> {
   try {
     const proc = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
     const exitCode = await proc.exited;
