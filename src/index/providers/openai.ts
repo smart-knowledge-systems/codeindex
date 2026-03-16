@@ -147,7 +147,23 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
 
     const results: number[][] = [];
     for (const batch of batches) {
-      results.push(...(await this.embedBatch(batch)));
+      try {
+        results.push(...(await this.embedBatch(batch)));
+      } catch (err) {
+        process.stderr.write(
+          `  WARN: batch of ${batch.length} texts failed, skipping: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        logEvent({
+          event: "infra.embed.batch_skipped",
+          provider: this.name,
+          batch_size: batch.length,
+          "error.message": err instanceof Error ? err.message : String(err),
+        });
+        // Return empty embeddings for failed batch so indexing continues
+        for (let i = 0; i < batch.length; i++) {
+          results.push([]);
+        }
+      }
     }
     return results;
   }

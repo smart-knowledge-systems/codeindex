@@ -72,5 +72,19 @@ export const embedFiles: EmbedStage = async (
   const exceeded = await checkAndLogCostCap(repoRoot, repoId, config);
   if (exceeded) return [];
 
-  return files.map((f, i) => ({ ...f, embedding: embeddings[i] }));
+  // Filter out files whose embeddings failed (empty array)
+  const results: EmbeddedFile[] = [];
+  let skipped = 0;
+  for (let i = 0; i < files.length; i++) {
+    if (embeddings[i].length > 0) {
+      results.push({ ...files[i], embedding: embeddings[i] });
+    } else {
+      skipped++;
+    }
+  }
+  if (skipped > 0) {
+    process.stderr.write(`  ${skipped} file(s) skipped due to embedding failures\n`);
+    logEvent({ event: "infra.embed.skipped_files", count: skipped });
+  }
+  return results;
 };
