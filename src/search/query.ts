@@ -544,19 +544,15 @@ async function searchPgInTransaction(
     dirSummaryByPath.set(`${d.repo_id}:${d.dir_path}`, d.summary);
   }
 
-  // Build commit link map: file_id -> links[]
+  // Build commit link map and commit id set in a single pass
   const linksByFileId = new Map<number, Array<{ recency: number; similarity: number }>>();
+  const commitIdsByFileId = new Map<number, string[]>();
   for (const link of linkRows) {
     const fileId = parseInt(link.file_id);
     const links = linksByFileId.get(fileId) ?? [];
     links.push({ recency: parseInt(link.recency), similarity: parseFloat(link.similarity) });
     linksByFileId.set(fileId, links);
-  }
 
-  // Build commit id set by file
-  const commitIdsByFileId = new Map<number, string[]>();
-  for (const link of linkRows) {
-    const fileId = parseInt(link.file_id);
     const ids = commitIdsByFileId.get(fileId) ?? [];
     ids.push(link.commit_id);
     commitIdsByFileId.set(fileId, ids);
