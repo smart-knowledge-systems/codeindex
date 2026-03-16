@@ -69,6 +69,8 @@ async function fetchAllRepoIds(): Promise<number[]> {
  * Wrap PG queries in an RLS-scoped transaction.
  * For scoped sessions: uses session.repoIds.
  * For full-access / no session: queries all repo IDs so RLS passes.
+ *
+ * @internal Not intended for use outside `src/mcp/` — exported only for tool sub-modules.
  */
 export async function withMcpScope<T>(
   session: AuthSession | undefined,
