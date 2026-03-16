@@ -43,7 +43,7 @@ export async function cloudSearch(parsed: ParsedArgs): Promise<void> {
       return;
     }
 
-    if (hasFlag(parsed, "pretty")) {
+    if (hasFlag(parsed, "pretty") || !hasFlag(parsed, "json")) {
       process.stdout.write(formatPretty(results));
       return;
     }
