@@ -17,6 +17,9 @@ async function checkAndLogCostCap(
   const cap = await checkCostCap(repoRoot, repoId);
 
   if (cap.current >= (config.costCap.warnAt ?? Infinity)) {
+    process.stderr.write(
+      `Warning: embedding cost $${cap.current.toFixed(4)} approaching cap $${cap.limit?.toFixed(4)}\n`,
+    );
     logEvent({
       event: "infra.cost.warning",
       current_cost: cap.current,
@@ -25,6 +28,9 @@ async function checkAndLogCostCap(
   }
 
   if (cap.exceeded) {
+    process.stderr.write(
+      `Cost cap exceeded: $${cap.current.toFixed(4)} >= $${cap.limit?.toFixed(4)}. Aborting embedding.\n`,
+    );
     logEvent({
       event: "infra.cost.exceeded",
       current_cost: cap.current,
