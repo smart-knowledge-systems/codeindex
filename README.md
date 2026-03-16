@@ -6,7 +6,7 @@ A semantic search engine for codebases. Uses embeddings, AST extraction, import 
 
 - [Bun](https://bun.sh) runtime
 - One of:
-  - `OPENAI_API_KEY` for OpenAI `text-embedding-3-small` embeddings, or
+  - [OpenAI](https://platform.openai.com) API key for `text-embedding-3-small` embeddings, or
   - [Ollama](https://ollama.com) with `nomic-embed-text` for local embeddings (no API key needed)
 - `claude` CLI or `ANTHROPIC_API_KEY` (for directory summary generation)
 - PostgreSQL with [pgvector](https://github.com/pgvector/pgvector) (optional — SQLite is the default)
@@ -16,17 +16,42 @@ A semantic search engine for codebases. Uses embeddings, AST extraction, import 
 ```bash
 bun install
 
+# Add `codeindex` and `cidx` to your PATH
+bun link
+
+# Configure your embedding provider (interactive — saves to ~/.config/codeindex/.env)
+codeindex auth
+
 # Initialize in any git repo (auto-detects SQLite by default)
-bun src/index.ts init
+codeindex init
 
 # Or with PostgreSQL (auto-detected if PGHOST or DATABASE_URL is set)
-PGHOST=localhost bun src/index.ts init
+PGHOST=localhost codeindex init
 
 # Or use the guided setup wizard (multi-repo scanning, store selection)
-bun src/index.ts setup
+codeindex setup
 ```
 
-Run `bun src/index.ts doctor` to verify your environment is configured correctly.
+After `bun link`, both `codeindex` and `cidx` are available globally. All examples below use `codeindex` but `cidx` works identically.
+
+Run `codeindex doctor` to verify your environment is configured correctly.
+
+### Embedding provider credentials
+
+`codeindex auth` is the recommended way to configure credentials. It stores them globally at `~/.config/codeindex/.env` so they work from any directory without polluting per-project environments.
+
+You can also set credentials manually:
+
+| Method | Scope | Example |
+|--------|-------|---------|
+| `codeindex auth` | Global (all repos) | Interactive setup |
+| `~/.config/codeindex/.env` | Global (all repos) | `CODEINDEX_OPENAI_API_KEY=sk-...` |
+| Project `.env` file | Single repo | `OPENAI_API_KEY=sk-...` |
+| Shell export | Session | `export OPENAI_API_KEY=sk-...` |
+
+Priority (highest wins): shell export > project `.env` > `CODEINDEX_OPENAI_API_KEY` > global `.env`
+
+The dedicated `CODEINDEX_OPENAI_API_KEY` env var is useful when other projects in your workflow use different OpenAI keys — it only takes effect within codeindex.
 
 ## Usage
 
@@ -34,35 +59,35 @@ Run `bun src/index.ts doctor` to verify your environment is configured correctly
 
 ```bash
 # Full reindex of the current directory
-bun src/index.ts reindex
+codeindex reindex
 
 # Preview what would be indexed and projected cost
-bun src/index.ts reindex --dry-run
+codeindex reindex --dry-run
 
 # Set a cost cap (USD)
-bun src/index.ts reindex --budget 2.00
+codeindex reindex --budget 2.00
 
 # Parallel reindex of all registered repos
-bun src/index.ts reindex --scope all --workers 4
+codeindex reindex --scope all --workers 4
 ```
 
 ### Search
 
 ```bash
 # Semantic search (JSON output)
-bun src/index.ts search "authentication middleware"
+codeindex search "authentication middleware"
 
 # Human-readable output
-bun src/index.ts search "database connection pooling" --pretty
+codeindex search "database connection pooling" --pretty
 
 # With filtering and options
-bun src/index.ts search "error handling" --lang ts --dir src/api --since 30d --top-n 10
+codeindex search "error handling" --lang ts --dir src/api --since 30d --top-n 10
 
 # With code snippets and score breakdown
-bun src/index.ts search "scoring formula" --include-snippet --explain --pretty
+codeindex search "scoring formula" --include-snippet --explain --pretty
 
 # Cross-repo search
-bun src/index.ts search "API endpoints" --scope all
+codeindex search "API endpoints" --scope all
 ```
 
 ### MCP server (agent integration)
@@ -71,10 +96,10 @@ Start a persistent MCP server for AI agent integration with Claude Code, Cursor,
 
 ```bash
 # stdio transport (default — for Claude Code, Cursor)
-bun src/index.ts serve
+codeindex serve
 
 # SSE transport (for remote/web clients)
-bun src/index.ts serve --transport sse --port 3100
+codeindex serve --transport sse --port 3100
 ```
 
 Exposes 14 MCP tools including `search`, `batchSearch`, `searchChanged`, `intent`, `drift`, `status`, `health`, `check`, `getImporters`, `getDependencies`, `traceImportChain`, `getCrossRepoEdges`, `findImplementors`, `findCallers`, and `reindexFiles`. Authenticated via scoped tokens. Eliminates CLI startup overhead for agent workflows.
@@ -85,10 +110,10 @@ Generate and monitor an `AGENTS.md` file that maps directory structure to purpos
 
 ```bash
 # Generate AGENTS.md from indexed directory summaries
-bun src/index.ts intent --out AGENTS.md
+codeindex intent --out AGENTS.md
 
 # Detect stale summaries
-bun src/index.ts drift --threshold 0.3
+codeindex drift --threshold 0.3
 ```
 
 ### Repo management
@@ -96,11 +121,11 @@ bun src/index.ts drift --threshold 0.3
 Manage multiple indexed repositories (PostgreSQL backend):
 
 ```bash
-bun src/index.ts repo add /path/to/repo
-bun src/index.ts repo list
-bun src/index.ts repo status my-repo
-bun src/index.ts repo remove my-repo
-bun src/index.ts repo purge my-repo --force
+codeindex repo add /path/to/repo
+codeindex repo list
+codeindex repo status my-repo
+codeindex repo remove my-repo
+codeindex repo purge my-repo --force
 ```
 
 ### Cross-repo intelligence
@@ -109,11 +134,11 @@ Trace symbols and dependencies across repositories:
 
 ```bash
 # Find all consumers of a symbol across repos
-bun src/index.ts xref UserDTO
+codeindex xref UserDTO
 
 # Dependency graph (JSON, Mermaid, or DOT)
-bun src/index.ts graph --format mermaid
-bun src/index.ts graph --format dot | dot -Tsvg > deps.svg
+codeindex graph --format mermaid
+codeindex graph --format dot | dot -Tsvg > deps.svg
 ```
 
 ### Health checks
@@ -121,21 +146,21 @@ bun src/index.ts graph --format dot | dot -Tsvg > deps.svg
 Policy-based index health validation:
 
 ```bash
-bun src/index.ts check         # Run all health policies
-bun src/index.ts check --json  # Machine-readable output
+codeindex check         # Run all health policies
+codeindex check --json  # Machine-readable output
 ```
 
 ### Export and CI/CD
 
 ```bash
 # Export PG index to portable SQLite (embeddings redacted by default)
-bun src/index.ts export --out snapshot.db
+codeindex export --out snapshot.db
 
 # Include embeddings in export
-bun src/index.ts export --out snapshot.db --include-embeddings
+codeindex export --out snapshot.db --include-embeddings
 
 # Use exported index in read-only mode
-bun src/index.ts search "auth" --path ./snapshot.db --read-only
+codeindex search "auth" --path ./snapshot.db --read-only
 ```
 
 ### Access control (shared PG)
@@ -143,24 +168,25 @@ bun src/index.ts search "auth" --path ./snapshot.db --read-only
 Scoped tokens for multi-tenant PostgreSQL deployments:
 
 ```bash
-bun src/index.ts token create --name ci-reader --repos 1,2,3
-bun src/index.ts token list
-bun src/index.ts token revoke --id 7
+codeindex token create --name ci-reader --repos 1,2,3
+codeindex token list
+codeindex token revoke --id 7
 ```
 
 ### Other commands
 
 ```bash
-bun src/index.ts status               # Index stats
-bun src/index.ts status --cost        # Token usage and cost breakdown
-bun src/index.ts config               # Show current config
-bun src/index.ts manifest             # Audit trail: indexed, skipped, flagged files
-bun src/index.ts install-hook         # Install post-commit hook for auto-indexing
-bun src/index.ts doctor               # Verify environment and configuration
-bun src/index.ts xref <symbol>           # Cross-repo symbol resolution
-bun src/index.ts graph                   # Dependency DAG visualization
-bun src/index.ts telemetry               # Usage telemetry management
-bun src/index.ts mcp-config              # Print MCP server config for editors
+codeindex auth                 # Configure embedding provider credentials
+codeindex status               # Index stats
+codeindex status --cost        # Token usage and cost breakdown
+codeindex config               # Show current config
+codeindex manifest             # Audit trail: indexed, skipped, flagged files
+codeindex install-hook         # Install post-commit hook for auto-indexing
+codeindex doctor               # Verify environment and configuration
+codeindex xref <symbol>           # Cross-repo symbol resolution
+codeindex graph                   # Dependency DAG visualization
+codeindex telemetry               # Usage telemetry management
+codeindex mcp-config              # Print MCP server config for editors
 ```
 
 ## How it works
@@ -208,8 +234,8 @@ Results include files, directories, and commits. Per-language scoring profiles a
 
 | Provider | Model | Cost | Setup |
 |----------|-------|------|-------|
-| **OpenAI** (default) | `text-embedding-3-small` | ~$0.02/1K files | `OPENAI_API_KEY` env var |
-| **Ollama** (local) | `nomic-embed-text` | Free | `ollama pull nomic-embed-text` |
+| **OpenAI** (default) | `text-embedding-3-small` | ~$0.02/1K files | `codeindex auth` or `OPENAI_API_KEY` env var |
+| **Ollama** (local) | `nomic-embed-text` | Free | `codeindex auth` or `ollama pull nomic-embed-text` |
 | **Anthropic** | `voyage-3-lite` | ~$0.02/1K files | `ANTHROPIC_API_KEY` env var |
 
 ## Ignore patterns
