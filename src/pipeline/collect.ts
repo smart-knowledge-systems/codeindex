@@ -28,6 +28,7 @@ async function processFile(
 ): Promise<CollectedFile | null> {
   const scan = scanForSecrets(file.content);
   if (scan.hasSecrets) {
+    process.stderr.write(`  SKIP ${file.relPath}: potential secrets detected\n`);
     logEvent({
       event: "infra.secrets.detected",
       file_path_hash: hashPath(file.relPath),
