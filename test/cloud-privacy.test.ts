@@ -28,6 +28,7 @@ describe("cloud privacy", () => {
     expect(safe.skeletonEntries).toBeTruthy();
     expect(safe.fileType).toBe(".ts");
     expect(safe.importEdges).toHaveLength(1);
+    expect(safe.sizeBytes).toBe(new TextEncoder().encode(mockFile.content).length);
   });
 
   it("stripForCloud output serializes without content or absPath", () => {
@@ -50,6 +51,7 @@ describe("cloud privacy", () => {
       skeletonEntries: mockFile.skeletonEntries,
       fileType: ".ts",
       importEdges: mockFile.importEdges,
+      sizeBytes: new TextEncoder().encode(mockFile.content).length,
     });
   });
 });

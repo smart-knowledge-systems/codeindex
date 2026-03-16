@@ -25,6 +25,7 @@ export interface CloudSafeFile {
   skeletonEntries: string | null;
   fileType: string;
   importEdges: CollectedFile["importEdges"];
+  sizeBytes: number;
 }
 
 export function stripForCloud(file: CollectedFile): CloudSafeFile {
@@ -35,6 +36,7 @@ export function stripForCloud(file: CollectedFile): CloudSafeFile {
     skeletonEntries: file.skeletonEntries,
     fileType: file.fileType,
     importEdges: file.importEdges,
+    sizeBytes: new TextEncoder().encode(file.content).length,
   };
 }
 
@@ -242,7 +244,7 @@ export async function cloudReindex(repoRoot: string, parsed: ParsedArgs): Promis
           contentHash: f.contentHash,
           path: f.relPath,
           language: f.fileType,
-          sizeBytes: new TextEncoder().encode(f.skeleton).length,
+          sizeBytes: f.sizeBytes,
         })),
       };
 
