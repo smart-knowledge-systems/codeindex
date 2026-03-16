@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import path from "path";
 import { unlink } from "fs/promises";
 import { mkdirSync } from "fs";
@@ -26,11 +27,18 @@ export async function cloudLogin(): Promise<void> {
     reject: rejectToken,
   } = Promise.withResolvers<string>();
 
+  const state = randomBytes(32).toString("hex");
+
   const callbackServer = Bun.serve({
     port: 0, // ephemeral port
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
       const sessionToken = url.searchParams.get("session_token");
+      const returnedState = url.searchParams.get("state");
+
+      if (returnedState !== state) {
+        return new Response("Invalid state parameter — possible CSRF attack", { status: 403 });
+      }
 
       if (sessionToken) {
         resolveToken(sessionToken);
@@ -44,7 +52,7 @@ export async function cloudLogin(): Promise<void> {
   });
 
   const callbackUrl = `http://localhost:${callbackServer.port}/callback`;
-  const loginUrl = `${CLOUD_URL}/auth/login?redirect_uri=${encodeURIComponent(callbackUrl)}`;
+  const loginUrl = `${CLOUD_URL}/auth/login?redirect_uri=${encodeURIComponent(callbackUrl)}&state=${encodeURIComponent(state)}`;
 
   // Open browser
   try {
