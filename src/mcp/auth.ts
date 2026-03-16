@@ -1,8 +1,6 @@
 import { validateToken } from "../auth/tokens";
-import { loadConfig } from "../config";
-import { pgUnsafe } from "../db/pg";
-import { getSqlite } from "../db/sqlite";
 import { getRepoIdByPath } from "../db/repo-lookup";
+import { getStoreOps } from "../repo";
 
 export interface AuthSession {
   repoIds: number[] | null; // null = full access (no tokens exist)
@@ -13,15 +11,9 @@ export interface AuthSession {
  * Check if any access tokens exist in the database.
  */
 async function hasTokens(repoRoot: string): Promise<boolean> {
-  const config = await loadConfig(repoRoot);
-  if (config.store === "pg") {
-    const rows = (await pgUnsafe("SELECT 1 FROM access_tokens LIMIT 1")) as unknown[];
-    return rows.length > 0;
-  } else {
-    const db = await getSqlite(repoRoot);
-    const row = db.prepare("SELECT 1 FROM access_tokens LIMIT 1").get();
-    return row != null;
-  }
+  const { ops } = await getStoreOps(repoRoot);
+  const rows = await ops.query<{ "1": number }>("SELECT 1 FROM access_tokens LIMIT 1");
+  return rows.length > 0;
 }
 
 /**
