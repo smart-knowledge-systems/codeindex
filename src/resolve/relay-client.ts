@@ -21,7 +21,7 @@ interface RelayMessage {
   filePath?: string;
   content?: string | null;
   error?: string;
-  publicKey?: string;
+  authToken?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,11 +75,11 @@ export class RelayClient {
       this.ws.addEventListener("open", () => {
         clearTimeout(connectTimeout);
         this.reconnectAttempt = 0;
-        // Send auth
+        // Send auth credential
         this.send({
           type: "key_exchange",
           requestId: "auth",
-          publicKey: this.token,
+          authToken: this.token,
         });
         resolve();
       });
