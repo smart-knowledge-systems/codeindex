@@ -1,21 +1,14 @@
 import type { HealthPolicy, PolicyContext, PolicyResult } from "../types";
-import { pgUnsafe } from "../../db/pg";
-import { getSqlite } from "../../db/sqlite";
+import { storeQueryOne } from "../store-query";
 
 async function hasEmbeddings(ctx: PolicyContext): Promise<boolean> {
-  if (ctx.store === "pg") {
-    const rows = (await pgUnsafe(
-      "SELECT count(*)::int AS cnt FROM cost_events WHERE repo_id = $1 AND operation = 'embed'",
-      [ctx.repoId],
-    )) as { cnt: number }[];
-    return rows[0].cnt > 0;
-  }
-
-  const db = await getSqlite(ctx.repoRoot);
-  const row = db
-    .prepare("SELECT count(*) AS cnt FROM cost_events WHERE repo_id = ? AND operation = 'embed'")
-    .get(ctx.repoId) as { cnt: number };
-  return row.cnt > 0;
+  const row = await storeQueryOne<{ cnt: number }>(
+    ctx,
+    "SELECT count(*)::int AS cnt FROM cost_events WHERE repo_id = $1 AND operation = 'embed'",
+    "SELECT count(*) AS cnt FROM cost_events WHERE repo_id = ? AND operation = 'embed'",
+    [ctx.repoId],
+  );
+  return row!.cnt > 0;
 }
 
 export const reindexCompleted: HealthPolicy = {

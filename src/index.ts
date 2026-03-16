@@ -53,7 +53,7 @@ import { createToken, listTokens, revokeToken } from "./auth/tokens";
 import { xrefSymbol, formatXrefTable, formatXrefJson } from "./xref";
 import type { SearchOptions } from "./search/types";
 import { formatError } from "./errors";
-import { logEvent } from "./logging";
+import { logEvent, setCorrelationContext, hashPath } from "./logging";
 import { resetTelemetry } from "./telemetry";
 
 // ---------------------------------------------------------------------------
@@ -141,20 +141,17 @@ async function collectChangedFiles(
 ): Promise<import("./pipeline").CollectedFile[]> {
   const { repoRoot, repoId, config, formatter, store } = ctx;
 
-  // Load existing hashes for dedup
-  const existingHashes = new Map<string, string>();
-  if (store === "pg") {
-    const rows = (await pgUnsafe("SELECT file_path, content_hash FROM files WHERE repo_id = $1", [
-      repoId,
-    ])) as { file_path: string; content_hash: string }[];
-    for (const r of rows) existingHashes.set(r.file_path, r.content_hash);
-  } else {
-    const db = await getSqlite(repoRoot);
-    const rows = db
-      .prepare("SELECT file_path, content_hash FROM files WHERE repo_id = ?")
-      .all(repoId) as { file_path: string; content_hash: string }[];
-    for (const r of rows) existingHashes.set(r.file_path, r.content_hash);
-  }
+  // Load existing hashes for dedup — built immutably from DB rows
+  const hashRows: { file_path: string; content_hash: string }[] =
+    store === "pg"
+      ? ((await pgUnsafe("SELECT file_path, content_hash FROM files WHERE repo_id = $1", [
+          repoId,
+        ])) as { file_path: string; content_hash: string }[])
+      : ((await getSqlite(repoRoot))
+          .prepare("SELECT file_path, content_hash FROM files WHERE repo_id = ?")
+          .all(repoId) as { file_path: string; content_hash: string }[]);
+
+  const existingHashes = new Map(hashRows.map((r) => [r.file_path, r.content_hash] as const));
 
   const collected: import("./pipeline").CollectedFile[] = [];
 
@@ -214,6 +211,7 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
 
   const repoId = await ensureRepo(repoRoot);
   setCurrentRepo(repoId, repoRoot, config.store);
+  setCorrelationContext({ repoId });
 
   // Check for embedding provider mismatch
   const currentProvider = config.embedding.provider ?? "openai";
@@ -351,7 +349,12 @@ async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, for
   await summarizeDirs(ctx, allFiles, nullSummaryProvider);
   console.log("Directory index complete.");
 
-  logEvent({ event: "reindex", repo: repoRoot, files_indexed: indexed, files_skipped: skipped });
+  logEvent({
+    event: "infra.reindex",
+    repo_hash: hashPath(repoRoot),
+    files_indexed: indexed,
+    files_skipped: skipped,
+  });
   console.log("Reindex complete.");
 }
 
@@ -363,38 +366,39 @@ async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string)
   const config = await loadConfig(repoRoot);
   const repoId = await ensureRepo(repoRoot);
   setCurrentRepo(repoId, repoRoot, config.store);
+  setCorrelationContext({ repoId });
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
 
   await initParser();
 
   const changedFiles = files.length > 0 ? files : await getChangedFiles(repoRoot, commitHash);
 
-  // Handle deletions inline — pipeline stages only process existing files
-  const existingFiles: string[] = [];
-  for (const relPath of changedFiles) {
-    const absPath = path.join(repoRoot, relPath);
-    const file = Bun.file(absPath);
-    if (!(await file.exists())) {
-      if (config.store === "pg") {
-        await pgUnsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [
-          repoId,
-          relPath,
-        ]);
-      } else {
-        const db = await getSqlite(repoRoot);
-        const rows = db
-          .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
-          .all(repoId, relPath) as { id: number }[];
-        if (rows.length > 0) {
-          db.transaction(() => {
-            db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(rows[0].id);
-            db.prepare("DELETE FROM file_commits WHERE file_id = ?").run(rows[0].id);
-            db.prepare("DELETE FROM files WHERE id = ?").run(rows[0].id);
-          })();
-        }
-      }
+  // Pure decision: partition changed files into deleted vs existing
+  const fileExistence = await Promise.all(
+    changedFiles.map(async (relPath) => ({
+      relPath,
+      exists: await Bun.file(path.join(repoRoot, relPath)).exists(),
+    })),
+  );
+  const deletedFiles = fileExistence.filter((f) => !f.exists).map((f) => f.relPath);
+  const existingFiles = fileExistence.filter((f) => f.exists).map((f) => f.relPath);
+
+  // Impure shell: execute deletions
+  for (const relPath of deletedFiles) {
+    if (config.store === "pg") {
+      await pgUnsafe("DELETE FROM files WHERE repo_id = $1 AND file_path = $2", [repoId, relPath]);
     } else {
-      existingFiles.push(relPath);
+      const db = await getSqlite(repoRoot);
+      const rows = db
+        .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
+        .all(repoId, relPath) as { id: number }[];
+      if (rows.length > 0) {
+        db.transaction(() => {
+          db.prepare("DELETE FROM file_embeddings WHERE file_id = ?").run(rows[0].id);
+          db.prepare("DELETE FROM file_commits WHERE file_id = ?").run(rows[0].id);
+          db.prepare("DELETE FROM files WHERE id = ?").run(rows[0].id);
+        })();
+      }
     }
   }
 
@@ -543,6 +547,13 @@ async function cmdSearch(
     changedSince?: string;
   },
 ) {
+  // Build search options declaratively
+  const resolveScope = (scope?: string): SearchOptions["scope"] => {
+    if (scope === "all") return "all";
+    if (scope && scope !== "project") return scope.split(",");
+    return undefined;
+  };
+
   const searchOpts: SearchOptions = {
     minScore: opts.minScore,
     topN: opts.topN,
@@ -553,17 +564,15 @@ async function cmdSearch(
     dir: opts.dir,
     since: opts.since,
     explain: opts.explain,
+    scope: resolveScope(opts.scope),
   };
 
-  if (opts.scope === "all") {
-    searchOpts.scope = "all";
-  } else if (opts.scope && opts.scope !== "project") {
-    searchOpts.scope = opts.scope.split(",");
-  }
+  // Select search strategy based on changedSince flag
+  const runSearch = opts.changedSince
+    ? () => searchChanged(repoRoot, opts.changedSince!, query, searchOpts)
+    : () => search(repoRoot, query, searchOpts);
 
-  const results = opts.changedSince
-    ? await searchChanged(repoRoot, opts.changedSince, query, searchOpts)
-    : await search(repoRoot, query, searchOpts);
+  const results = await runSearch();
 
   // Resolve output format: --format takes precedence over --pretty/--json
   const format = opts.format ?? (opts.pretty ? "pretty" : "json");
@@ -638,95 +647,142 @@ async function cmdExport(repoRoot: string, outPath: string, opts: ExportOptions 
 // status command
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Pure formatters for status output (Issue 5: separate formatting from I/O)
+// ---------------------------------------------------------------------------
+
+interface StatusData {
+  name: string;
+  rootPath: string;
+  store: string;
+  fileCount: number;
+  dirCount: number;
+  commitCount: number;
+  lastIndexed: string | null;
+  formatter: string | null;
+}
+
+function formatStatusLines(data: StatusData): string[] {
+  return [
+    `Repo: ${data.name} (${data.rootPath})`,
+    `Store: ${data.store}`,
+    `Files: ${data.fileCount}`,
+    `Directories: ${data.dirCount}`,
+    `Commits: ${data.commitCount}`,
+    `Last indexed: ${data.lastIndexed ?? "never"}`,
+    `Formatter: ${data.formatter ?? "auto-detect"}`,
+  ];
+}
+
+interface CostRow {
+  operation: string;
+  model: string;
+  totalTokensIn: number;
+  totalTokensOut: number;
+  totalCostUsd: number;
+}
+
+function formatCostLines(costRows: CostRow[]): string[] {
+  if (costRows.length === 0) return ["\nCost: no cost events recorded"];
+  const header = [
+    "\nCost breakdown:",
+    "  Operation       Model                  Tokens In   Tokens Out   Cost (USD)",
+    "  " + "-".repeat(75),
+  ];
+  const rows = costRows.map((row) => {
+    const op = row.operation.padEnd(15);
+    const model = row.model.padEnd(22);
+    const tokIn = String(row.totalTokensIn).padStart(10);
+    const tokOut = String(row.totalTokensOut).padStart(12);
+    const cost = `$${row.totalCostUsd.toFixed(4)}`.padStart(11);
+    return `  ${op} ${model} ${tokIn} ${tokOut} ${cost}`;
+  });
+  const totalCost = costRows.reduce((sum, r) => sum + r.totalCostUsd, 0);
+  const footer = ["  " + "-".repeat(75), `  Total: $${totalCost.toFixed(4)}`];
+  return [...header, ...rows, ...footer];
+}
+
 async function cmdStatus(repoRoot: string, showCost = false, showQuality = false) {
   const config = await loadConfig(repoRoot);
 
-  if (config.store === "pg") {
-    const repos = await pgUnsafe("SELECT * FROM repos WHERE root_path = $1", [repoRoot]);
-    if (repos.length === 0) {
-      console.log("Not indexed yet. Run: codeindex reindex");
-      return;
+  // Fetch status data from the appropriate store
+  const statusData: StatusData | null = await (async () => {
+    if (config.store === "pg") {
+      const repos = await pgUnsafe("SELECT * FROM repos WHERE root_path = $1", [repoRoot]);
+      if (repos.length === 0) return null;
+      const repoId = repos[0].id;
+      const fileCount = await pgUnsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [
+        repoId,
+      ]);
+      const dirCount = await pgUnsafe(
+        "SELECT count(*) as cnt FROM directories WHERE repo_id = $1",
+        [repoId],
+      );
+      const commitCount = await pgUnsafe("SELECT count(*) as cnt FROM commits WHERE repo_id = $1", [
+        repoId,
+      ]);
+      const lastIndexed = await pgUnsafe(
+        "SELECT max(indexed_at) as last FROM files WHERE repo_id = $1",
+        [repoId],
+      );
+      return {
+        name: repos[0].name as string,
+        rootPath: repos[0].root_path as string,
+        store: "PostgreSQL",
+        fileCount: parseInt(fileCount[0].cnt as string),
+        dirCount: parseInt(dirCount[0].cnt as string),
+        commitCount: parseInt(commitCount[0].cnt as string),
+        lastIndexed: (lastIndexed[0].last as string | null) ?? null,
+        formatter: (repos[0].formatter_cmd as string | null) ?? null,
+      };
+    } else {
+      const db = await getSqlite(repoRoot);
+      const repos = db.prepare("SELECT * FROM repos WHERE root_path = ?").all(repoRoot) as {
+        id: number;
+        name: string;
+        root_path: string;
+        formatter_cmd: string | null;
+      }[];
+      if (repos.length === 0) return null;
+      const repoId = repos[0].id;
+      const fileCount = db
+        .prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?")
+        .get(repoId) as { cnt: number };
+      const dirCount = db
+        .prepare("SELECT count(*) as cnt FROM directories WHERE repo_id = ?")
+        .get(repoId) as { cnt: number };
+      const commitCount = db
+        .prepare("SELECT count(*) as cnt FROM commits WHERE repo_id = ?")
+        .get(repoId) as { cnt: number };
+      const lastIndexed = db
+        .prepare("SELECT max(indexed_at) as last FROM files WHERE repo_id = ?")
+        .get(repoId) as { last: string | null };
+      return {
+        name: repos[0].name,
+        rootPath: repos[0].root_path,
+        store: "SQLite",
+        fileCount: fileCount.cnt,
+        dirCount: dirCount.cnt,
+        commitCount: commitCount.cnt,
+        lastIndexed: lastIndexed.last,
+        formatter: repos[0].formatter_cmd,
+      };
     }
-    const repoId = repos[0].id;
-    const fileCount = await pgUnsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [
-      repoId,
-    ]);
-    const dirCount = await pgUnsafe("SELECT count(*) as cnt FROM directories WHERE repo_id = $1", [
-      repoId,
-    ]);
-    const commitCount = await pgUnsafe("SELECT count(*) as cnt FROM commits WHERE repo_id = $1", [
-      repoId,
-    ]);
-    const lastIndexed = await pgUnsafe(
-      "SELECT max(indexed_at) as last FROM files WHERE repo_id = $1",
-      [repoId],
-    );
+  })();
 
-    console.log(`Repo: ${repos[0].name} (${repos[0].root_path})`);
-    console.log(`Store: PostgreSQL`);
-    console.log(`Files: ${fileCount[0].cnt}`);
-    console.log(`Directories: ${dirCount[0].cnt}`);
-    console.log(`Commits: ${commitCount[0].cnt}`);
-    console.log(`Last indexed: ${lastIndexed[0].last ?? "never"}`);
-    console.log(`Formatter: ${repos[0].formatter_cmd ?? "auto-detect"}`);
-  } else {
-    const db = await getSqlite(repoRoot);
-    const repos = db.prepare("SELECT * FROM repos WHERE root_path = ?").all(repoRoot) as {
-      id: number;
-      name: string;
-      root_path: string;
-      formatter_cmd: string | null;
-    }[];
-    if (repos.length === 0) {
-      console.log("Not indexed yet. Run: codeindex reindex");
-      return;
-    }
-    const repoId = repos[0].id;
-    const fileCount = db
-      .prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?")
-      .get(repoId) as { cnt: number };
-    const dirCount = db
-      .prepare("SELECT count(*) as cnt FROM directories WHERE repo_id = ?")
-      .get(repoId) as { cnt: number };
-    const commitCount = db
-      .prepare("SELECT count(*) as cnt FROM commits WHERE repo_id = ?")
-      .get(repoId) as { cnt: number };
-    const lastIndexed = db
-      .prepare("SELECT max(indexed_at) as last FROM files WHERE repo_id = ?")
-      .get(repoId) as { last: string | null };
-
-    console.log(`Repo: ${repos[0].name} (${repos[0].root_path})`);
-    console.log(`Store: SQLite`);
-    console.log(`Files: ${fileCount.cnt}`);
-    console.log(`Directories: ${dirCount.cnt}`);
-    console.log(`Commits: ${commitCount.cnt}`);
-    console.log(`Last indexed: ${lastIndexed.last ?? "never"}`);
-    console.log(`Formatter: ${repos[0].formatter_cmd ?? "auto-detect"}`);
+  if (!statusData) {
+    console.log("Not indexed yet. Run: codeindex reindex");
+    return;
   }
+
+  // Pure formatting → impure output
+  formatStatusLines(statusData).forEach((line) => console.log(line));
 
   // Cost tracking output
   if (showCost) {
     const { getCostSummary } = await import("./cost");
     const costRows = await getCostSummary(repoRoot);
-    if (costRows.length === 0) {
-      console.log("\nCost: no cost events recorded");
-    } else {
-      console.log("\nCost breakdown:");
-      console.log("  Operation       Model                  Tokens In   Tokens Out   Cost (USD)");
-      console.log("  " + "-".repeat(75));
-      let totalCost = 0;
-      for (const row of costRows) {
-        const op = row.operation.padEnd(15);
-        const model = row.model.padEnd(22);
-        const tokIn = String(row.totalTokensIn).padStart(10);
-        const tokOut = String(row.totalTokensOut).padStart(12);
-        const cost = `$${row.totalCostUsd.toFixed(4)}`.padStart(11);
-        console.log(`  ${op} ${model} ${tokIn} ${tokOut} ${cost}`);
-        totalCost += row.totalCostUsd;
-      }
-      console.log("  " + "-".repeat(75));
-      console.log(`  Total: $${totalCost.toFixed(4)}`);
-    }
+    formatCostLines(costRows).forEach((line) => console.log(line));
   }
 
   // Quality metrics
@@ -837,30 +893,40 @@ async function cmdManifest(repoRoot: string) {
 
   const { fileCount, filePaths, dirCount, commitCount } = dbStats;
 
-  // --- Walk repo to find skipped files and secret flags ---
+  // --- Walk repo to collect all non-indexed file paths (I/O boundary) ---
   const indexedSet = new Set(filePaths);
-  const skippedFiles: { path: string; reason: string }[] = [];
-  const secretFlags: { path: string; patterns: string[] }[] = [];
-
+  const walkedFiles: { relPath: string; content: string | null }[] = [];
   for await (const relPath of walkRepo(repoRoot)) {
     if (indexedSet.has(relPath)) continue;
-
-    // Check if skipped due to secrets
     const absPath = path.join(repoRoot, relPath);
+    let content: string | null = null;
     try {
-      const content = (await Bun.file(absPath).text()).replace(/\0/g, "");
-      const scan = scanForSecrets(content);
-      if (scan.hasSecrets) {
-        skippedFiles.push({ path: relPath, reason: `secrets: ${scan.patterns.join(", ")}` });
-        secretFlags.push({ path: relPath, patterns: scan.patterns });
-        continue;
-      }
+      content = (await Bun.file(absPath).text()).replace(/\0/g, "");
     } catch {
       // File unreadable
     }
-
-    skippedFiles.push({ path: relPath, reason: "not indexed (unchanged or new)" });
+    walkedFiles.push({ relPath, content });
   }
+
+  // --- Pure transform: classify each walked file into skipped/secret ---
+  const classified = walkedFiles.map(({ relPath, content }) => {
+    if (content !== null) {
+      const scan = scanForSecrets(content);
+      if (scan.hasSecrets) {
+        return {
+          skipped: { path: relPath, reason: `secrets: ${scan.patterns.join(", ")}` },
+          secret: { path: relPath, patterns: scan.patterns },
+        };
+      }
+    }
+    return {
+      skipped: { path: relPath, reason: "not indexed (unchanged or new)" },
+      secret: null,
+    };
+  });
+
+  const skippedFiles = classified.map((c) => c.skipped);
+  const secretFlags = classified.filter((c) => c.secret !== null).map((c) => c.secret!);
 
   const manifest = {
     repoRoot,
@@ -889,31 +955,32 @@ async function cmdConfig(repoRoot: string, args: string[]) {
     return;
   }
 
-  // Parse --key value pairs and save to local config
-  const updates: Record<string, unknown> = {};
-  for (let i = 0; i < args.length; i += 2) {
-    const key = args[i].replace(/^--/, "");
-    const value = args[i + 1];
-    if (key === "formatter") updates.formatter = value;
-    else if (key === "store") updates.store = value;
-    else if (key === "decay")
-      updates.scoring = { ...((updates.scoring as object) ?? {}), commitDecay: parseFloat(value) };
-    else if (key === "commit-depth")
-      updates.scoring = { ...((updates.scoring as object) ?? {}), commitDepth: parseInt(value) };
-    else if (key === "alpha")
-      updates.scoring = { ...((updates.scoring as object) ?? {}), alpha: parseFloat(value) };
-    else if (key === "beta")
-      updates.scoring = { ...((updates.scoring as object) ?? {}), beta: parseFloat(value) };
-    else if (key === "gamma")
-      updates.scoring = { ...((updates.scoring as object) ?? {}), gamma: parseFloat(value) };
-    else if (key === "min-score")
-      updates.scoring = { ...((updates.scoring as object) ?? {}), minScore: parseFloat(value) };
-    else if (key === "parent-boost-multiplier")
-      updates.scoring = {
-        ...((updates.scoring as object) ?? {}),
-        parentBoostMultiplier: parseFloat(value),
-      };
-  }
+  // Parse --key value pairs into an immutable updates object
+  const SCORING_KEYS: Record<string, (v: string) => [string, number]> = {
+    decay: (v) => ["commitDecay", parseFloat(v)],
+    "commit-depth": (v) => ["commitDepth", parseInt(v)],
+    alpha: (v) => ["alpha", parseFloat(v)],
+    beta: (v) => ["beta", parseFloat(v)],
+    gamma: (v) => ["gamma", parseFloat(v)],
+    "min-score": (v) => ["minScore", parseFloat(v)],
+    "parent-boost-multiplier": (v) => ["parentBoostMultiplier", parseFloat(v)],
+  };
+
+  const pairs = Array.from({ length: Math.floor(args.length / 2) }, (_, i) => ({
+    key: args[i * 2].replace(/^--/, ""),
+    value: args[i * 2 + 1],
+  }));
+
+  const updates = pairs.reduce<Record<string, unknown>>((acc, { key, value }) => {
+    if (key === "formatter") return { ...acc, formatter: value };
+    if (key === "store") return { ...acc, store: value };
+    const scoringFn = SCORING_KEYS[key];
+    if (scoringFn) {
+      const [field, parsed] = scoringFn(value);
+      return { ...acc, scoring: { ...((acc.scoring as object) ?? {}), [field]: parsed } };
+    }
+    return acc;
+  }, {});
 
   const localConfigPath = path.join(repoRoot, ".codeindex.json");
   const existing = await (async () => {
@@ -936,23 +1003,21 @@ async function cmdConfig(repoRoot: string, args: string[]) {
 async function cmdConfigList(repoRoot: string) {
   const config = await loadConfig(repoRoot);
 
-  // Flatten config into key-value pairs with source info
-  const entries: Array<{ key: string; value: unknown; source: string }> = [];
-
-  function flatten(obj: Record<string, unknown>, prefix: string) {
-    for (const [k, v] of Object.entries(obj)) {
+  // Pure recursive flatten — returns new array, no mutation
+  const flattenConfig = (
+    obj: Record<string, unknown>,
+    prefix: string,
+  ): Array<{ key: string; value: unknown; source: string }> =>
+    Object.entries(obj).flatMap(([k, v]) => {
       const key = prefix ? `${prefix}.${k}` : k;
-      if (v !== null && typeof v === "object" && !Array.isArray(v)) {
-        flatten(v as Record<string, unknown>, key);
-      } else {
-        entries.push({ key, value: v, source: "config" });
-      }
-    }
-  }
+      return v !== null && typeof v === "object" && !Array.isArray(v)
+        ? flattenConfig(v as Record<string, unknown>, key)
+        : [{ key, value: v, source: "config" }];
+    });
 
-  flatten(config as unknown as Record<string, unknown>, "");
+  const baseEntries = flattenConfig(config as unknown as Record<string, unknown>, "");
 
-  // Check env var overrides
+  // Apply env var overrides immutably
   const envOverrides: Record<string, string | undefined> = {
     "pg.host": process.env.PGHOST,
     "pg.port": process.env.PGPORT,
@@ -960,13 +1025,10 @@ async function cmdConfigList(repoRoot: string) {
     "pg.user": process.env.PGUSER,
   };
 
-  for (const entry of entries) {
+  const entries = baseEntries.map((entry) => {
     const envVal = envOverrides[entry.key];
-    if (envVal !== undefined) {
-      entry.source = "env";
-      entry.value = envVal;
-    }
-  }
+    return envVal !== undefined ? { ...entry, source: "env", value: envVal } : entry;
+  });
 
   // Print as aligned table
   const maxKeyLen = Math.max(...entries.map((e) => e.key.length));
@@ -981,12 +1043,14 @@ async function cmdConfigList(repoRoot: string) {
 // ---------------------------------------------------------------------------
 
 async function cmdDoctor(repoRoot: string) {
-  let ok = true;
+  // Collect results immutably; derive overall status with every()
+  const results: Array<{ label: string; passed: boolean; hint?: string }> = [];
+
   const check = (label: string, pass: boolean, hint?: string) => {
     const icon = pass ? "[ok]" : "[!!]";
     console.log(`${icon} ${label}`);
     if (!pass && hint) console.log(`     ${hint}`);
-    if (!pass) ok = false;
+    results.push({ label, passed: pass, hint });
   };
 
   // 1. Git repo
@@ -1112,7 +1176,8 @@ async function cmdDoctor(repoRoot: string) {
     check("Ollama server reachable", available, error);
   }
 
-  console.log(ok ? "\nAll checks passed." : "\nSome checks failed — see above.");
+  const allPassed = results.every((r) => r.passed);
+  console.log(allPassed ? "\nAll checks passed." : "\nSome checks failed — see above.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1176,12 +1241,8 @@ async function cmdGraph(repoRoot: string, format: string) {
     return;
   }
 
-  // Collect unique node IDs
-  const nodeIds = new Set<number>();
-  for (const r of rows) {
-    nodeIds.add(r.source_repo_id);
-    nodeIds.add(r.target_repo_id);
-  }
+  // Collect unique node IDs immutably via flatMap
+  const nodeIds = new Set(rows.flatMap((r) => [r.source_repo_id, r.target_repo_id]));
 
   const nodes: GraphNode[] = [...nodeIds].map((id) => ({
     name: repoNames.get(id) ?? `repo_${id}`,

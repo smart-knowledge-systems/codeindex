@@ -5,10 +5,16 @@ import { pgUnsafe } from "../db/pg";
 import { withRepoScope } from "../db/rls";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
-import type { SearchOptions, SearchResult, ScoringConfig, SkeletonEntry } from "./types";
+import type {
+  SearchOptions,
+  SearchResult,
+  ScoringConfig,
+  ScoreExplanation,
+  SkeletonEntry,
+} from "./types";
 import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
 import { getScopedRepoIds } from "../auth/tokens";
-import { logEvent } from "../logging";
+import { logEvent, getSessionId } from "../logging";
 import { recordEvent, hashQuery } from "../telemetry";
 import { rerank } from "./rerank";
 import { expandQuery } from "./query-expansion";
@@ -167,7 +173,7 @@ function parseSince(since: string): Date {
 // ---------------------------------------------------------------------------
 
 function computeCommitBoost(
-  links: Array<{ recency: number; similarity: number }>,
+  links: ReadonlyArray<{ recency: number; similarity: number }>,
   scoring: ScoringConfig,
 ): number {
   const { commitDecay, commitDepth } = scoring;
@@ -214,6 +220,151 @@ function langScoring(
   const override = profiles[lang];
   if (!override) return base;
   return { ...base, ...override };
+}
+
+// ---------------------------------------------------------------------------
+// Pure scoring — no I/O, no mutation
+// ---------------------------------------------------------------------------
+
+interface FileScoreInput {
+  readonly fileSim: number;
+  readonly fileType: string;
+  readonly skeletonLength: number;
+  readonly avgTokenCount: number;
+  readonly commitLinks: ReadonlyArray<{ recency: number; similarity: number }>;
+  readonly dirSim: number;
+  readonly rawBM25: number;
+  readonly maxBM25: number;
+  readonly minScore: number;
+  readonly scoring: ScoringConfig;
+  readonly languageProfiles?: Record<string, Partial<ScoringConfig>>;
+}
+
+interface FileScoreOutput {
+  readonly finalScore: number;
+  readonly commitBoost: number;
+  readonly parentBoost: number;
+  readonly lengthPenalty: number;
+  readonly normalizedBM25: number;
+  readonly resolvedScoring: ScoringConfig;
+}
+
+/** Pure: compute all score components for a single file result. */
+function computeFileScore(input: FileScoreInput): FileScoreOutput {
+  const fileScoring = langScoring(input.fileType, input.scoring, input.languageProfiles);
+  const commitBoost = computeCommitBoost(input.commitLinks, fileScoring);
+  const parentBoost =
+    input.dirSim > input.minScore ? fileScoring.parentBoostMultiplier * input.dirSim : 0;
+
+  const tokenCount = input.skeletonLength / 4;
+  const isProse = PROSE_FILE_TYPES.has(input.fileType);
+  const lengthPenalty =
+    !isProse && tokenCount > 0
+      ? Math.max(0, Math.log(tokenCount / input.avgTokenCount)) * input.scoring.lengthPenaltyWeight
+      : 0;
+
+  const semanticScore =
+    input.fileSim +
+    fileScoring.alpha * commitBoost +
+    fileScoring.beta * parentBoost -
+    lengthPenalty;
+
+  const normalizedBM25 = input.maxBM25 > 0 ? input.rawBM25 / input.maxBM25 : 0;
+
+  const { hybridWeight } = input.scoring;
+  const finalScore =
+    hybridWeight > 0
+      ? (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
+      : semanticScore;
+
+  return {
+    finalScore,
+    commitBoost,
+    parentBoost,
+    lengthPenalty,
+    normalizedBM25,
+    resolvedScoring: fileScoring,
+  };
+}
+
+/** Pure: compute directory score with child-to-parent boost. */
+function computeDirScore(
+  concatSim: number,
+  summarySim: number,
+  childScores: readonly number[],
+  gamma: number,
+): number {
+  const baseSim = Math.max(concatSim, summarySim);
+  if (childScores.length >= 2) {
+    const avg = childScores.reduce((a, b) => a + b, 0) / childScores.length;
+    return baseSim + gamma * avg;
+  }
+  return baseSim;
+}
+
+/** Pure: build a file explanation object. */
+function buildFileExplanation(
+  fileSim: number,
+  score: FileScoreOutput,
+  scoring: ScoringConfig,
+): ScoreExplanation {
+  const { alpha, beta, gamma } = scoring;
+  const { hybridWeight } = scoring;
+  return {
+    cosineSimilarity: fileSim,
+    commitBoost: score.commitBoost,
+    parentBoost: score.parentBoost,
+    keywordScore: score.normalizedBM25,
+    lengthPenalty: score.lengthPenalty,
+    weights: { alpha, beta, gamma },
+    formula: `(1-${hybridWeight})*[${fileSim.toFixed(3)} + ${alpha}*${score.commitBoost.toFixed(3)} + ${beta}*${score.parentBoost.toFixed(3)} - ${score.lengthPenalty.toFixed(3)}] + ${hybridWeight}*${score.normalizedBM25.toFixed(3)} = ${score.finalScore.toFixed(3)}`,
+  };
+}
+
+/** Pure: build a directory explanation object. */
+function buildDirExplanation(
+  baseSim: number,
+  finalScore: number,
+  scoring: ScoringConfig,
+): ScoreExplanation {
+  const { alpha, beta, gamma } = scoring;
+  return {
+    cosineSimilarity: baseSim,
+    commitBoost: 0,
+    parentBoost: 0,
+    childBoost: finalScore - baseSim,
+    weights: { alpha, beta, gamma },
+    formula: `${baseSim.toFixed(3)} + γ*childAvg = ${finalScore.toFixed(3)}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// BM25 index helpers — pure data prep
+// ---------------------------------------------------------------------------
+
+interface BM25Context {
+  readonly scores: Map<string, number>;
+  readonly maxScore: number;
+}
+
+function buildBM25Context(docs: Array<{ id: string; text: string }>, query: string): BM25Context {
+  if (docs.length === 0) return { scores: new Map(), maxScore: 1 };
+  const index = buildBM25Index(docs);
+  const scores = scoreBM25(index, query);
+  const maxScore = scores.size > 0 ? Math.max(...scores.values()) : 1;
+  return { scores, maxScore };
+}
+
+function computeAvgTokenCount(rows: ReadonlyArray<{ skeleton: string | null }>): number {
+  let totalTokenCount = 0;
+  let skeletonCount = 0;
+  for (const row of rows) {
+    if (row.skeleton) {
+      totalTokenCount += row.skeleton.length / 4;
+      skeletonCount++;
+    }
+  }
+  return skeletonCount > 0 ? totalTokenCount / skeletonCount : 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,19 +544,15 @@ async function searchPgInTransaction(
     dirSummaryByPath.set(`${d.repo_id}:${d.dir_path}`, d.summary);
   }
 
-  // Build commit link map: file_id -> links[]
+  // Build commit link map and commit id set in a single pass
   const linksByFileId = new Map<number, Array<{ recency: number; similarity: number }>>();
+  const commitIdsByFileId = new Map<number, string[]>();
   for (const link of linkRows) {
     const fileId = parseInt(link.file_id);
     const links = linksByFileId.get(fileId) ?? [];
     links.push({ recency: parseInt(link.recency), similarity: parseFloat(link.similarity) });
     linksByFileId.set(fileId, links);
-  }
 
-  // Build commit id set by file
-  const commitIdsByFileId = new Map<number, string[]>();
-  for (const link of linkRows) {
-    const fileId = parseInt(link.file_id);
     const ids = commitIdsByFileId.get(fileId) ?? [];
     ids.push(link.commit_id);
     commitIdsByFileId.set(fileId, ids);
@@ -413,102 +560,62 @@ async function searchPgInTransaction(
 
   const results: SearchResult[] = [];
   const { minScore, includeSkeleton, includeSummary } = options;
-  const { alpha, beta, gamma } = scoring;
+  const { gamma } = scoring;
 
   // Collect child file scores per directory for child-to-parent propagation
   const childScoresByDir = new Map<string, number[]>();
 
   // --- BM25 hybrid scoring ---
-  const { hybridWeight, lengthPenaltyWeight } = scoring;
   const bm25Docs = fileRows.filter((r) => r.skeleton).map((r) => ({ id: r.id, text: r.skeleton! }));
-  const bm25Index = bm25Docs.length > 0 ? buildBM25Index(bm25Docs) : null;
-  const bm25Scores = bm25Index ? scoreBM25(bm25Index, query) : new Map<string, number>();
-  const maxBM25 = bm25Scores.size > 0 ? Math.max(...bm25Scores.values()) : 1;
-
-  // Average skeleton token count for length normalization (approximate: chars / 4)
-  let totalTokenCount = 0;
-  let skeletonCount = 0;
-  for (const row of fileRows) {
-    if (row.skeleton) {
-      totalTokenCount += row.skeleton.length / 4;
-      skeletonCount++;
-    }
-  }
-  const avgTokenCount = skeletonCount > 0 ? totalTokenCount / skeletonCount : 1;
+  const bm25 = buildBM25Context(bm25Docs, query);
+  const avgTokenCount = computeAvgTokenCount(fileRows);
 
   // --- File results ---
   for (const row of fileRows) {
     const fileId = parseInt(row.id);
     const repoId = parseInt(row.repo_id);
     const fileSim = parseFloat(row.similarity);
-    const fileScoring = langScoring(row.file_type, scoring, languageProfiles);
-    const links = linksByFileId.get(fileId) ?? [];
-    const commitBoost = computeCommitBoost(links, fileScoring);
+    const dirKey = `${row.repo_id}:${path.dirname(row.file_path)}`;
 
-    const parentDir = path.dirname(row.file_path);
-    const dirKey = `${row.repo_id}:${parentDir}`;
-    const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
+    const score = computeFileScore({
+      fileSim,
+      fileType: row.file_type,
+      skeletonLength: row.skeleton?.length ?? 0,
+      avgTokenCount,
+      commitLinks: linksByFileId.get(fileId) ?? [],
+      dirSim: dirSimByPath.get(dirKey) ?? 0,
+      rawBM25: bm25.scores.get(row.id) ?? 0,
+      maxBM25: bm25.maxScore,
+      minScore,
+      scoring,
+      languageProfiles,
+    });
 
-    // Length normalization penalty (token-approximated skeleton length)
-    // Prose files (md, rst, txt, adoc) are exempt — their skeletons are intentionally
-    // full-content and should not be penalized for length.
-    const tokenCount = (row.skeleton?.length ?? 0) / 4;
-    const isProse = PROSE_FILE_TYPES.has(row.file_type);
-    const lengthPenalty =
-      !isProse && tokenCount > 0
-        ? Math.max(0, Math.log(tokenCount / avgTokenCount)) * lengthPenaltyWeight
-        : 0;
-
-    // Semantic score with length penalty (using per-language alpha/beta)
-    const fAlpha = fileScoring.alpha;
-    const fBeta = fileScoring.beta;
-    const semanticScore = fileSim + fAlpha * commitBoost + fBeta * parentBoost - lengthPenalty;
-
-    // BM25 keyword score
-    const rawBM25 = bm25Scores.get(row.id) ?? 0;
-    const normalizedBM25 = maxBM25 > 0 ? rawBM25 / maxBM25 : 0;
-
-    // Hybrid fusion
-    const finalScore =
-      hybridWeight > 0
-        ? (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
-        : semanticScore;
-
-    if (finalScore >= minScore) {
+    if (score.finalScore >= minScore) {
       const scores = childScoresByDir.get(dirKey) ?? [];
-      scores.push(finalScore);
+      scores.push(score.finalScore);
       childScoresByDir.set(dirKey, scores);
     }
-    if (finalScore < minScore) continue;
+    if (score.finalScore < minScore) continue;
 
     const repoInfo = repoInfoMap.get(repoId);
-    const result: SearchResult = {
+    const commitIds = commitIdsByFileId.get(fileId);
+    results.push({
       filePath: row.file_path,
       cosineSimilarity: fileSim,
-      finalScore,
+      finalScore: score.finalScore,
       type: row.file_type,
       inProject: repoId === currentRepoId,
       repoName: repoInfo?.name,
       repoPath: repoInfo?.rootPath,
-    };
-    if (normalizedBM25 > 0) result.keywordScore = normalizedBM25;
-    if (repoId !== currentRepoId) result.repoId = row.repo_id;
-    if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
-    const commitIds = commitIdsByFileId.get(fileId);
-    if (commitIds && commitIds.length > 0) result.commitIds = commitIds;
-    if (options.explain) {
-      result.explanation = {
-        cosineSimilarity: fileSim,
-        commitBoost,
-        parentBoost,
-        keywordScore: normalizedBM25,
-        lengthPenalty,
-        weights: { alpha, beta, gamma },
-        formula: `(1-${hybridWeight})*[${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} - ${lengthPenalty.toFixed(3)}] + ${hybridWeight}*${normalizedBM25.toFixed(3)} = ${finalScore.toFixed(3)}`,
-      };
-    }
-    results.push(result);
+      ...(score.normalizedBM25 > 0 && { keywordScore: score.normalizedBM25 }),
+      ...(repoId !== currentRepoId && { repoId: row.repo_id }),
+      ...(includeSkeleton && row.skeleton && { skeleton: row.skeleton }),
+      ...(commitIds && commitIds.length > 0 && { commitIds }),
+      ...(options.explain && {
+        explanation: buildFileExplanation(fileSim, score, score.resolvedScoring),
+      }),
+    });
   }
 
   // --- Directory results ---
@@ -516,44 +623,30 @@ async function searchPgInTransaction(
     const repoId = parseInt(row.repo_id);
     const concatSim = parseFloat(row.concat_sim);
     const summarySim = parseFloat(row.summary_sim);
-    let finalScore = Math.max(concatSim, summarySim);
-
-    // Child-to-parent boost: if >= 2 child files scored above minScore,
-    // boost directory by gamma * AVG(top child scores)
     const dirKey = `${row.repo_id}:${row.dir_path}`;
-    const childScores = childScoresByDir.get(dirKey) ?? [];
-    if (childScores.length >= 2) {
-      const avg = childScores.reduce((a, b) => a + b, 0) / childScores.length;
-      finalScore += gamma * avg;
-    }
+    const finalScore = computeDirScore(
+      concatSim,
+      summarySim,
+      childScoresByDir.get(dirKey) ?? [],
+      gamma,
+    );
 
     if (finalScore < minScore) continue;
 
     const repoInfo = repoInfoMap.get(repoId);
-    const result: SearchResult = {
+    const baseSim = Math.max(concatSim, summarySim);
+    results.push({
       filePath: row.dir_path,
-      cosineSimilarity: Math.max(concatSim, summarySim),
+      cosineSimilarity: baseSim,
       finalScore,
       type: "dir",
       inProject: repoId === currentRepoId,
       repoName: repoInfo?.name,
       repoPath: repoInfo?.rootPath,
-    };
-    if (repoId !== currentRepoId) result.repoId = row.repo_id;
-    if (includeSummary && row.summary) result.summary = row.summary;
-    if (options.explain) {
-      const baseSim = Math.max(concatSim, summarySim);
-      const childBoost = finalScore - baseSim;
-      result.explanation = {
-        cosineSimilarity: baseSim,
-        commitBoost: 0,
-        parentBoost: 0,
-        childBoost,
-        weights: { alpha, beta, gamma },
-        formula: `${baseSim.toFixed(3)} + γ*childAvg = ${finalScore.toFixed(3)}`,
-      };
-    }
-    results.push(result);
+      ...(repoId !== currentRepoId && { repoId: row.repo_id }),
+      ...(includeSummary && row.summary && { summary: row.summary }),
+      ...(options.explain && { explanation: buildDirExplanation(baseSim, finalScore, scoring) }),
+    });
   }
 
   // --- Commit results ---
@@ -563,7 +656,7 @@ async function searchPgInTransaction(
     if (similarity < minScore) continue;
 
     const repoInfo = repoInfoMap.get(repoId);
-    const result: SearchResult = {
+    results.push({
       filePath: row.commit_hash,
       cosineSimilarity: similarity,
       finalScore: similarity,
@@ -571,9 +664,8 @@ async function searchPgInTransaction(
       inProject: repoId === currentRepoId,
       repoName: repoInfo?.name,
       repoPath: repoInfo?.rootPath,
-    };
-    if (repoId !== currentRepoId) result.repoId = row.repo_id;
-    results.push(result);
+      ...(repoId !== currentRepoId && { repoId: row.repo_id }),
+    });
   }
 
   return results;
@@ -751,149 +843,92 @@ async function searchSqlite(
 
   const results: SearchResult[] = [];
   const { minScore, includeSkeleton, includeSummary } = options;
-  const { alpha, beta, gamma } = scoring;
+  const { gamma } = scoring;
 
   // Collect child file scores per directory for child-to-parent propagation
   const childScoresByDir = new Map<string, number[]>();
 
   // --- BM25 hybrid scoring ---
-  const { hybridWeight, lengthPenaltyWeight } = scoring;
   const bm25DocsSqlite = fileRows
     .filter((r) => r.skeleton)
     .map((r) => ({ id: String(r.id), text: r.skeleton! }));
-  const bm25IndexSqlite = bm25DocsSqlite.length > 0 ? buildBM25Index(bm25DocsSqlite) : null;
-  const bm25ScoresSqlite = bm25IndexSqlite
-    ? scoreBM25(bm25IndexSqlite, query)
-    : new Map<string, number>();
-  const maxBM25Sqlite = bm25ScoresSqlite.size > 0 ? Math.max(...bm25ScoresSqlite.values()) : 1;
-
-  // Average skeleton token count for length normalization (approximate: chars / 4)
-  let totalTokenCountSqlite = 0;
-  let skeletonCountSqlite = 0;
-  for (const row of fileRows) {
-    if (row.skeleton) {
-      totalTokenCountSqlite += row.skeleton.length / 4;
-      skeletonCountSqlite++;
-    }
-  }
-  const avgTokenCountSqlite =
-    skeletonCountSqlite > 0 ? totalTokenCountSqlite / skeletonCountSqlite : 1;
+  const bm25 = buildBM25Context(bm25DocsSqlite, query);
+  const avgTokenCountSqlite = computeAvgTokenCount(fileRows);
 
   // --- File results ---
   for (const row of fileRows) {
     const fileSim = 1 - row.distance;
-    const fileScoring = langScoring(row.file_type, scoring, languageProfiles);
-    const links = linksByFileId.get(row.id) ?? [];
-    const commitBoost = computeCommitBoost(links, fileScoring);
+    const dirKey = `${row.repo_id}:${path.dirname(row.file_path)}`;
 
-    const parentDir = path.dirname(row.file_path);
-    const dirKey = `${row.repo_id}:${parentDir}`;
-    const dirSim = dirSimByPath.get(dirKey) ?? 0;
-    const parentBoost = dirSim > minScore ? fileScoring.parentBoostMultiplier * dirSim : 0;
+    const score = computeFileScore({
+      fileSim,
+      fileType: row.file_type,
+      skeletonLength: row.skeleton?.length ?? 0,
+      avgTokenCount: avgTokenCountSqlite,
+      commitLinks: linksByFileId.get(row.id) ?? [],
+      dirSim: dirSimByPath.get(dirKey) ?? 0,
+      rawBM25: bm25.scores.get(String(row.id)) ?? 0,
+      maxBM25: bm25.maxScore,
+      minScore,
+      scoring,
+      languageProfiles,
+    });
 
-    // Length normalization penalty (token-approximated skeleton length)
-    // Prose files (md, rst, txt, adoc) are exempt — their skeletons are intentionally
-    // full-content and should not be penalized for length.
-    const tokenCount = (row.skeleton?.length ?? 0) / 4;
-    const isProse = PROSE_FILE_TYPES.has(row.file_type);
-    const lengthPenalty =
-      !isProse && tokenCount > 0
-        ? Math.max(0, Math.log(tokenCount / avgTokenCountSqlite)) * lengthPenaltyWeight
-        : 0;
-
-    // Semantic score with length penalty (using per-language alpha/beta)
-    const fAlpha = fileScoring.alpha;
-    const fBeta = fileScoring.beta;
-    const semanticScore = fileSim + fAlpha * commitBoost + fBeta * parentBoost - lengthPenalty;
-
-    // BM25 keyword score
-    const rawBM25 = bm25ScoresSqlite.get(String(row.id)) ?? 0;
-    const normalizedBM25 = maxBM25Sqlite > 0 ? rawBM25 / maxBM25Sqlite : 0;
-
-    // Hybrid fusion
-    const finalScore =
-      hybridWeight > 0
-        ? (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
-        : semanticScore;
-
-    if (finalScore >= minScore) {
+    if (score.finalScore >= minScore) {
       const scores = childScoresByDir.get(dirKey) ?? [];
-      scores.push(finalScore);
+      scores.push(score.finalScore);
       childScoresByDir.set(dirKey, scores);
     }
-    if (finalScore < minScore) continue;
+    if (score.finalScore < minScore) continue;
 
     const repoInfo = repoInfoMap.get(row.repo_id);
-    const result: SearchResult = {
+    const commitIds = commitIdsByFileId.get(row.id);
+    results.push({
       filePath: row.file_path,
       cosineSimilarity: fileSim,
-      finalScore,
+      finalScore: score.finalScore,
       type: row.file_type,
       inProject: row.repo_id === currentRepoId,
       repoName: repoInfo?.name,
       repoPath: repoInfo?.rootPath,
-    };
-    if (normalizedBM25 > 0) result.keywordScore = normalizedBM25;
-    if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
-    if (includeSkeleton && row.skeleton) result.skeleton = row.skeleton;
-    const commitIds = commitIdsByFileId.get(row.id);
-    if (commitIds && commitIds.length > 0) result.commitIds = commitIds;
-    if (options.explain) {
-      result.explanation = {
-        cosineSimilarity: fileSim,
-        commitBoost,
-        parentBoost,
-        keywordScore: normalizedBM25,
-        lengthPenalty,
-        weights: { alpha, beta, gamma },
-        formula: `(1-${hybridWeight})*[${fileSim.toFixed(3)} + ${alpha}*${commitBoost.toFixed(3)} + ${beta}*${parentBoost.toFixed(3)} - ${lengthPenalty.toFixed(3)}] + ${hybridWeight}*${normalizedBM25.toFixed(3)} = ${finalScore.toFixed(3)}`,
-      };
-    }
-    results.push(result);
+      ...(score.normalizedBM25 > 0 && { keywordScore: score.normalizedBM25 }),
+      ...(row.repo_id !== currentRepoId && { repoId: String(row.repo_id) }),
+      ...(includeSkeleton && row.skeleton && { skeleton: row.skeleton }),
+      ...(commitIds && commitIds.length > 0 && { commitIds }),
+      ...(options.explain && {
+        explanation: buildFileExplanation(fileSim, score, score.resolvedScoring),
+      }),
+    });
   }
 
   // --- Directory results ---
   for (const row of dirRows) {
     const concatSim = row.concat_distance != null ? 1 - row.concat_distance : 0;
     const summarySim = row.summary_distance != null ? 1 - row.summary_distance : 0;
-    let finalScore = Math.max(concatSim, summarySim);
-
-    // Child-to-parent boost: if >= 2 child files scored above minScore,
-    // boost directory by gamma * AVG(top child scores)
     const dirKey = `${row.repo_id}:${row.dir_path}`;
-    const childScores = childScoresByDir.get(dirKey) ?? [];
-    if (childScores.length >= 2) {
-      const avg = childScores.reduce((a, b) => a + b, 0) / childScores.length;
-      finalScore += gamma * avg;
-    }
+    const finalScore = computeDirScore(
+      concatSim,
+      summarySim,
+      childScoresByDir.get(dirKey) ?? [],
+      gamma,
+    );
 
     if (finalScore < minScore) continue;
 
     const repoInfo = repoInfoMap.get(row.repo_id);
-    const result: SearchResult = {
+    const baseSim = Math.max(concatSim, summarySim);
+    results.push({
       filePath: row.dir_path,
-      cosineSimilarity: Math.max(concatSim, summarySim),
+      cosineSimilarity: baseSim,
       finalScore,
       type: "dir",
       inProject: row.repo_id === currentRepoId,
       repoName: repoInfo?.name,
       repoPath: repoInfo?.rootPath,
-    };
-    if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
-    if (includeSummary && row.summary) result.summary = row.summary;
-    if (options.explain) {
-      const baseSim = Math.max(concatSim, summarySim);
-      const childBoost = finalScore - baseSim;
-      result.explanation = {
-        cosineSimilarity: baseSim,
-        commitBoost: 0,
-        parentBoost: 0,
-        childBoost,
-        weights: { alpha, beta, gamma },
-        formula: `${baseSim.toFixed(3)} + γ*childAvg = ${finalScore.toFixed(3)}`,
-      };
-    }
-    results.push(result);
+      ...(row.repo_id !== currentRepoId && { repoId: String(row.repo_id) }),
+      ...(includeSummary && row.summary && { summary: row.summary }),
+      ...(options.explain && { explanation: buildDirExplanation(baseSim, finalScore, scoring) }),
+    });
   }
 
   // --- Commit results ---
@@ -902,7 +937,7 @@ async function searchSqlite(
     if (similarity < minScore) continue;
 
     const repoInfo = repoInfoMap.get(row.repo_id);
-    const result: SearchResult = {
+    results.push({
       filePath: row.commit_hash,
       cosineSimilarity: similarity,
       finalScore: similarity,
@@ -910,9 +945,8 @@ async function searchSqlite(
       inProject: row.repo_id === currentRepoId,
       repoName: repoInfo?.name,
       repoPath: repoInfo?.rootPath,
-    };
-    if (row.repo_id !== currentRepoId) result.repoId = String(row.repo_id);
-    results.push(result);
+      ...(row.repo_id !== currentRepoId && { repoId: String(row.repo_id) }),
+    });
   }
 
   return results;
@@ -968,28 +1002,18 @@ async function resolveRepoIds(
 // Public API
 // ---------------------------------------------------------------------------
 
-/**
- * Main semantic search function. Searches files, directories, and commits
- * using cosine similarity of embeddings, applying the commit-boost and
- * parent-directory-boost scoring formula from the spec.
- */
-export async function search(
-  repoRoot: string,
-  query: string,
-  options?: SearchOptions,
-): Promise<SearchResult[]> {
-  const config = await loadConfig(repoRoot);
+// ---------------------------------------------------------------------------
+// Options resolution pipeline
+// ---------------------------------------------------------------------------
 
-  // Apply provider-specific scoring overrides for non-openai providers
-  const provider = config.embedding.provider;
-  const providerOverrides = config.providerProfiles?.[provider] ?? {};
-  const scoring: ScoringConfig = {
-    ...config.scoring,
-    ...providerOverrides,
-    ...(options?.scoringOverrides ?? {}),
-  };
+type ResolvedSearchOptions = Required<Omit<SearchOptions, "embeddingCache">>;
 
-  const resolvedOptions: Required<Omit<SearchOptions, "embeddingCache">> = {
+/** Pure: apply defaults, then provider overrides, then user overrides. */
+function resolveSearchOptions(
+  options: SearchOptions | undefined,
+  scoring: ScoringConfig,
+): ResolvedSearchOptions {
+  return {
     minScore: options?.minScore ?? scoring.minScore,
     topN: options?.topN ?? 0,
     scope: options?.scope ?? "project",
@@ -1002,6 +1026,42 @@ export async function search(
     since: options?.since ?? "",
     explain: options?.explain ?? false,
   };
+}
+
+/** Pure: merge base scoring with provider and user overrides. */
+function resolveScoring(
+  base: ScoringConfig,
+  providerOverrides: Partial<ScoringConfig>,
+  userOverrides: Partial<ScoringConfig>,
+): ScoringConfig {
+  return { ...base, ...providerOverrides, ...userOverrides };
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Main semantic search function. Searches files, directories, and commits
+ * using cosine similarity of embeddings, applying the commit-boost and
+ * parent-directory-boost scoring formula from the spec.
+ */
+export async function search(
+  repoRoot: string,
+  query: string,
+  options?: SearchOptions,
+): Promise<SearchResult[]> {
+  const startTime = performance.now();
+  const config = await loadConfig(repoRoot);
+
+  // Resolve scoring and options via pure pipeline
+  const provider = config.embedding.provider;
+  const scoring = resolveScoring(
+    config.scoring,
+    config.providerProfiles?.[provider] ?? {},
+    options?.scoringOverrides ?? {},
+  );
+  const resolvedOptions = resolveSearchOptions(options, scoring);
 
   // Expand query for local embedding providers to improve match quality
   const effectiveQuery = provider === "ollama" ? expandQuery(query) : query;
@@ -1069,41 +1129,107 @@ export async function search(
     results.sort((a, b) => b.finalScore - a.finalScore);
   }
 
-  const finalResults = resolvedOptions.topN > 0 ? results.slice(0, resolvedOptions.topN) : results;
+  let finalResults = resolvedOptions.topN > 0 ? results.slice(0, resolvedOptions.topN) : results;
 
-  // Post-processing: attach snippets if requested
+  // Post-processing pipeline: each step returns a new array (no mutation)
   if (resolvedOptions.includeSnippet) {
-    await attachSnippets(repoRoot, config, finalResults, query, currentRepoId);
+    finalResults = await withSnippets(repoRoot, config, finalResults, query, currentRepoId);
   }
-
-  // Post-processing: annotate with cross-repo edges if multi-repo
   if (repoIds.length > 1) {
-    await attachCrossRepoEdges(repoRoot, config, finalResults, currentRepoId, tokenRepoIds);
+    finalResults = await withCrossRepoEdges(
+      repoRoot,
+      config,
+      finalResults,
+      currentRepoId,
+      tokenRepoIds,
+    );
   }
 
-  logEvent({ event: "search", query_length: query.length, result_count: finalResults.length });
+  // Single wide event: all context in one structured log (Issues 1, 5, 6, 7)
+  const duration_ms = Math.round(performance.now() - startTime);
+  const queryHash = hashQuery(query);
+
+  logEvent({
+    event: "search.query.complete",
+    query_length: query.length,
+    query_hash: queryHash,
+    result_count: finalResults.length,
+    duration_ms,
+    sessionId: getSessionId(),
+  });
 
   recordEvent({
     event: "search",
     timestamp: new Date().toISOString(),
-    queryHash: hashQuery(query),
+    sessionId: getSessionId(),
+    queryHash,
     resultCount: finalResults.length,
+    duration_ms,
   });
 
   return finalResults;
 }
 
 // ---------------------------------------------------------------------------
-// Snippet post-processing
+// Snippet post-processing — impure shell (I/O) wrapping pure matching
 // ---------------------------------------------------------------------------
 
-async function attachSnippets(
+/** Pure: find the best-matching skeleton entry for a given set of query words. */
+function findBestEntry(
+  entries: readonly SkeletonEntry[],
+  queryWords: ReadonlySet<string>,
+): SkeletonEntry {
+  let bestEntry: SkeletonEntry = entries[0];
+  let bestScore = -1;
+  for (const entry of entries) {
+    const nameWords = entry.name
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 2);
+    const kindWords = entry.kind
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 2);
+    const allWords = [...nameWords, ...kindWords];
+    let score = 0;
+    for (const w of allWords) {
+      if (queryWords.has(w)) score++;
+      for (const qw of queryWords) {
+        if (w.includes(qw) || qw.includes(w)) score += 0.5;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestEntry = entry;
+    }
+  }
+  return bestEntry;
+}
+
+/** Pure: extract a capped snippet from file content at given line range. */
+function extractSnippet(
+  content: string,
+  startLine: number,
+  endLine: number,
+  maxLines = 20,
+): string {
+  const lines = content.split("\n");
+  const start = startLine - 1; // 0-indexed
+  const end = Math.min(endLine, start + maxLines);
+  return lines.slice(start, end).join("\n");
+}
+
+/**
+ * Impure shell: fetch skeleton entries from DB, read files from disk,
+ * and return a new results array with snippets attached.
+ */
+async function withSnippets(
   repoRoot: string,
   config: Awaited<ReturnType<typeof loadConfig>>,
-  results: SearchResult[],
+  results: readonly SearchResult[],
   query: string,
   currentRepoId: number,
-): Promise<void> {
+): Promise<SearchResult[]> {
   const queryWords = new Set(
     query
       .toLowerCase()
@@ -1112,7 +1238,6 @@ async function attachSnippets(
   );
 
   // Batch load skeleton_entries for all file results in a single query
-  // Include all repo IDs from results (not just current repo) for multi-repo support
   const fileResults = results.filter((r) => r.type !== "dir" && r.type !== "commit");
   const filePaths = fileResults.map((r) => r.filePath);
   const resultRepoIds = [
@@ -1160,78 +1285,82 @@ async function attachSnippets(
     }
   }
 
-  for (const result of fileResults) {
+  // Read file contents in parallel for snippet extraction
+  const fileContentCache = new Map<string, string>();
+  await Promise.all(
+    fileResults.map(async (result) => {
+      try {
+        const absPath = `${repoRoot}/${result.filePath}`;
+        const content = await Bun.file(absPath).text();
+        fileContentCache.set(result.filePath, content);
+      } catch {
+        // File might not exist on disk
+      }
+    }),
+  );
+
+  // Build new results with snippets (pure transformation over fetched data)
+  return results.map((result) => {
+    if (result.type === "dir" || result.type === "commit") return result;
+
     const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
     const entriesJson = entriesMap.get(`${repoId}:${result.filePath}`);
-    if (!entriesJson) continue;
+    if (!entriesJson) return result;
 
     let entries: SkeletonEntry[];
     try {
       entries = JSON.parse(entriesJson);
     } catch {
-      continue;
+      return result;
     }
-    if (!entries || entries.length === 0) continue;
+    if (!entries || entries.length === 0) return result;
 
-    // Find best-matching entry via word-intersection score
-    let bestEntry: SkeletonEntry | null = null;
-    let bestScore = -1;
-    for (const entry of entries) {
-      const nameWords = entry.name
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((w) => w.length > 2);
-      const kindWords = entry.kind
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((w) => w.length > 2);
-      const allWords = [...nameWords, ...kindWords];
-      let score = 0;
-      for (const w of allWords) {
-        if (queryWords.has(w)) score++;
-        // Partial match bonus
-        for (const qw of queryWords) {
-          if (w.includes(qw) || qw.includes(w)) score += 0.5;
-        }
-      }
-      if (score > bestScore) {
-        bestScore = score;
-        bestEntry = entry;
-      }
-    }
-
-    // Fallback to first entry if no match
-    if (!bestEntry) bestEntry = entries[0];
-
-    result.lineStart = bestEntry.startLine;
-    result.lineEnd = bestEntry.endLine;
-
-    // Read source file and extract lines (cap at 20)
-    try {
-      const absPath = `${repoRoot}/${result.filePath}`;
-      const content = await Bun.file(absPath).text();
-      const lines = content.split("\n");
-      const start = bestEntry.startLine - 1; // 0-indexed
-      const maxLines = 20;
-      const end = Math.min(bestEntry.endLine, start + maxLines);
-      result.snippet = lines.slice(start, end).join("\n");
-    } catch {
-      // File might not exist on disk
-    }
-  }
+    const bestEntry = findBestEntry(entries, queryWords);
+    const content = fileContentCache.get(result.filePath);
+    return {
+      ...result,
+      lineStart: bestEntry.startLine,
+      lineEnd: bestEntry.endLine,
+      ...(content !== undefined && {
+        snippet: extractSnippet(content, bestEntry.startLine, bestEntry.endLine),
+      }),
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Cross-repo edge post-processing
 // ---------------------------------------------------------------------------
 
-async function attachCrossRepoEdges(
+/** Pure: annotate results with cross-repo edge data from a pre-fetched deps map. */
+function annotateWithEdges(
+  results: readonly SearchResult[],
+  depsByRepo: ReadonlyMap<
+    number,
+    ReadonlyArray<{ repoName: string; direction: "depends-on" | "depended-by" }>
+  >,
+  currentRepoId: number,
+): SearchResult[] {
+  return results.map((result) => {
+    if (result.type === "commit" || result.type === "dir") return result;
+    const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
+    const edges = depsByRepo.get(repoId);
+    if (edges && edges.length > 0) return { ...result, crossRepoEdges: [...edges] };
+    return result;
+  });
+}
+
+/**
+ * Impure shell: fetch cross-repo edges from DB and return a new results array
+ * with edges annotated on file results.
+ */
+async function withCrossRepoEdges(
   repoRoot: string,
   config: Awaited<ReturnType<typeof loadConfig>>,
-  results: SearchResult[],
+  results: readonly SearchResult[],
   currentRepoId: number,
   scopedRepoIds: number[] | null = null,
-): Promise<void> {
+): Promise<SearchResult[]> {
   // Build repo name map
   const repoNameMap = new Map<number, string>();
   if (config.store === "pg") {
@@ -1280,14 +1409,7 @@ async function attachCrossRepoEdges(
       depsByRepo.set(tgtId, targetList);
     }
 
-    for (const result of results) {
-      if (result.type === "commit" || result.type === "dir") continue;
-      const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
-      const edges = depsByRepo.get(repoId);
-      if (edges && edges.length > 0) {
-        result.crossRepoEdges = edges;
-      }
-    }
+    return annotateWithEdges(results, depsByRepo, currentRepoId);
   } else {
     const db = await getSqlite(repoRoot);
     const repos = db.prepare("SELECT id, name FROM repos").all() as {
@@ -1315,27 +1437,18 @@ async function attachCrossRepoEdges(
       Array<{ repoName: string; direction: "depends-on" | "depended-by" }>
     >();
     for (const e of allEdges) {
-      // source depends-on target
       const sourceList = depsByRepo.get(e.source_repo_id) ?? [];
       const targetName = repoNameMap.get(e.target_repo_id) ?? `repo:${e.target_repo_id}`;
       sourceList.push({ repoName: targetName, direction: "depends-on" });
       depsByRepo.set(e.source_repo_id, sourceList);
 
-      // target depended-by source
       const targetList = depsByRepo.get(e.target_repo_id) ?? [];
       const sourceName = repoNameMap.get(e.source_repo_id) ?? `repo:${e.source_repo_id}`;
       targetList.push({ repoName: sourceName, direction: "depended-by" });
       depsByRepo.set(e.target_repo_id, targetList);
     }
 
-    for (const result of results) {
-      if (result.type === "commit" || result.type === "dir") continue;
-      const repoId = result.repoId ? parseInt(result.repoId) : currentRepoId;
-      const edges = depsByRepo.get(repoId);
-      if (edges && edges.length > 0) {
-        result.crossRepoEdges = edges;
-      }
-    }
+    return annotateWithEdges(results, depsByRepo, currentRepoId);
   }
 }
 

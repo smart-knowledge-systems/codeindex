@@ -32,8 +32,8 @@ function shannonEntropy(s: string): number {
   for (const ch of s) {
     freq.set(ch, (freq.get(ch) ?? 0) + 1);
   }
-  let entropy = 0;
   const len = s.length;
+  let entropy = 0;
   for (const count of freq.values()) {
     const p = count / len;
     entropy -= p * Math.log2(p);

@@ -18,21 +18,23 @@ async function resolveRepoId(
   repoRoot: string,
   store: "pg" | "sqlite",
 ): Promise<{ repoId: number; repoName: string }> {
+  const notIndexedError = () => new Error("Repo not indexed. Run: codeindex reindex");
+
   if (store === "pg") {
     const rows = (await pgUnsafe("SELECT id, name FROM repos WHERE root_path = $1", [
       repoRoot,
     ])) as { id: string; name: string }[];
-    if (rows.length === 0) throw new Error("Repo not indexed. Run: codeindex reindex");
+    if (rows.length === 0) throw notIndexedError();
     return { repoId: parseInt(rows[0].id), repoName: rows[0].name };
-  } else {
-    const db = await getSqlite(repoRoot);
-    const rows = db.prepare("SELECT id, name FROM repos WHERE root_path = ?").all(repoRoot) as {
-      id: number;
-      name: string;
-    }[];
-    if (rows.length === 0) throw new Error("Repo not indexed. Run: codeindex reindex");
-    return { repoId: rows[0].id, repoName: rows[0].name };
   }
+
+  const db = await getSqlite(repoRoot);
+  const rows = db.prepare("SELECT id, name FROM repos WHERE root_path = ?").all(repoRoot) as {
+    id: number;
+    name: string;
+  }[];
+  if (rows.length === 0) throw notIndexedError();
+  return { repoId: rows[0].id, repoName: rows[0].name };
 }
 
 export async function runHealthCheck(repoRoot: string): Promise<CheckReport> {
@@ -41,16 +43,14 @@ export async function runHealthCheck(repoRoot: string): Promise<CheckReport> {
   const { repoId, repoName } = await resolveRepoId(repoRoot, store);
 
   const ctx: PolicyContext = { repoRoot, repoId, config, store };
-  const results: CheckReport["results"] = [];
 
-  for (const policy of ALL_POLICIES) {
-    const result = await policy.check(ctx);
-    results.push({
+  const results = await Promise.all(
+    ALL_POLICIES.map(async (policy) => ({
       policy: policy.name,
       severity: policy.severity,
-      result,
-    });
-  }
+      result: await policy.check(ctx),
+    })),
+  );
 
   const hasError = results.some((r) => r.severity === "error" && !r.result.passed);
 

@@ -8,6 +8,26 @@ export interface AuthSession {
   authenticated: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Shared repo lookup — used by both hasTokens check and scope validation
+// ---------------------------------------------------------------------------
+
+/** Look up a repo's numeric ID by its root path. Returns null if not found. */
+async function getRepoId(repoRoot: string, repoPath: string): Promise<number | null> {
+  const config = await loadConfig(repoRoot);
+  if (config.store === "pg") {
+    const rows = (await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoPath])) as {
+      id: string;
+    }[];
+    return rows.length > 0 ? parseInt(rows[0].id) : null;
+  }
+  const db = await getSqlite(repoRoot);
+  const row = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoPath) as {
+    id: number;
+  } | null;
+  return row?.id ?? null;
+}
+
 /**
  * Check if any access tokens exist in the database.
  */
@@ -61,39 +81,9 @@ export async function validateRepoScope(
   session: AuthSession,
 ): Promise<boolean> {
   if (session.repoIds === null) return true; // full access
-  if (!repoPath || repoPath === repoRoot) {
-    // Look up the default repo's ID and check it against token scope
-    const config = await loadConfig(repoRoot);
-    if (config.store === "pg") {
-      const rows = (await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot])) as {
-        id: string;
-      }[];
-      if (rows.length === 0) return false;
-      return session.repoIds.includes(parseInt(rows[0].id));
-    } else {
-      const db = await getSqlite(repoRoot);
-      const row = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoRoot) as {
-        id: number;
-      } | null;
-      if (!row) return false;
-      return session.repoIds.includes(row.id);
-    }
-  }
 
-  // Look up the repo ID for the given path
-  const config = await loadConfig(repoRoot);
-  if (config.store === "pg") {
-    const rows = (await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoPath])) as {
-      id: string;
-    }[];
-    if (rows.length === 0) return false;
-    return session.repoIds.includes(parseInt(rows[0].id));
-  } else {
-    const db = await getSqlite(repoRoot);
-    const row = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoPath) as {
-      id: number;
-    } | null;
-    if (!row) return false;
-    return session.repoIds.includes(row.id);
-  }
+  const targetPath = !repoPath || repoPath === repoRoot ? repoRoot : repoPath;
+  const repoId = await getRepoId(repoRoot, targetPath);
+  if (repoId === null) return false;
+  return session.repoIds.includes(repoId);
 }

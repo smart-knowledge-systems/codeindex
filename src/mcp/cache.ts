@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { logEvent } from "../logging";
 
 interface CacheEntry {
   embedding: number[];
@@ -8,6 +9,14 @@ interface CacheEntry {
 const TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_ENTRIES = 1000;
 
+/**
+ * LRU cache for embedding vectors, keyed by SHA-256 hash of input text.
+ *
+ * NOTE: This class intentionally uses mutable Map state for performance.
+ * Map insertion-order semantics give us O(1) LRU eviction without a
+ * separate doubly-linked list. The trade-off (mutation over immutability)
+ * is confined to this class boundary — callers interact via get/set only.
+ */
 export class EmbeddingCache {
   private cache = new Map<string, CacheEntry>();
   private hits = 0;
@@ -49,7 +58,25 @@ export class EmbeddingCache {
     this.cache.set(key, { embedding, createdAt: Date.now() });
   }
 
-  stats(): { hits: number; misses: number; size: number } {
-    return { hits: this.hits, misses: this.misses, size: this.cache.size };
+  stats(): { hits: number; misses: number; size: number; hit_rate: number } {
+    const total = this.hits + this.misses;
+    return {
+      hits: this.hits,
+      misses: this.misses,
+      size: this.cache.size,
+      hit_rate: total > 0 ? this.hits / total : 0,
+    };
+  }
+
+  /** Emit cache statistics as a structured log event. */
+  logStats(): void {
+    const { hits, misses, size, hit_rate } = this.stats();
+    logEvent({
+      event: "infra.cache.stats",
+      hits,
+      misses,
+      size,
+      hit_rate,
+    });
   }
 }

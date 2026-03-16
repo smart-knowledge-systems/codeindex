@@ -17,6 +17,7 @@ import type { SearchResult } from "../search/types";
 import { CodeindexError, formatError } from "../errors";
 import { validateRepoScope, type AuthSession } from "./auth";
 import { recordEvent } from "../telemetry";
+import { logEvent, getSessionId } from "../logging";
 import { EmbeddingCache } from "./cache";
 import { reindexSingleFile, loadFileIndex } from "../index/reindex";
 import type { TransactionSQL } from "bun";
@@ -26,29 +27,40 @@ import type { TransactionSQL } from "bun";
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap PG queries in an RLS-scoped transaction.
- * For scoped sessions: uses session.repoIds.
- * For full-access / no session: queries all repo IDs so RLS passes.
- */
-/**
  * Cached full-access repo IDs — avoids SELECT id FROM repos on every tool call.
  *
  * Note: newly indexed repos will not appear in search results until this cache
  * refreshes (up to 60 s). Call `invalidateRepoCache()` after repo creation to
  * avoid the visibility delay.
  */
-let cachedAllRepoIds: number[] | null = null;
-let cachedAllRepoIdsAt = 0;
-let inflightRepoIdsFetch: Promise<number[]> | null = null;
-const REPO_CACHE_TTL_MS = 60_000; // refresh every 60 seconds
+interface RepoCache {
+  ids: number[] | null;
+  fetchedAt: number;
+  inflight: Promise<number[]> | null;
+}
+
+const REPO_CACHE_TTL_MS = 60_000;
+const ACCESS_DENIED_MSG = "access denied — repo not in token scope";
+
+const repoCache: RepoCache = { ids: null, fetchedAt: 0, inflight: null };
 
 /** Invalidate the full-access repo ID cache so newly indexed repos are visible immediately. */
 export function invalidateRepoCache(): void {
-  cachedAllRepoIds = null;
-  cachedAllRepoIdsAt = 0;
-  inflightRepoIdsFetch = null;
+  repoCache.ids = null;
+  repoCache.fetchedAt = 0;
+  repoCache.inflight = null;
 }
 
+async function fetchAllRepoIds(): Promise<number[]> {
+  const rows = await pgUnsafe("SELECT id FROM repos");
+  return rows.map((r: Record<string, unknown>) => Number(r.id));
+}
+
+/**
+ * Wrap PG queries in an RLS-scoped transaction.
+ * For scoped sessions: uses session.repoIds.
+ * For full-access / no session: queries all repo IDs so RLS passes.
+ */
 async function withMcpScope<T>(
   session: AuthSession | undefined,
   fn: (tx: TransactionSQL) => Promise<T>,
@@ -57,28 +69,23 @@ async function withMcpScope<T>(
     return withRepoScope(session.repoIds, fn);
   }
   // Full access — use cached repo IDs for FORCE RLS
-  if (!cachedAllRepoIds || Date.now() - cachedAllRepoIdsAt > REPO_CACHE_TTL_MS) {
-    const stampBefore = cachedAllRepoIdsAt;
-    if (!inflightRepoIdsFetch) {
-      inflightRepoIdsFetch = pgUnsafe("SELECT id FROM repos")
-        .then((rows) => rows.map((r: Record<string, unknown>) => Number(r.id)))
-        .finally(() => {
-          inflightRepoIdsFetch = null;
-        });
+  if (!repoCache.ids || Date.now() - repoCache.fetchedAt > REPO_CACHE_TTL_MS) {
+    const stampBefore = repoCache.fetchedAt;
+    if (!repoCache.inflight) {
+      repoCache.inflight = fetchAllRepoIds().finally(() => {
+        repoCache.inflight = null;
+      });
     }
-    const freshIds = await inflightRepoIdsFetch;
+    const freshIds = await repoCache.inflight;
     // Only populate cache if it wasn't invalidated while we were awaiting
-    if (cachedAllRepoIdsAt === stampBefore && freshIds) {
-      cachedAllRepoIds = freshIds;
-      cachedAllRepoIdsAt = Date.now();
+    if (repoCache.fetchedAt === stampBefore && freshIds) {
+      repoCache.ids = freshIds;
+      repoCache.fetchedAt = Date.now();
     }
   }
   // If cache is still empty (invalidated during fetch), do a fresh uncached query
-  const allRepoIds: number[] =
-    cachedAllRepoIds ??
-    (await pgUnsafe("SELECT id FROM repos")).map((r: Record<string, unknown>) => Number(r.id));
+  const allRepoIds = repoCache.ids ?? (await fetchAllRepoIds());
   if (allRepoIds.length === 0) {
-    // No repos at all — run in a plain transaction
     const pg = await getPg();
     return pg.begin(async (tx) => fn(tx));
   }
@@ -106,28 +113,58 @@ function reindexRateLimitKey(repoRoot: string, session?: AuthSession): string {
 
 function checkReindexRateLimit(repoRoot: string, session?: AuthSession): boolean {
   const key = reindexRateLimitKey(repoRoot, session);
-  let log = reindexCallLogs.get(key);
-  if (!log) {
-    log = [];
-    reindexCallLogs.set(key, log);
-  }
   const now = Date.now();
-  while (log.length > 0 && now - log[0] > REINDEX_RATE_WINDOW_MS) {
-    log.shift();
+  const existing = reindexCallLogs.get(key) ?? [];
+  const validCalls = existing.filter((ts) => now - ts <= REINDEX_RATE_WINDOW_MS);
+
+  if (validCalls.length >= REINDEX_RATE_LIMIT) {
+    reindexCallLogs.set(key, validCalls);
+    return false;
   }
-  if (log.length >= REINDEX_RATE_LIMIT) return false;
-  log.push(now);
+
+  reindexCallLogs.set(key, [...validCalls, now]);
 
   // Periodically evict stale/empty entries to prevent unbounded map growth
   if (reindexCallLogs.size > 100) {
-    const cutoff = Date.now() - REINDEX_RATE_WINDOW_MS;
+    const cutoff = now - REINDEX_RATE_WINDOW_MS;
     for (const [k, v] of reindexCallLogs) {
-      // Evict empty entries AND entries whose newest timestamp is stale
       if (v.length === 0 || v[v.length - 1] < cutoff) reindexCallLogs.delete(k);
     }
   }
 
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// MCP response helpers — consistent success/error formatting
+// ---------------------------------------------------------------------------
+
+type McpToolResponse = {
+  content: Array<{ type: "text"; text: string }>;
+  isError?: true;
+};
+
+function mcpSuccess(data: unknown): McpToolResponse {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+  };
+}
+
+function mcpError(message: string, code?: string): McpToolResponse {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({ error: message, ...(code ? { code } : {}) }),
+      },
+    ],
+    isError: true,
+  };
+}
+
+function mcpCatchError(err: unknown): McpToolResponse {
+  const message = formatError(err);
+  return mcpError(message, err instanceof CodeindexError ? err.code : undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,18 +192,27 @@ interface StatusResult {
   };
 }
 
-async function getStatus(
+interface RepoRow {
+  id: number;
+  name: string;
+  root_path: string;
+  formatter_cmd: string | null;
+}
+
+interface StatusCounts {
+  files: number;
+  directories: number;
+  commits: number;
+  lastIndexed: string | null;
+}
+
+async function fetchRepoCounts(
   repoRoot: string,
-  showCost: boolean,
+  repoId: number,
+  store: string,
   session?: AuthSession,
-): Promise<StatusResult> {
-  const config = await loadConfig(repoRoot);
-
-  if (config.store === "pg") {
-    const repos = await pgUnsafe("SELECT * FROM repos WHERE root_path = $1", [repoRoot]);
-    if (repos.length === 0) throw new Error("Not indexed yet. Run: codeindex reindex");
-    const repoId = repos[0].id;
-
+): Promise<StatusCounts> {
+  if (store === "pg") {
     const [fileCount, dirCount, commitCount, lastIndexed] = await withMcpScope(
       session,
       async (tx) =>
@@ -177,84 +223,86 @@ async function getStatus(
           tx.unsafe("SELECT max(indexed_at) as last FROM files WHERE repo_id = $1", [repoId]),
         ]),
     );
-
-    const result: StatusResult = {
-      repo: repos[0].name,
-      rootPath: repos[0].root_path,
-      store: "pg",
+    return {
       files: Number(fileCount[0].cnt),
       directories: Number(dirCount[0].cnt),
       commits: Number(commitCount[0].cnt),
       lastIndexed: lastIndexed[0].last ?? null,
-      formatter: repos[0].formatter_cmd ?? "auto-detect",
     };
-
-    if (showCost) {
-      const costRows = await getCostSummary(repoRoot);
-      result.cost = {
-        rows: costRows.map((r) => ({
-          operation: r.operation,
-          model: r.model,
-          tokensIn: r.totalTokensIn,
-          tokensOut: r.totalTokensOut,
-          costUsd: r.totalCostUsd,
-        })),
-        totalUsd: costRows.reduce((sum, r) => sum + r.totalCostUsd, 0),
-      };
-    }
-
-    return result;
-  } else {
-    const db = await getSqlite(repoRoot);
-    const repos = db.prepare("SELECT * FROM repos WHERE root_path = ?").all(repoRoot) as {
-      id: number;
-      name: string;
-      root_path: string;
-      formatter_cmd: string | null;
-    }[];
-    if (repos.length === 0) throw new Error("Not indexed yet. Run: codeindex reindex");
-    const repoId = repos[0].id;
-
-    const fileCount = db
-      .prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?")
-      .get(repoId) as { cnt: number };
-    const dirCount = db
-      .prepare("SELECT count(*) as cnt FROM directories WHERE repo_id = ?")
-      .get(repoId) as { cnt: number };
-    const commitCount = db
-      .prepare("SELECT count(*) as cnt FROM commits WHERE repo_id = ?")
-      .get(repoId) as { cnt: number };
-    const lastIndexed = db
-      .prepare("SELECT max(indexed_at) as last FROM files WHERE repo_id = ?")
-      .get(repoId) as { last: string | null };
-
-    const result: StatusResult = {
-      repo: repos[0].name,
-      rootPath: repos[0].root_path,
-      store: "sqlite",
-      files: fileCount.cnt,
-      directories: dirCount.cnt,
-      commits: commitCount.cnt,
-      lastIndexed: lastIndexed.last ?? null,
-      formatter: repos[0].formatter_cmd ?? "auto-detect",
-    };
-
-    if (showCost) {
-      const costRows = await getCostSummary(repoRoot);
-      result.cost = {
-        rows: costRows.map((r) => ({
-          operation: r.operation,
-          model: r.model,
-          tokensIn: r.totalTokensIn,
-          tokensOut: r.totalTokensOut,
-          costUsd: r.totalCostUsd,
-        })),
-        totalUsd: costRows.reduce((sum, r) => sum + r.totalCostUsd, 0),
-      };
-    }
-
-    return result;
   }
+
+  const db = await getSqlite(repoRoot);
+  const fileCount = db
+    .prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?")
+    .get(repoId) as { cnt: number };
+  const dirCount = db
+    .prepare("SELECT count(*) as cnt FROM directories WHERE repo_id = ?")
+    .get(repoId) as { cnt: number };
+  const commitCount = db
+    .prepare("SELECT count(*) as cnt FROM commits WHERE repo_id = ?")
+    .get(repoId) as { cnt: number };
+  const lastIndexed = db
+    .prepare("SELECT max(indexed_at) as last FROM files WHERE repo_id = ?")
+    .get(repoId) as { last: string | null };
+
+  return {
+    files: fileCount.cnt,
+    directories: dirCount.cnt,
+    commits: commitCount.cnt,
+    lastIndexed: lastIndexed.last ?? null,
+  };
+}
+
+async function buildCostSummary(repoRoot: string): Promise<StatusResult["cost"]> {
+  const costRows = await getCostSummary(repoRoot);
+  return {
+    rows: costRows.map((r) => ({
+      operation: r.operation,
+      model: r.model,
+      tokensIn: r.totalTokensIn,
+      tokensOut: r.totalTokensOut,
+      costUsd: r.totalCostUsd,
+    })),
+    totalUsd: costRows.reduce((sum, r) => sum + r.totalCostUsd, 0),
+  };
+}
+
+async function fetchRepoRow(repoRoot: string, store: string): Promise<RepoRow> {
+  if (store === "pg") {
+    const repos = await pgUnsafe("SELECT * FROM repos WHERE root_path = $1", [repoRoot]);
+    if (repos.length === 0) throw new Error("Not indexed yet. Run: codeindex reindex");
+    return repos[0] as RepoRow;
+  }
+  const db = await getSqlite(repoRoot);
+  const repo = db.prepare("SELECT * FROM repos WHERE root_path = ?").get(repoRoot) as
+    | RepoRow
+    | undefined;
+  if (!repo) throw new Error("Not indexed yet. Run: codeindex reindex");
+  return repo;
+}
+
+async function getStatus(
+  repoRoot: string,
+  showCost: boolean,
+  session?: AuthSession,
+): Promise<StatusResult> {
+  const config = await loadConfig(repoRoot);
+  const repo = await fetchRepoRow(repoRoot, config.store);
+  const counts = await fetchRepoCounts(repoRoot, repo.id, config.store, session);
+
+  const result: StatusResult = {
+    repo: repo.name,
+    rootPath: repo.root_path,
+    store: config.store,
+    ...counts,
+    formatter: repo.formatter_cmd ?? "auto-detect",
+  };
+
+  if (showCost) {
+    result.cost = await buildCostSummary(repoRoot);
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,27 +351,110 @@ async function enrichResults(
 ): Promise<Array<SearchResult & { indexedAt?: string; stale?: boolean }>> {
   const filePaths = results.filter((r) => r.type !== "commit").map((r) => r.filePath);
   const indexedAtMap = await batchGetIndexedAt(repoRoot, filePaths, session);
-  const enriched = [];
-  for (const r of results) {
-    if (r.type === "commit") {
-      enriched.push(r);
-      continue;
-    }
+
+  return results.map((r) => {
+    if (r.type === "commit") return r;
+
     const indexedAt = indexedAtMap.get(r.filePath) ?? null;
-    let stale = false;
-    if (indexedAt) {
-      try {
-        const effectiveRoot = r.repoPath ?? repoRoot;
-        const absPath = `${effectiveRoot}/${r.filePath}`;
-        const stat = statSync(absPath);
-        stale = stat.mtimeMs > new Date(indexedAt).getTime();
-      } catch {
-        // file may not exist on disk
-      }
-    }
-    enriched.push({ ...r, indexedAt: indexedAt ?? undefined, stale });
+    const stale = indexedAt ? isFileStale(r.repoPath ?? repoRoot, r.filePath, indexedAt) : false;
+    return { ...r, indexedAt: indexedAt ?? undefined, stale };
+  });
+}
+
+async function fetchHealthCounts(
+  repoRoot: string,
+  backend: string,
+  session?: AuthSession,
+): Promise<{ repoCount: number; fileCount: number; lastReindexAt: string | null }> {
+  if (backend === "pg") {
+    const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
+    if (repos.length === 0) return { repoCount: 0, fileCount: 0, lastReindexAt: null };
+    const repoId = repos[0].id;
+    const [files, lastIdx] = await withMcpScope(session, async (tx) =>
+      Promise.all([
+        tx.unsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [repoId]),
+        tx.unsafe("SELECT max(indexed_at)::text as last FROM files WHERE repo_id = $1", [repoId]),
+      ]),
+    );
+    return {
+      repoCount: repos.length,
+      fileCount: Number(files[0].cnt),
+      lastReindexAt: lastIdx[0].last ?? null,
+    };
   }
-  return enriched;
+  const db = await getSqlite(repoRoot);
+  const repo = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoRoot) as {
+    id: number;
+  } | null;
+  if (!repo) return { repoCount: 0, fileCount: 0, lastReindexAt: null };
+  const files = db.prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?").get(repo.id) as {
+    cnt: number;
+  };
+  const lastIdx = db
+    .prepare("SELECT max(indexed_at) as last FROM files WHERE repo_id = ?")
+    .get(repo.id) as { last: string | null };
+  return { repoCount: 1, fileCount: files.cnt, lastReindexAt: lastIdx.last ?? null };
+}
+
+function isFileStale(root: string, filePath: string, indexedAt: string): boolean {
+  try {
+    const stat = statSync(`${root}/${filePath}`);
+    return stat.mtimeMs > new Date(indexedAt).getTime();
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reindex helpers — extracted for composability (Issue 8)
+// ---------------------------------------------------------------------------
+
+function validatePaths(paths: string[], repoRoot: string): string | null {
+  for (const p of paths) {
+    if (p.includes("..") || path.isAbsolute(p)) {
+      return `Invalid path: ${p} — paths must be relative and cannot contain '..'`;
+    }
+    const resolved = path.resolve(repoRoot, p);
+    if (!resolved.startsWith(repoRoot + "/") && resolved !== repoRoot) {
+      return `Path traversal detected: ${p} resolves outside repo root`;
+    }
+  }
+  return null;
+}
+
+async function lookupRepoId(repoRoot: string, store: string): Promise<number | null> {
+  if (store === "pg") {
+    const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
+    return repos.length > 0 ? (repos[0].id as number) : null;
+  }
+  const db = await getSqlite(repoRoot);
+  const repo = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoRoot) as
+    | { id: number }
+    | undefined;
+  return repo?.id ?? null;
+}
+
+async function refreshFileId(
+  repoRoot: string,
+  repoId: number,
+  filePath: string,
+  store: string,
+  fileIndex: { fileIdMap: Map<string, number> },
+  session?: AuthSession,
+): Promise<void> {
+  if (store === "pg") {
+    const rows = (await withMcpScope(session, async (tx) =>
+      tx.unsafe("SELECT id FROM files WHERE repo_id = $1 AND file_path = $2", [repoId, filePath]),
+    )) as { id: number }[];
+    const row = rows[0];
+    if (row) fileIndex.fileIdMap.set(filePath, row.id);
+  } else {
+    const db = await getSqlite(repoRoot);
+    const row = db
+      .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
+      .get(repoId, filePath) as { id: number } | undefined;
+    if (row) fileIndex.fileIdMap.set(filePath, row.id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,16 +492,15 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
     },
     async ({ query, topN, minScore, lang, dir, since, scope, explain }) => {
       try {
-        recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "search" });
+        recordEvent({
+          event: "mcp_tool",
+          timestamp: new Date().toISOString(),
+          tool: "search",
+          sessionId: getSessionId(),
+        });
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
-          if (!allowed) {
-            return {
-              content: [
-                { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-              ],
-            };
-          }
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
         const repoRoot = defaultRepoRoot;
         const results = await search(repoRoot, query, {
@@ -387,29 +517,9 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         });
 
         const enriched = await enrichResults(repoRoot, results, session);
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(enriched, null, 2),
-            },
-          ],
-        };
+        return mcpSuccess(enriched);
       } catch (err) {
-        const message = formatError(err);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: message,
-                code: err instanceof CodeindexError ? err.code : undefined,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return mcpCatchError(err);
       }
     },
   );
@@ -433,45 +543,36 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           event: "mcp_tool",
           timestamp: new Date().toISOString(),
           tool: "batchSearch",
+          sessionId: getSessionId(),
         });
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
-          if (!allowed) {
-            return {
-              content: [
-                { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-              ],
-            };
-          }
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
         const repoRoot = defaultRepoRoot;
 
         // Deduplicate queries and batch-embed uncached ones
         const uniqueQueries = [...new Set(queries)];
-        const uncached: string[] = [];
-        for (const q of uniqueQueries) {
-          if (!embeddingCache.get(q)) {
-            uncached.push(q);
-          }
-        }
+        const uncached = uniqueQueries.filter((q) => !embeddingCache.get(q));
 
         if (uncached.length > 0) {
           const embeddings = await embed(uncached);
           if (embeddings.length < uncached.length) {
-            console.warn(
-              `batchSearch: embed() returned ${embeddings.length} embeddings for ${uncached.length} queries`,
-            );
+            logEvent({
+              event: "infra.embedding.mismatch",
+              expected: uncached.length,
+              received: embeddings.length,
+            });
           }
-          for (let i = 0; i < uncached.length && i < embeddings.length; i++) {
-            embeddingCache.set(uncached[i], embeddings[i]);
-          }
+          uncached.forEach((q, i) => {
+            if (i < embeddings.length) embeddingCache.set(q, embeddings[i]);
+          });
         }
 
-        // Run search for each unique query in parallel, then map results back preserving order
+        // Run search for each unique query in parallel, then build lookup from results
         const resolvedScope = scope === "all" ? "all" : scope ? scope.split(",") : "project";
-        const searchCache = new Map<string, unknown>();
 
-        await Promise.all(
+        const searchEntries = await Promise.all(
           uniqueQueries.map(async (q) => {
             const results = await search(repoRoot, q, {
               topN: topN ?? undefined,
@@ -481,38 +582,21 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
               includeSummary: true,
               embeddingCache,
             });
-            searchCache.set(q, await enrichResults(repoRoot, results, session));
+            const enriched = await enrichResults(repoRoot, results, session);
+            return [q, enriched] as const;
           }),
         );
+        const resultsByQuery = new Map(searchEntries);
 
         // Return array preserving original query order (including duplicates)
         const perQueryResults = queries.map((q) => ({
           query: q,
-          results: searchCache.get(q),
+          results: resultsByQuery.get(q),
         }));
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(perQueryResults, null, 2),
-            },
-          ],
-        };
+        return mcpSuccess(perQueryResults);
       } catch (err) {
-        const message = formatError(err);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: message,
-                code: err instanceof CodeindexError ? err.code : undefined,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return mcpCatchError(err);
       }
     },
   );
@@ -537,16 +621,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           event: "mcp_tool",
           timestamp: new Date().toISOString(),
           tool: "searchChanged",
+          sessionId: getSessionId(),
         });
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
-          if (!allowed) {
-            return {
-              content: [
-                { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-              ],
-            };
-          }
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
         const repoRoot = defaultRepoRoot;
         const results = await searchChanged(repoRoot, since, query ?? undefined, {
@@ -559,29 +638,9 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         });
 
         const enriched = await enrichResults(repoRoot, results, session);
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(enriched, null, 2),
-            },
-          ],
-        };
+        return mcpSuccess(enriched);
       } catch (err) {
-        const message = formatError(err);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: message,
-                code: err instanceof CodeindexError ? err.code : undefined,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return mcpCatchError(err);
       }
     },
   );
@@ -594,23 +653,20 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
-      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "intent" });
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "intent",
+        sessionId: getSessionId(),
+      });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const markdown = await generateIntent(repoRoot);
 
-      return {
-        content: [{ type: "text" as const, text: markdown }],
-      };
+      return { content: [{ type: "text" as const, text: markdown }] };
     },
   );
 
@@ -624,30 +680,20 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       agentsMdPath: z.string().optional().describe("Path to AGENTS.md (default: AGENTS.md)"),
     },
     async ({ repoPath, threshold, agentsMdPath }) => {
-      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "drift" });
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "drift",
+        sessionId: getSessionId(),
+      });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const mdPath = agentsMdPath ?? path.join(repoRoot, "AGENTS.md");
-
       const results = await detectDrift(repoRoot, mdPath, threshold ?? undefined);
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(results, null, 2),
-          },
-        ],
-      };
+      return mcpSuccess(results);
     },
   );
 
@@ -661,42 +707,21 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
     },
     async ({ repoPath, cost }) => {
       try {
-        recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "status" });
+        recordEvent({
+          event: "mcp_tool",
+          timestamp: new Date().toISOString(),
+          tool: "status",
+          sessionId: getSessionId(),
+        });
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-          if (!allowed) {
-            return {
-              content: [
-                { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-              ],
-            };
-          }
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
         const repoRoot = repoPath ?? defaultRepoRoot;
         const status = await getStatus(repoRoot, cost ?? false, session);
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(status, null, 2),
-            },
-          ],
-        };
+        return mcpSuccess(status);
       } catch (err) {
-        const message = formatError(err);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: message,
-                code: err instanceof CodeindexError ? err.code : undefined,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return mcpCatchError(err);
       }
     },
   );
@@ -709,28 +734,19 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
-      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "check" });
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "check",
+        sessionId: getSessionId(),
+      });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const report = await runHealthCheck(repoRoot);
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(report, null, 2),
-          },
-        ],
-      };
+      return mcpSuccess(report);
     },
   );
 
@@ -742,16 +758,15 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
-      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "health" });
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "health",
+        sessionId: getSessionId(),
+      });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -759,81 +774,26 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
 
       try {
         const schemaVersion = await getCurrentSchemaVersion(backend, repoRoot);
-        let repoCount = 0;
-        let fileCount = 0;
-        let lastReindexAt: string | null = null;
-
-        if (backend === "pg") {
-          const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
-          repoCount = repos.length;
-          if (repos.length > 0) {
-            const repoId = repos[0].id;
-            const [files, lastIdx] = await withMcpScope(session, async (tx) =>
-              Promise.all([
-                tx.unsafe("SELECT count(*) as cnt FROM files WHERE repo_id = $1", [repoId]),
-                tx.unsafe("SELECT max(indexed_at)::text as last FROM files WHERE repo_id = $1", [
-                  repoId,
-                ]),
-              ]),
-            );
-            fileCount = Number(files[0].cnt);
-            lastReindexAt = lastIdx[0].last ?? null;
-          }
-        } else {
-          const db = await getSqlite(repoRoot);
-          const repo = db.prepare("SELECT id FROM repos WHERE root_path = ?").get(repoRoot) as {
-            id: number;
-          } | null;
-          repoCount = repo ? 1 : 0;
-          if (repo) {
-            const files = db
-              .prepare("SELECT count(*) as cnt FROM files WHERE repo_id = ?")
-              .get(repo.id) as { cnt: number };
-            fileCount = files.cnt;
-            const lastIdx = db
-              .prepare("SELECT max(indexed_at) as last FROM files WHERE repo_id = ?")
-              .get(repo.id) as { last: string | null };
-            lastReindexAt = lastIdx.last ?? null;
-          }
-        }
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  schemaVersion,
-                  connectionOk: true,
-                  repoCount,
-                  fileCount,
-                  lastReindexAt,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        const { repoCount, fileCount, lastReindexAt } = await fetchHealthCounts(
+          repoRoot,
+          backend,
+          session,
+        );
+        return mcpSuccess({
+          schemaVersion,
+          connectionOk: true,
+          repoCount,
+          fileCount,
+          lastReindexAt,
+        });
       } catch {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  schemaVersion: 0,
-                  connectionOk: false,
-                  repoCount: 0,
-                  fileCount: 0,
-                  lastReindexAt: null,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        return mcpSuccess({
+          schemaVersion: 0,
+          connectionOk: false,
+          repoCount: 0,
+          fileCount: 0,
+          lastReindexAt: null,
+        });
       }
     },
   );
@@ -847,16 +807,15 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ filePath, repoPath }) => {
-      recordEvent({ event: "mcp_tool", timestamp: new Date().toISOString(), tool: "getImporters" });
+      recordEvent({
+        event: "mcp_tool",
+        timestamp: new Date().toISOString(),
+        tool: "getImporters",
+        sessionId: getSessionId(),
+      });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -873,7 +832,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             [repoRoot, filePath],
           ),
         );
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        return mcpSuccess(rows);
       } else {
         const db = await getSqlite(repoRoot);
         const rows = db
@@ -886,7 +845,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              WHERE r.root_path = ? AND tf.file_path = ?`,
           )
           .all(repoRoot, filePath);
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        return mcpSuccess(rows);
       }
     },
   );
@@ -904,16 +863,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "getDependencies",
+        sessionId: getSessionId(),
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -930,7 +884,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             [repoRoot, filePath],
           ),
         );
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        return mcpSuccess(rows);
       } else {
         const db = await getSqlite(repoRoot);
         const rows = db
@@ -943,7 +897,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              WHERE r.root_path = ? AND sf.file_path = ?`,
           )
           .all(repoRoot, filePath);
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        return mcpSuccess(rows);
       }
     },
   );
@@ -966,16 +920,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "traceImportChain",
+        sessionId: getSessionId(),
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -1015,9 +964,9 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                )
                SELECT DISTINCT file_path, depth FROM chain ORDER BY depth`;
         const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        return mcpSuccess(rows);
       } else {
-        // SQLite: iterative approach since recursive CTEs with dynamic column names are awkward
+        // SQLite: iterative BFS since recursive CTEs with dynamic column names are awkward
         const db = await getSqlite(repoRoot);
         const startRow = db
           .prepare(
@@ -1025,9 +974,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              WHERE r.root_path = ? AND f.file_path = ?`,
           )
           .get(repoRoot, filePath) as { id: number } | null;
-        if (!startRow) {
-          return { content: [{ type: "text" as const, text: JSON.stringify([]) }] };
-        }
+        if (!startRow) return mcpSuccess([]);
 
         // Build scope filter for SQLite
         const scopedFileIds = scopedRepoIds
@@ -1042,13 +989,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             )
           : null;
 
-        const visited = new Map<number, { file_path: string; depth: number }>();
-        let frontier = [startRow.id];
-        let currentDepth = 0;
         const filePathStmt = db.prepare(`SELECT file_path FROM files WHERE id = ?`);
-        const startFilePath = (filePathStmt.get(startRow.id) as { file_path: string }).file_path;
-        visited.set(startRow.id, { file_path: startFilePath, depth: 0 });
-
         const importStmt =
           dir === "dependencies"
             ? db.prepare(
@@ -1058,26 +999,33 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                 `SELECT source_file_id AS next_id FROM file_imports WHERE resolved_file_id = ?`,
               );
 
+        const startFilePath = (filePathStmt.get(startRow.id) as { file_path: string }).file_path;
+
+        // BFS traversal using imperative loop
+        const visited = new Map<number, { file_path: string; depth: number }>();
+        visited.set(startRow.id, { file_path: startFilePath, depth: 0 });
+        let frontier = [startRow.id];
+        let currentDepth = 0;
+
         while (frontier.length > 0 && currentDepth < depth) {
-          currentDepth++;
+          const nextDepth = currentDepth + 1;
           const nextFrontier: number[] = [];
           for (const id of frontier) {
             const nexts = importStmt.all(id) as { next_id: number }[];
             for (const n of nexts) {
-              if (!visited.has(n.next_id)) {
-                // Skip files outside scoped repos
-                if (scopedFileIds && !scopedFileIds.has(n.next_id)) continue;
-                const fp = (filePathStmt.get(n.next_id) as { file_path: string }).file_path;
-                visited.set(n.next_id, { file_path: fp, depth: currentDepth });
-                nextFrontier.push(n.next_id);
-              }
+              if (visited.has(n.next_id)) continue;
+              if (scopedFileIds && !scopedFileIds.has(n.next_id)) continue;
+              const fp = (filePathStmt.get(n.next_id) as { file_path: string }).file_path;
+              visited.set(n.next_id, { file_path: fp, depth: nextDepth });
+              nextFrontier.push(n.next_id);
             }
           }
           frontier = nextFrontier;
+          currentDepth = nextDepth;
         }
 
         const results = [...visited.values()].sort((a, b) => a.depth - b.depth);
-        return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+        return mcpSuccess(results);
       }
     },
   );
@@ -1094,16 +1042,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "getCrossRepoEdges",
+        sessionId: getSessionId(),
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -1132,7 +1075,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              ORDER BY sr.name, tr.name`;
         const params = scopedRepoIds ? [scopedRepoIds] : [];
         const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        return mcpSuccess(rows);
       } else {
         const db = await getSqlite(repoRoot);
         if (scopedRepoIds && scopedRepoIds.length > 0) {
@@ -1151,7 +1094,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                ORDER BY sr.name, tr.name`,
             )
             .all(...scopedRepoIds, ...scopedRepoIds);
-          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+          return mcpSuccess(rows);
         } else {
           const rows = db
             .prepare(
@@ -1166,7 +1109,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
                ORDER BY sr.name, tr.name`,
             )
             .all();
-          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+          return mcpSuccess(rows);
         }
       }
     },
@@ -1185,16 +1128,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "findImplementors",
+        sessionId: getSessionId(),
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -1220,38 +1158,27 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              LIMIT 100`;
         const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
         const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        return mcpSuccess(rows);
       } else {
         const db = await getSqlite(repoRoot);
-        if (scopedRepoIds && scopedRepoIds.length > 0) {
-          const placeholders = scopedRepoIds.map(() => "?").join(",");
-          const rows = db
-            .prepare(
-              `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
-               FROM files f
-               JOIN repos r ON r.id = f.repo_id
-               WHERE f.skeleton LIKE ? ESCAPE '\\'
-                 AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
-                      OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
-                 AND r.id IN (${placeholders})
-               LIMIT 100`,
-            )
-            .all(pattern, ...scopedRepoIds);
-          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
-        } else {
-          const rows = db
-            .prepare(
-              `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
-               FROM files f
-               JOIN repos r ON r.id = f.repo_id
-               WHERE f.skeleton LIKE ? ESCAPE '\\'
-                 AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
-                      OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
-               LIMIT 100`,
-            )
-            .all(pattern);
-          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
-        }
+        const scopeFilter =
+          scopedRepoIds && scopedRepoIds.length > 0
+            ? `AND r.id IN (${scopedRepoIds.map(() => "?").join(",")})`
+            : "";
+        const scopeParams = scopedRepoIds && scopedRepoIds.length > 0 ? scopedRepoIds : [];
+        const rows = db
+          .prepare(
+            `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
+             FROM files f
+             JOIN repos r ON r.id = f.repo_id
+             WHERE f.skeleton LIKE ? ESCAPE '\\'
+               AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
+                    OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
+               ${scopeFilter}
+             LIMIT 100`,
+          )
+          .all(pattern, ...scopeParams);
+        return mcpSuccess(rows);
       }
     },
   );
@@ -1269,16 +1196,11 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "findCallers",
+        sessionId: getSessionId(),
       });
       if (session) {
         const allowed = await validateRepoScope(defaultRepoRoot, repoPath, session);
-        if (!allowed) {
-          return {
-            content: [
-              { type: "text" as const, text: "Error: access denied — repo not in token scope" },
-            ],
-          };
-        }
+        if (!allowed) return mcpError(ACCESS_DENIED_MSG);
       }
       const repoRoot = repoPath ?? defaultRepoRoot;
       const config = await loadConfig(repoRoot);
@@ -1304,38 +1226,27 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
              LIMIT 100`;
         const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
         const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
-        return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
+        return mcpSuccess(rows);
       } else {
         const db = await getSqlite(repoRoot);
-        if (scopedRepoIds && scopedRepoIds.length > 0) {
-          const placeholders = scopedRepoIds.map(() => "?").join(",");
-          const rows = db
-            .prepare(
-              `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
-               FROM file_imports fi
-               JOIN files sf ON sf.id = fi.source_file_id
-               JOIN repos r ON r.id = sf.repo_id
-               WHERE fi.imported_module LIKE ? ESCAPE '\\'
-                 AND r.id IN (${placeholders})
-               ORDER BY r.name, sf.file_path
-               LIMIT 100`,
-            )
-            .all(pattern, ...scopedRepoIds);
-          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
-        } else {
-          const rows = db
-            .prepare(
-              `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
-               FROM file_imports fi
-               JOIN files sf ON sf.id = fi.source_file_id
-               JOIN repos r ON r.id = sf.repo_id
-               WHERE fi.imported_module LIKE ? ESCAPE '\\'
-               ORDER BY r.name, sf.file_path
-               LIMIT 100`,
-            )
-            .all(pattern);
-          return { content: [{ type: "text" as const, text: JSON.stringify(rows, null, 2) }] };
-        }
+        const scopeFilter =
+          scopedRepoIds && scopedRepoIds.length > 0
+            ? `AND r.id IN (${scopedRepoIds.map(() => "?").join(",")})`
+            : "";
+        const scopeParams = scopedRepoIds && scopedRepoIds.length > 0 ? scopedRepoIds : [];
+        const rows = db
+          .prepare(
+            `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
+             FROM file_imports fi
+             JOIN files sf ON sf.id = fi.source_file_id
+             JOIN repos r ON r.id = sf.repo_id
+             WHERE fi.imported_module LIKE ? ESCAPE '\\'
+               ${scopeFilter}
+             ORDER BY r.name, sf.file_path
+             LIMIT 100`,
+          )
+          .all(pattern, ...scopeParams);
+        return mcpSuccess(rows);
       }
     },
   );
@@ -1358,110 +1269,31 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           event: "mcp_tool",
           timestamp: new Date().toISOString(),
           tool: "reindexFiles",
+          sessionId: getSessionId(),
         });
 
         // Scope validation
         if (session) {
           const allowed = await validateRepoScope(defaultRepoRoot, undefined, session);
-          if (!allowed) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({ error: "access denied — repo not in token scope" }),
-                },
-              ],
-              isError: true,
-            };
-          }
+          if (!allowed) return mcpError(ACCESS_DENIED_MSG);
         }
 
         // Rate limit check (module-level, persists across reconnections, per-session)
         if (!checkReindexRateLimit(defaultRepoRoot, session)) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: JSON.stringify({
-                  error: "Rate limit exceeded: max 5 reindexFiles calls per minute",
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return mcpError("Rate limit exceeded: max 5 reindexFiles calls per minute");
         }
 
         // Path traversal validation
         const repoRoot = defaultRepoRoot;
-        for (const p of paths) {
-          if (p.includes("..") || path.isAbsolute(p)) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({
-                    error: `Invalid path: ${p} — paths must be relative and cannot contain '..'`,
-                  }),
-                },
-              ],
-              isError: true,
-            };
-          }
-          // Verify resolved path is within repo root
-          const resolved = path.resolve(repoRoot, p);
-          if (!resolved.startsWith(repoRoot + "/") && resolved !== repoRoot) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({
-                    error: `Path traversal detected: ${p} resolves outside repo root`,
-                  }),
-                },
-              ],
-              isError: true,
-            };
-          }
-        }
+        const pathError = validatePaths(paths, repoRoot);
+        if (pathError) return mcpError(pathError);
 
         // Get repo ID
         const config = await loadConfig(repoRoot);
-        let repoId: number;
-        if (config.store === "pg") {
-          const repos = await pgUnsafe("SELECT id FROM repos WHERE root_path = $1", [repoRoot]);
-          if (repos.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({ error: "Repository not indexed yet" }),
-                },
-              ],
-              isError: true,
-            };
-          }
-          repoId = repos[0].id as number;
-        } else {
-          const db = await getSqlite(repoRoot);
-          const repos = db.prepare("SELECT id FROM repos WHERE root_path = ?").all(repoRoot) as {
-            id: number;
-          }[];
-          if (repos.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: JSON.stringify({ error: "Repository not indexed yet" }),
-                },
-              ],
-              isError: true,
-            };
-          }
-          repoId = repos[0].id;
-        }
+        const repoId = await lookupRepoId(repoRoot, config.store);
+        if (repoId === null) return mcpError("Repository not indexed yet");
 
         // Pre-load file index once for import resolution across the batch
-        // (loadFileIndex already calls withRepoScope internally for PG)
         const fileIndex = await loadFileIndex(repoRoot, repoId);
 
         const results: { path: string; indexed: boolean; error?: string }[] = [];
@@ -1474,22 +1306,7 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
             if (indexed) {
               fileIndex.allFiles.add(p);
               if (!fileIndex.fileIdMap.has(p)) {
-                // Fetch the newly inserted file's ID
-                if (config.store === "pg") {
-                  const rows = (await withMcpScope(session, async (tx) =>
-                    tx.unsafe("SELECT id FROM files WHERE repo_id = $1 AND file_path = $2", [
-                      repoId,
-                      p,
-                    ]),
-                  )) as { id: number }[];
-                  if (rows.length > 0) fileIndex.fileIdMap.set(p, rows[0].id);
-                } else {
-                  const db = await getSqlite(repoRoot);
-                  const row = db
-                    .prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?")
-                    .get(repoId, p) as { id: number } | undefined;
-                  if (row) fileIndex.fileIdMap.set(p, row.id);
-                }
+                await refreshFileId(repoRoot, repoId, p, config.store, fileIndex, session);
               }
             }
           } catch (err) {
@@ -1497,42 +1314,16 @@ export function createMcpServer(defaultRepoRoot: string, session?: AuthSession):
           }
         }
 
-        // Invalidate repo cache so newly indexed files are visible immediately
-        if (results.some((r) => r.indexed)) {
-          invalidateRepoCache();
-        }
+        if (results.some((r) => r.indexed)) invalidateRepoCache();
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  indexed: results.filter((r) => r.indexed).length,
-                  skipped: results.filter((r) => !r.indexed && !r.error).length,
-                  errors: results.filter((r) => r.error).length,
-                  details: results,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        return mcpSuccess({
+          indexed: results.filter((r) => r.indexed).length,
+          skipped: results.filter((r) => !r.indexed && !r.error).length,
+          errors: results.filter((r) => r.error).length,
+          details: results,
+        });
       } catch (err) {
-        const message = formatError(err);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                error: message,
-                code: err instanceof CodeindexError ? err.code : undefined,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return mcpCatchError(err);
       }
     },
   );

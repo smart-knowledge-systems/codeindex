@@ -70,22 +70,24 @@ async function loadJsonFile(filePath: string): Promise<Partial<CodeindexConfig>>
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function deepMerge(base: any, override: any): any {
-  const result = { ...base };
-  for (const key of Object.keys(override)) {
-    const val = override[key];
-    if (val !== undefined && val !== null && typeof val === "object" && !Array.isArray(val)) {
-      result[key] = deepMerge(result[key] ?? {}, val);
-    } else if (val !== undefined) {
-      result[key] = val;
-    }
-  }
-  return result;
+  return Object.keys(override).reduce(
+    (acc, key) => {
+      const val = override[key];
+      if (val !== undefined && val !== null && typeof val === "object" && !Array.isArray(val)) {
+        return { ...acc, [key]: deepMerge(acc[key] ?? {}, val) };
+      }
+      return val !== undefined ? { ...acc, [key]: val } : acc;
+    },
+    { ...base },
+  );
 }
 
 export async function loadConfig(repoRoot?: string): Promise<CodeindexConfig> {
-  const global = await loadJsonFile(GLOBAL_CONFIG_PATH);
   const localPath = repoRoot ? path.join(repoRoot, LOCAL_CONFIG_FILE) : LOCAL_CONFIG_FILE;
-  const local = await loadJsonFile(localPath);
+  const [global, local] = await Promise.all([
+    loadJsonFile(GLOBAL_CONFIG_PATH),
+    loadJsonFile(localPath),
+  ]);
   return deepMerge(
     deepMerge(DEFAULTS, global as Partial<CodeindexConfig>),
     local as Partial<CodeindexConfig>,

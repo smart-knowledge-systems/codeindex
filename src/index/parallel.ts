@@ -9,6 +9,7 @@ import { initParser } from "./skeleton";
 import { getRepoOrigin, getRepoName } from "./commits";
 import { collectFiles, embedFiles, storeFiles, pruneStale, summarizeDirs } from "../pipeline";
 import type { PipelineContext, SummaryProvider } from "../pipeline";
+import { logEvent } from "../logging";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -106,7 +107,9 @@ async function reindexOne(
   await initParser();
 
   await withCostContext({ repoId, repoRoot, store: config.store }, async () => {
+    const start = performance.now();
     process.stderr.write(`${tag} Scanning files...\n`);
+    logEvent({ event: "infra.reindex.started", repo_name: repoName });
 
     const ctx: PipelineContext = {
       repoRoot,
@@ -133,6 +136,13 @@ async function reindexOne(
       process.stderr.write(
         `${tag} Nothing to index (${allFiles.length - collected.length} unchanged)\n`,
       );
+      logEvent({
+        event: "infra.reindex.completed",
+        repo_name: repoName,
+        files_indexed: 0,
+        files_unchanged: allFiles.length,
+        duration_ms: Math.round(performance.now() - start),
+      });
       return;
     }
 
@@ -161,6 +171,14 @@ async function reindexOne(
     process.stderr.write(
       `${tag} Done: ${embedded.length} indexed, ${allFiles.length - embedded.length} unchanged\n`,
     );
+    logEvent({
+      event: "infra.reindex.completed",
+      repo_name: repoName,
+      files_indexed: embedded.length,
+      files_unchanged: allFiles.length - embedded.length,
+      pruned,
+      duration_ms: Math.round(performance.now() - start),
+    });
   });
 }
 
@@ -184,6 +202,12 @@ export async function parallelReindex(
         : "") +
       "\n",
   );
+  logEvent({
+    event: "infra.reindex.parallel_started",
+    repo_count: repos.length,
+    concurrency,
+    cost_budget: costBudget,
+  });
 
   const tasks = repos.map(async (repo, idx): Promise<RepoResult> => {
     await semaphore.acquire();
@@ -195,6 +219,12 @@ export async function parallelReindex(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`${tag} FAILED: ${msg}\n`);
+      logEvent({
+        event: "infra.reindex.repo_failed",
+        repo_name: repo.name,
+        "error.type": err instanceof Error ? err.constructor.name : "unknown",
+        "error.message": msg,
+      });
       return { repo: repo.name, status: "error", error: msg };
     } finally {
       semaphore.release();

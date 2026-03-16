@@ -1,13 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { logEvent } from "../../logging";
 
-let _client: Anthropic | null = null;
-
-function getClient(): Anthropic {
-  if (!_client) {
-    _client = new Anthropic();
-  }
-  return _client;
-}
+/** Lazily initialized Anthropic client singleton. */
+const getClient = (() => {
+  let client: Anthropic | null = null;
+  return (): Anthropic => {
+    if (!client) client = new Anthropic();
+    return client;
+  };
+})();
 
 export async function generateSummary(
   prompt: string,
@@ -41,6 +42,7 @@ export async function generateSummariesBatch(
   model = "claude-haiku-4-5-20251001",
 ): Promise<Map<string, { summary: string; tokensIn: number; tokensOut: number }>> {
   const client = getClient();
+  const start = performance.now();
 
   const batch = await client.messages.batches.create({
     requests: prompts.map((p) => ({
@@ -51,6 +53,12 @@ export async function generateSummariesBatch(
         messages: [{ role: "user", content: p.prompt }],
       },
     })),
+  });
+
+  logEvent({
+    event: "infra.batch.create",
+    batch_id: batch.id,
+    prompt_count: prompts.length,
   });
 
   // Poll for completion
@@ -75,6 +83,7 @@ export async function generateSummariesBatch(
   }
 
   // Fetch results
+  let failedCount = 0;
   const resultsStream = await client.messages.batches.results(batch.id);
   for await (const result of resultsStream) {
     if (result.result.type === "succeeded") {
@@ -89,12 +98,25 @@ export async function generateSummariesBatch(
         tokensOut: msg.usage.output_tokens,
       });
     } else {
-      console.error(
-        `Batch item ${result.custom_id} failed: ${result.result.type}`,
-        result.result.type === "errored" ? result.result.error : undefined,
-      );
+      failedCount++;
+      logEvent({
+        event: "infra.batch.item_failed",
+        batch_id: batch.id,
+        custom_id: result.custom_id,
+        "error.type": result.result.type,
+        "error.message":
+          result.result.type === "errored" ? JSON.stringify(result.result.error) : undefined,
+      });
     }
   }
+
+  logEvent({
+    event: "infra.batch.complete",
+    batch_id: batch.id,
+    succeeded: results.size,
+    failed: failedCount,
+    duration_ms: Math.round(performance.now() - start),
+  });
 
   return results;
 }

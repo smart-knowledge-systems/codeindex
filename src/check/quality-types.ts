@@ -6,13 +6,23 @@ export interface QualityPolicy {
   assert(summary: EvalSummary): QualityResult;
 }
 
-export interface QualityResult {
-  passed: boolean;
-  metric: string;
-  actual: number;
-  threshold: number;
-  message: string;
-}
+export type QualityResult =
+  | {
+      tag: "assessed";
+      passed: boolean;
+      metric: string;
+      actual: number;
+      threshold: number;
+      message: string;
+    }
+  | {
+      tag: "error";
+      passed: false;
+      metric: string;
+      actual: number;
+      threshold: number;
+      message: string;
+    };
 
 export interface QualityConfig {
   dataset: string;

@@ -1,13 +1,75 @@
 import { randomUUID } from "crypto";
-import { pgUnsafe } from "../db/pg";
+import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { loadConfig } from "../config";
+import { logEvent } from "../logging";
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
 
 function hashToken(token: string): string {
   const hasher = new Bun.CryptoHasher("sha256");
   hasher.update(token);
   return hasher.digest("hex");
 }
+
+/** Check whether a token record is expired relative to the given timestamp. */
+function isExpired(expiresAt: string | null, now: Date): boolean {
+  return expiresAt != null && new Date(expiresAt) < now;
+}
+
+/** Map a raw pg token row to TokenInfo. */
+function pgRowToTokenInfo(r: {
+  id: string;
+  name: string;
+  created_at: string;
+  expires_at: string | null;
+  revoked: boolean;
+  repo_ids: number[] | null;
+}): TokenInfo {
+  return {
+    id: parseInt(r.id),
+    name: r.name,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+    revoked: r.revoked,
+    repoIds: r.repo_ids?.filter((id) => id !== null) ?? [],
+  };
+}
+
+/** Map a raw sqlite token row to TokenInfo, using a pre-built access map. */
+function sqliteRowToTokenInfo(
+  t: { id: number; name: string; created_at: string; expires_at: string | null; revoked: number },
+  accessByToken: Map<number, number[]>,
+): TokenInfo {
+  return {
+    id: t.id,
+    name: t.name,
+    createdAt: t.created_at,
+    expiresAt: t.expires_at,
+    revoked: !!t.revoked,
+    repoIds: accessByToken.get(t.id) ?? [],
+  };
+}
+
+/** Group access rows into a Map<tokenId, repoId[]>. */
+function buildAccessMap(rows: { token_id: number; repo_id: number }[]): Map<number, number[]> {
+  const result = new Map<number, number[]>();
+  for (const row of rows) {
+    let list = result.get(row.token_id);
+    if (!list) {
+      list = [];
+      result.set(row.token_id, list);
+    }
+    list.push(row.repo_id);
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface TokenInfo {
   id: number;
@@ -17,6 +79,10 @@ export interface TokenInfo {
   revoked: boolean;
   repoIds: number[];
 }
+
+// ---------------------------------------------------------------------------
+// Impure boundary — database operations
+// ---------------------------------------------------------------------------
 
 /**
  * Create a new access token scoped to the given repos.
@@ -33,22 +99,32 @@ export async function createToken(
   const hash = hashToken(plaintext);
 
   if (config.store === "pg") {
-    await pgUnsafe("BEGIN");
+    const pg = await getPg();
     try {
-      const rows = (await pgUnsafe(
-        `INSERT INTO access_tokens (token_hash, name, expires_at) VALUES ($1, $2, $3) RETURNING id`,
-        [hash, name, expiresAt ?? null],
-      )) as { id: string }[];
-      const tokenId = parseInt(rows[0].id);
-      for (const repoId of repoIds) {
-        await pgUnsafe(`INSERT INTO token_repo_access (token_id, repo_id) VALUES ($1, $2)`, [
-          tokenId,
-          repoId,
-        ]);
-      }
-      await pgUnsafe("COMMIT");
+      await pg.begin(async (tx) => {
+        const rows = (await tx.unsafe(
+          `INSERT INTO access_tokens (token_hash, name, expires_at) VALUES ($1, $2, $3) RETURNING id`,
+          [hash, name, expiresAt ?? null],
+        )) as { id: string }[];
+        const tokenId = parseInt(rows[0].id);
+        if (repoIds.length > 0) {
+          const values = repoIds.map((_, i) => `($1, $${i + 2})`).join(", ");
+          await tx.unsafe(`INSERT INTO token_repo_access (token_id, repo_id) VALUES ${values}`, [
+            tokenId,
+            ...repoIds,
+          ]);
+        }
+      });
     } catch (err) {
-      await pgUnsafe("ROLLBACK");
+      logEvent({
+        event: "auth.token.create",
+        outcome: "error",
+        "error.type": (err as Error).name,
+        "error.message": (err as Error).message,
+        "error.retriable": false,
+        tokenName: name,
+        repoCount: repoIds.length,
+      });
       throw err;
     }
   } else {
@@ -58,14 +134,23 @@ export async function createToken(
         .prepare(`INSERT INTO access_tokens (token_hash, name, expires_at) VALUES (?, ?, ?)`)
         .run(hash, name, expiresAt ?? null);
       const tokenId = Number(result.lastInsertRowid);
-      const insertAccess = db.prepare(
-        `INSERT INTO token_repo_access (token_id, repo_id) VALUES (?, ?)`,
-      );
-      for (const repoId of repoIds) {
-        insertAccess.run(tokenId, repoId);
+      if (repoIds.length > 0) {
+        const placeholders = repoIds.map(() => "(?, ?)").join(", ");
+        const params = repoIds.flatMap((repoId) => [tokenId, repoId]);
+        db.prepare(`INSERT INTO token_repo_access (token_id, repo_id) VALUES ${placeholders}`).run(
+          ...params,
+        );
       }
     })();
   }
+
+  logEvent({
+    event: "auth.token.create",
+    outcome: "success",
+    tokenName: name,
+    repoCount: repoIds.length,
+    hasExpiry: expiresAt != null,
+  });
 
   return plaintext;
 }
@@ -74,40 +159,52 @@ export async function createToken(
  * Validate a token and return the repo IDs it has access to.
  * Returns null if the token is invalid, expired, or revoked.
  */
-export async function validateToken(repoRoot: string, token: string): Promise<number[] | null> {
+export async function validateToken(
+  repoRoot: string,
+  token: string,
+  now: Date = new Date(),
+): Promise<number[] | null> {
   const config = await loadConfig(repoRoot);
   const hash = hashToken(token);
 
+  const reject = (reason: string): null => {
+    logEvent({ event: "auth.token.validate", outcome: "rejected", reason });
+    return null;
+  };
+
   if (config.store === "pg") {
     const rows = (await pgUnsafe(
-      `SELECT id, revoked, expires_at FROM access_tokens WHERE token_hash = $1`,
+      `SELECT t.id, t.revoked, t.expires_at, array_agg(tra.repo_id) AS repo_ids
+       FROM access_tokens t
+       LEFT JOIN token_repo_access tra ON tra.token_id = t.id
+       WHERE t.token_hash = $1
+       GROUP BY t.id`,
       [hash],
-    )) as { id: string; revoked: boolean; expires_at: string | null }[];
-    if (rows.length === 0) return null;
+    )) as { id: string; revoked: boolean; expires_at: string | null; repo_ids: number[] | null }[];
+    if (rows.length === 0) return reject("not_found");
 
     const row = rows[0];
-    if (row.revoked) return null;
-    if (row.expires_at && new Date(row.expires_at) < new Date()) return null;
+    if (row.revoked) return reject("revoked");
+    if (isExpired(row.expires_at, now)) return reject("expired");
 
-    const accessRows = (await pgUnsafe(
-      `SELECT repo_id FROM token_repo_access WHERE token_id = $1`,
-      [parseInt(row.id)],
-    )) as { repo_id: string }[];
-    return accessRows.map((r) => parseInt(r.repo_id));
-  } else {
-    const db = await getSqlite(repoRoot);
-    const row = db
-      .prepare(`SELECT id, revoked, expires_at FROM access_tokens WHERE token_hash = ?`)
-      .get(hash) as { id: number; revoked: number; expires_at: string | null } | null;
-    if (!row) return null;
-    if (row.revoked) return null;
-    if (row.expires_at && new Date(row.expires_at) < new Date()) return null;
-
-    const accessRows = db
-      .prepare(`SELECT repo_id FROM token_repo_access WHERE token_id = ?`)
-      .all(row.id) as { repo_id: number }[];
-    return accessRows.map((r) => r.repo_id);
+    logEvent({ event: "auth.token.validate", outcome: "success" });
+    return row.repo_ids?.filter((id) => id !== null) ?? [];
   }
+
+  const db = await getSqlite(repoRoot);
+  const row = db
+    .prepare(`SELECT id, revoked, expires_at FROM access_tokens WHERE token_hash = ?`)
+    .get(hash) as { id: number; revoked: number; expires_at: string | null } | null;
+  if (!row) return reject("not_found");
+  if (row.revoked) return reject("revoked");
+  if (isExpired(row.expires_at, now)) return reject("expired");
+
+  const accessRows = db
+    .prepare(`SELECT repo_id FROM token_repo_access WHERE token_id = ?`)
+    .all(row.id) as { repo_id: number }[];
+
+  logEvent({ event: "auth.token.validate", outcome: "success" });
+  return accessRows.map((r) => r.repo_id);
 }
 
 /**
@@ -115,6 +212,8 @@ export async function validateToken(repoRoot: string, token: string): Promise<nu
  */
 export async function listTokens(repoRoot: string): Promise<TokenInfo[]> {
   const config = await loadConfig(repoRoot);
+
+  let tokens: TokenInfo[];
 
   if (config.store === "pg") {
     const rows = (await pgUnsafe(
@@ -131,17 +230,10 @@ export async function listTokens(repoRoot: string): Promise<TokenInfo[]> {
       revoked: boolean;
       repo_ids: number[] | null;
     }[];
-    return rows.map((r) => ({
-      id: parseInt(r.id),
-      name: r.name,
-      createdAt: r.created_at,
-      expiresAt: r.expires_at,
-      revoked: r.revoked,
-      repoIds: r.repo_ids?.filter((id) => id !== null) ?? [],
-    }));
+    tokens = rows.map(pgRowToTokenInfo);
   } else {
     const db = await getSqlite(repoRoot);
-    const tokens = db
+    const tokenRows = db
       .prepare(`SELECT id, name, created_at, expires_at, revoked FROM access_tokens ORDER BY id`)
       .all() as {
       id: number;
@@ -154,21 +246,12 @@ export async function listTokens(repoRoot: string): Promise<TokenInfo[]> {
       token_id: number;
       repo_id: number;
     }[];
-    const accessByToken = new Map<number, number[]>();
-    for (const row of allAccess) {
-      const list = accessByToken.get(row.token_id) ?? [];
-      list.push(row.repo_id);
-      accessByToken.set(row.token_id, list);
-    }
-    return tokens.map((t) => ({
-      id: t.id,
-      name: t.name,
-      createdAt: t.created_at,
-      expiresAt: t.expires_at,
-      revoked: !!t.revoked,
-      repoIds: accessByToken.get(t.id) ?? [],
-    }));
+    const accessByToken = buildAccessMap(allAccess);
+    tokens = tokenRows.map((t) => sqliteRowToTokenInfo(t, accessByToken));
   }
+
+  logEvent({ event: "auth.token.list", tokenCount: tokens.length });
+  return tokens;
 }
 
 /**
@@ -182,16 +265,21 @@ export async function revokeToken(repoRoot: string, tokenId: number): Promise<vo
     const db = await getSqlite(repoRoot);
     db.prepare(`UPDATE access_tokens SET revoked = 1 WHERE id = ?`).run(tokenId);
   }
+
+  logEvent({ event: "auth.token.revoke", tokenId });
 }
 
 /**
  * Get scoped repo IDs from a token (via env var or explicit).
  * Returns null if no token is set (full access).
  */
-export async function getScopedRepoIds(repoRoot: string): Promise<number[] | null> {
-  const token = process.env.CODEINDEX_TOKEN;
-  if (!token) return null;
+export async function getScopedRepoIds(
+  repoRoot: string,
+  token?: string | null,
+): Promise<number[] | null> {
+  const resolvedToken = token ?? process.env.CODEINDEX_TOKEN ?? null;
+  if (!resolvedToken) return null;
   // Invalid/expired/revoked token should deny access (empty array),
   // not grant full access (null)
-  return (await validateToken(repoRoot, token)) ?? [];
+  return (await validateToken(repoRoot, resolvedToken)) ?? [];
 }

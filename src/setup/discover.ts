@@ -1,6 +1,11 @@
 import { existsSync } from "fs";
 import { readdir } from "fs/promises";
 import path from "path";
+import { logEvent } from "../logging";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface DiscoveredRepo {
   absPath: string;
@@ -10,41 +15,21 @@ export interface DiscoveredRepo {
   estimatedFileCount: number;
 }
 
-/**
- * Scan a directory one level deep for git repositories.
- * Returns repos sorted by name.
- */
-export async function discoverRepos(scanDir: string): Promise<DiscoveredRepo[]> {
-  const absDir = path.resolve(scanDir);
-  let entries: string[];
-  try {
-    entries = await readdir(absDir);
-  } catch {
-    throw new Error(`Cannot read directory: ${absDir}`);
-  }
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
 
-  const repos: DiscoveredRepo[] = [];
-
-  for (const entry of entries) {
-    const entryPath = path.join(absDir, entry);
-    const gitPath = path.join(entryPath, ".git");
-    const hasGit = existsSync(path.join(gitPath, "HEAD"));
-    if (!hasGit) continue;
-
-    const hasIndexIgnore = existsSync(path.join(entryPath, ".indexignore"));
-    const estimatedFileCount = await estimateFileCount(entryPath);
-
-    repos.push({
-      absPath: entryPath,
-      name: entry,
-      hasGit,
-      hasIndexIgnore,
-      estimatedFileCount,
-    });
-  }
-
-  return repos.sort((a, b) => a.name.localeCompare(b.name));
+/** Count non-empty lines in text (pipeline-style). */
+function countNonEmptyLines(text: string): number {
+  return text
+    .trim()
+    .split("\n")
+    .filter((l) => l.length > 0).length;
 }
+
+// ---------------------------------------------------------------------------
+// I/O boundary
+// ---------------------------------------------------------------------------
 
 /**
  * Fast file count using git ls-files.
@@ -59,11 +44,56 @@ export async function estimateFileCount(repoPath: string): Promise<number> {
     });
     const text = await new Response(proc.stdout).text();
     await proc.exited;
-    return text
-      .trim()
-      .split("\n")
-      .filter((l) => l.length > 0).length;
+    return countNonEmptyLines(text);
   } catch {
+    logEvent({
+      event: "infra.filecount.error",
+      "error.type": "SpawnFailure",
+      "error.message": `git ls-files failed for ${repoPath}`,
+    });
     return 0;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan a directory one level deep for git repositories.
+ * Returns repos sorted by name.
+ */
+export async function discoverRepos(scanDir: string): Promise<DiscoveredRepo[]> {
+  const absDir = path.resolve(scanDir);
+  let entries: string[];
+  try {
+    entries = await readdir(absDir);
+  } catch {
+    logEvent({
+      event: "infra.discovery.error",
+      "error.type": "ReadDirFailure",
+      "error.message": `Cannot read directory: ${absDir}`,
+    });
+    throw new Error(`Cannot read directory: ${absDir}`);
+  }
+
+  const gitEntries = entries.filter((entry) => {
+    const gitHead = path.join(absDir, entry, ".git", "HEAD");
+    return existsSync(gitHead);
+  });
+
+  const repos = await Promise.all(
+    gitEntries.map(async (entry): Promise<DiscoveredRepo> => {
+      const entryPath = path.join(absDir, entry);
+      return {
+        absPath: entryPath,
+        name: entry,
+        hasGit: true,
+        hasIndexIgnore: existsSync(path.join(entryPath, ".indexignore")),
+        estimatedFileCount: await estimateFileCount(entryPath),
+      };
+    }),
+  );
+
+  return repos.sort((a, b) => a.name.localeCompare(b.name));
 }

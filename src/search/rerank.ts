@@ -13,39 +13,42 @@ export interface RerankContext {
  * Second-pass re-ranker that boosts results based on import graph proximity,
  * cross-repo edges, and co-change recency signals. All signals are local (no API calls).
  */
-export async function rerank(results: SearchResult[], ctx: RerankContext): Promise<SearchResult[]> {
-  if (results.length === 0) return results;
+export async function rerank(
+  results: readonly SearchResult[],
+  ctx: RerankContext,
+): Promise<SearchResult[]> {
+  if (results.length === 0) return [...results];
 
-  // Collect file IDs from results for batch querying
+  // Impure phase: batch-fetch boost signals from DB
   const resultFileIds = await resolveFileIds(results, ctx);
-  if (resultFileIds.size === 0) return results;
+  if (resultFileIds.size === 0) return [...results];
 
   const topFileIds = [...resultFileIds.values()].slice(0, 50);
   const topSet = new Set(topFileIds);
+  const allIds = new Set(resultFileIds.values());
 
   const [importBoosts, crossRepoBoosts, coChangeBoosts] = await Promise.all([
-    getImportProximityBoosts(topFileIds, topSet, resultFileIds, ctx),
-    getCrossRepoBoosts(topFileIds, topSet, resultFileIds, ctx),
-    getCoChangeBoosts(topFileIds, topSet, resultFileIds, ctx),
+    getImportProximityBoosts(topFileIds, topSet, allIds, ctx),
+    getCrossRepoBoosts(topFileIds, topSet, allIds, ctx),
+    getCoChangeBoosts(topFileIds, topSet, allIds, ctx),
   ]);
 
-  // Work on shallow copies to avoid mutating caller's SearchResult objects
-  const boosted = results.map((result) => {
-    const key = resultKey(result);
-    const fileId = resultFileIds.get(key);
-    if (fileId === undefined) return result;
+  // Pure phase: apply boosts via shallow copies and return a new sorted array
+  return results
+    .map((result) => {
+      const key = resultKey(result);
+      const fileId = resultFileIds.get(key);
+      if (fileId === undefined) return result;
 
-    const importBoost = (importBoosts.get(fileId) ?? 0) * ctx.reranking.importProximityWeight;
-    const crossRepoBoost = (crossRepoBoosts.get(fileId) ?? 0) * ctx.reranking.crossRepoWeight;
-    const coChangeBoost = (coChangeBoosts.get(fileId) ?? 0) * ctx.reranking.coChangeWeight;
-    const totalBoost = importBoost + crossRepoBoost + coChangeBoost;
+      const importBoost = (importBoosts.get(fileId) ?? 0) * ctx.reranking.importProximityWeight;
+      const crossRepoBoost = (crossRepoBoosts.get(fileId) ?? 0) * ctx.reranking.crossRepoWeight;
+      const coChangeBoost = (coChangeBoosts.get(fileId) ?? 0) * ctx.reranking.coChangeWeight;
+      const totalBoost = importBoost + crossRepoBoost + coChangeBoost;
 
-    if (totalBoost === 0) return result;
-    return { ...result, finalScore: result.finalScore + totalBoost };
-  });
-
-  boosted.sort((a, b) => b.finalScore - a.finalScore);
-  return boosted;
+      if (totalBoost === 0) return result;
+      return { ...result, finalScore: result.finalScore + totalBoost };
+    })
+    .toSorted((a, b) => b.finalScore - a.finalScore);
 }
 
 function resultKey(r: SearchResult): string {
@@ -53,7 +56,7 @@ function resultKey(r: SearchResult): string {
 }
 
 async function resolveFileIds(
-  results: SearchResult[],
+  results: readonly SearchResult[],
   ctx: RerankContext,
 ): Promise<Map<string, number>> {
   const map = new Map<string, number>();
@@ -90,15 +93,16 @@ async function resolveFileIds(
 
   // Also map results without repoId by filePath match (only safe in single-repo setups)
   if (ctx.repoIds.length <= 1) {
+    const filePathIndex = new Map<string, number>();
+    for (const [k, v] of map) {
+      const filePath = k.split(":")[1];
+      if (filePath) filePathIndex.set(filePath, v);
+    }
     for (const r of results) {
       const key = resultKey(r);
       if (!map.has(key)) {
-        for (const [k, v] of map) {
-          if (k.endsWith(`:${r.filePath}`)) {
-            map.set(key, v);
-            break;
-          }
-        }
+        const v = filePathIndex.get(r.filePath);
+        if (v !== undefined) map.set(key, v);
       }
     }
   }
@@ -112,13 +116,11 @@ async function resolveFileIds(
 async function getImportProximityBoosts(
   topFileIds: number[],
   topSet: Set<number>,
-  allFileIds: Map<string, number>,
+  allIds: Set<number>,
   ctx: RerankContext,
 ): Promise<Map<number, number>> {
   const boosts = new Map<number, number>();
   if (topFileIds.length === 0) return boosts;
-
-  const allIds = new Set(allFileIds.values());
 
   try {
     if (ctx.store === "pg") {
@@ -180,13 +182,11 @@ async function getImportProximityBoosts(
 async function getCrossRepoBoosts(
   topFileIds: number[],
   topSet: Set<number>,
-  allFileIds: Map<string, number>,
+  allIds: Set<number>,
   ctx: RerankContext,
 ): Promise<Map<number, number>> {
   const boosts = new Map<number, number>();
   if (topFileIds.length === 0) return boosts;
-
-  const allIds = new Set(allFileIds.values());
 
   try {
     if (ctx.store === "pg") {
@@ -235,13 +235,11 @@ async function getCrossRepoBoosts(
 async function getCoChangeBoosts(
   topFileIds: number[],
   topSet: Set<number>,
-  allFileIds: Map<string, number>,
+  allIds: Set<number>,
   ctx: RerankContext,
 ): Promise<Map<number, number>> {
   const boosts = new Map<number, number>();
   if (topFileIds.length === 0) return boosts;
-
-  const allIds = new Set(allFileIds.values());
 
   try {
     if (ctx.store === "pg") {

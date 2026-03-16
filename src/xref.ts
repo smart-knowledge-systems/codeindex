@@ -22,27 +22,65 @@ interface XrefResult {
 }
 
 // ---------------------------------------------------------------------------
+// Pure helpers — build match arrays without mutation
+// ---------------------------------------------------------------------------
+
+/** Convert BM25-scored skeleton rows into definition matches. */
+function buildDefinitionMatches(
+  bm25Scores: Map<string, number>,
+  rowById: Map<string | number, Record<string, unknown>>,
+  limit: number,
+): { matches: XrefMatch[]; fileIds: Set<string | number> } {
+  const sortedEntries = [...bm25Scores.entries()].sort((a, b) => b[1] - a[1]);
+  const fileIds = new Set<string | number>();
+  const matches = sortedEntries.slice(0, limit).flatMap(([fileId, score]) => {
+    if (score <= 0) return [];
+    const row = rowById.get(fileId);
+    if (!row) return [];
+    fileIds.add(fileId);
+    return [
+      {
+        filePath: String(row.file_path),
+        repoName: String(row.repo_name),
+        repoId: Number(row.repo_id),
+        matchType: "definition" as const,
+        score,
+      },
+    ];
+  });
+  return { matches, fileIds };
+}
+
+/** Convert consumer query rows into consumer matches. */
+function buildConsumerMatches(rows: Array<Record<string, unknown>>, score: number): XrefMatch[] {
+  return rows.map((c) => ({
+    filePath: String(c.file_path),
+    repoName: String(c.repo_name),
+    repoId: Number(c.repo_id),
+    matchType: "consumer" as const,
+    score,
+  }));
+}
+
+/** Group matches by repo name. */
+function groupByRepo(matches: XrefMatch[]): Record<string, XrefMatch[]> {
+  const result: Record<string, XrefMatch[]> = {};
+  for (const m of matches) {
+    (result[m.repoName] ??= []).push(m);
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Core xref implementation
 // ---------------------------------------------------------------------------
 
 export async function xrefSymbol(repoRoot: string, symbol: string): Promise<XrefResult> {
   const config = await loadConfig(repoRoot);
-  const matches: XrefMatch[] = [];
 
-  if (config.store === "pg") {
-    await xrefPg(symbol, matches);
-  } else {
-    await xrefSqlite(repoRoot, symbol, matches);
-  }
+  const matches = config.store === "pg" ? await xrefPg(symbol) : await xrefSqlite(repoRoot, symbol);
 
-  // Group by repo
-  const byRepo: Record<string, XrefMatch[]> = {};
-  for (const m of matches) {
-    const key = m.repoName;
-    if (!byRepo[key]) byRepo[key] = [];
-    byRepo[key].push(m);
-  }
-
+  const byRepo = groupByRepo(matches);
   return { symbol, matches, byRepo };
 }
 
@@ -50,7 +88,7 @@ export async function xrefSymbol(repoRoot: string, symbol: string): Promise<Xref
 // PostgreSQL xref
 // ---------------------------------------------------------------------------
 
-async function xrefPg(symbol: string, matches: XrefMatch[]): Promise<void> {
+async function xrefPg(symbol: string): Promise<XrefMatch[]> {
   const pg = await getPg();
 
   // 1. Search skeletons for symbol using BM25 (pre-filter to avoid full table scan)
@@ -69,81 +107,52 @@ async function xrefPg(symbol: string, matches: XrefMatch[]): Promise<void> {
       text: String(r.skeleton),
     }));
 
-  if (docs.length === 0) return;
+  if (docs.length === 0) return [];
 
   const bm25Index = buildBM25Index(docs);
   const bm25Scores = scoreBM25(bm25Index, symbol);
 
-  // Map file IDs back to rows
-  const rowById = new Map<string, (typeof skeletonRows)[0]>();
-  for (const row of skeletonRows) {
-    rowById.set(String(row.id), row);
-  }
+  const rowById = new Map<string | number, Record<string, unknown>>(
+    skeletonRows.map((row: Record<string, unknown>) => [String(row.id), row]),
+  );
 
-  // Top definition matches (files whose skeleton mentions the symbol)
-  const definitionFileIds = new Set<string>();
-  const sortedEntries = [...bm25Scores.entries()].sort((a, b) => b[1] - a[1]);
-  for (const [fileId, score] of sortedEntries.slice(0, 20)) {
-    if (score <= 0) continue;
-    const row = rowById.get(fileId);
-    if (!row) continue;
-    definitionFileIds.add(fileId);
-    matches.push({
-      filePath: String(row.file_path),
-      repoName: String(row.repo_name),
-      repoId: Number(row.repo_id),
-      matchType: "definition",
-      score,
-    });
-  }
+  const { matches: definitionMatches, fileIds: definitionFileIds } = buildDefinitionMatches(
+    bm25Scores,
+    rowById,
+    20,
+  );
+
+  if (definitionFileIds.size === 0) return definitionMatches;
 
   // 2. Follow import graph edges to find consumers
-  if (definitionFileIds.size > 0) {
-    const fileIdArray = [...definitionFileIds].map(Number);
-    const consumers = await pg`
-      SELECT DISTINCT fi.source_file_id, f.file_path, f.repo_id, r.name as repo_name
-      FROM file_imports fi
-      JOIN files f ON fi.source_file_id = f.id
-      JOIN repos r ON f.repo_id = r.id
-      WHERE fi.resolved_file_id = ANY(${fileIdArray})
-    `;
+  const fileIdArray = [...definitionFileIds].map(Number);
+  const consumers = await pg`
+    SELECT DISTINCT fi.source_file_id, f.file_path, f.repo_id, r.name as repo_name
+    FROM file_imports fi
+    JOIN files f ON fi.source_file_id = f.id
+    JOIN repos r ON f.repo_id = r.id
+    WHERE fi.resolved_file_id = ANY(${fileIdArray})
+  `;
+  const consumerMatches = buildConsumerMatches(consumers, 0.5);
 
-    for (const c of consumers) {
-      matches.push({
-        filePath: String(c.file_path),
-        repoName: String(c.repo_name),
-        repoId: Number(c.repo_id),
-        matchType: "consumer",
-        score: 0.5, // Consumer score is fixed; they reference the definition
-      });
-    }
+  // 3. Check cross_repo_edges for cross-repo consumers
+  const crossEdges = await pg`
+    SELECT DISTINCT cre.source_file_id, f.file_path, f.repo_id, r.name as repo_name
+    FROM cross_repo_edges cre
+    JOIN files f ON cre.source_file_id = f.id
+    JOIN repos r ON f.repo_id = r.id
+    WHERE cre.target_file_id = ANY(${fileIdArray})
+  `;
+  const crossEdgeMatches = buildConsumerMatches(crossEdges, 0.4);
 
-    // 3. Check cross_repo_edges for cross-repo consumers
-    const crossEdges = await pg`
-      SELECT DISTINCT cre.source_file_id, f.file_path, f.repo_id, r.name as repo_name
-      FROM cross_repo_edges cre
-      JOIN files f ON cre.source_file_id = f.id
-      JOIN repos r ON f.repo_id = r.id
-      WHERE cre.target_file_id = ANY(${fileIdArray})
-    `;
-
-    for (const c of crossEdges) {
-      matches.push({
-        filePath: String(c.file_path),
-        repoName: String(c.repo_name),
-        repoId: Number(c.repo_id),
-        matchType: "consumer",
-        score: 0.4, // Cross-repo consumer score
-      });
-    }
-  }
+  return [...definitionMatches, ...consumerMatches, ...crossEdgeMatches];
 }
 
 // ---------------------------------------------------------------------------
 // SQLite xref
 // ---------------------------------------------------------------------------
 
-async function xrefSqlite(repoRoot: string, symbol: string, matches: XrefMatch[]): Promise<void> {
+async function xrefSqlite(repoRoot: string, symbol: string): Promise<XrefMatch[]> {
   const db = await getSqlite(repoRoot);
 
   // 1. Search skeletons for symbol using BM25 (pre-filter to avoid full table scan)
@@ -164,87 +173,50 @@ async function xrefSqlite(repoRoot: string, symbol: string, matches: XrefMatch[]
   }>;
 
   const docs = skeletonRows.map((r) => ({ id: String(r.id), text: r.skeleton }));
-  if (docs.length === 0) return;
+  if (docs.length === 0) return [];
 
   const bm25Index = buildBM25Index(docs);
   const bm25Scores = scoreBM25(bm25Index, symbol);
 
-  const rowById = new Map<number, (typeof skeletonRows)[0]>();
-  for (const row of skeletonRows) {
-    rowById.set(row.id, row);
-  }
+  const rowById = new Map<string | number, Record<string, unknown>>(
+    skeletonRows.map((row) => [row.id, row as unknown as Record<string, unknown>]),
+  );
 
-  // Top definition matches
-  const definitionFileIds = new Set<number>();
-  const sortedEntries = [...bm25Scores.entries()].sort((a, b) => b[1] - a[1]);
-  for (const [fileId, score] of sortedEntries.slice(0, 20)) {
-    if (score <= 0) continue;
-    const row = rowById.get(Number(fileId));
-    if (!row) continue;
-    definitionFileIds.add(row.id);
-    matches.push({
-      filePath: row.file_path,
-      repoName: row.repo_name,
-      repoId: row.repo_id,
-      matchType: "definition",
-      score,
-    });
-  }
+  const { matches: definitionMatches, fileIds: definitionFileIds } = buildDefinitionMatches(
+    bm25Scores,
+    rowById,
+    20,
+  );
+
+  if (definitionFileIds.size === 0) return definitionMatches;
 
   // 2. Follow import graph edges to find consumers
-  if (definitionFileIds.size > 0) {
-    const placeholders = [...definitionFileIds].map(() => "?").join(",");
-    const consumers = db
-      .prepare(
-        `SELECT DISTINCT fi.source_file_id, f.file_path, f.repo_id, r.name as repo_name
-         FROM file_imports fi
-         JOIN files f ON fi.source_file_id = f.id
-         JOIN repos r ON f.repo_id = r.id
-         WHERE fi.resolved_file_id IN (${placeholders})`,
-      )
-      .all(...definitionFileIds) as Array<{
-      source_file_id: number;
-      file_path: string;
-      repo_id: number;
-      repo_name: string;
-    }>;
+  const fileIdArray = [...definitionFileIds].map(Number);
+  const placeholders = fileIdArray.map(() => "?").join(",");
+  const consumers = db
+    .prepare(
+      `SELECT DISTINCT fi.source_file_id, f.file_path, f.repo_id, r.name as repo_name
+       FROM file_imports fi
+       JOIN files f ON fi.source_file_id = f.id
+       JOIN repos r ON f.repo_id = r.id
+       WHERE fi.resolved_file_id IN (${placeholders})`,
+    )
+    .all(...fileIdArray) as Array<Record<string, unknown>>;
+  const consumerMatches = buildConsumerMatches(consumers, 0.5);
 
-    for (const c of consumers) {
-      matches.push({
-        filePath: c.file_path,
-        repoName: c.repo_name,
-        repoId: c.repo_id,
-        matchType: "consumer",
-        score: 0.5,
-      });
-    }
+  // 3. Check cross_repo_edges
+  const crossEdges = db
+    .prepare(
+      `SELECT DISTINCT cre.source_file_id, f.file_path, f.repo_id, r.name as repo_name
+       FROM cross_repo_edges cre
+       JOIN files f ON cre.source_file_id = f.id
+       JOIN repos r ON f.repo_id = r.id
+       WHERE cre.target_file_id IN (${placeholders})`,
+    )
+    .all(...fileIdArray) as Array<Record<string, unknown>>;
+  const crossEdgeMatches = buildConsumerMatches(crossEdges, 0.4);
 
-    // 3. Check cross_repo_edges
-    const crossEdges = db
-      .prepare(
-        `SELECT DISTINCT cre.source_file_id, f.file_path, f.repo_id, r.name as repo_name
-         FROM cross_repo_edges cre
-         JOIN files f ON cre.source_file_id = f.id
-         JOIN repos r ON f.repo_id = r.id
-         WHERE cre.target_file_id IN (${placeholders})`,
-      )
-      .all(...definitionFileIds) as Array<{
-      source_file_id: number;
-      file_path: string;
-      repo_id: number;
-      repo_name: string;
-    }>;
-
-    for (const c of crossEdges) {
-      matches.push({
-        filePath: c.file_path,
-        repoName: c.repo_name,
-        repoId: c.repo_id,
-        matchType: "consumer",
-        score: 0.4,
-      });
-    }
-  }
+  return [...definitionMatches, ...consumerMatches, ...crossEdgeMatches];
 }
 
 // ---------------------------------------------------------------------------

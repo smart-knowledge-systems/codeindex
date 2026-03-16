@@ -28,7 +28,7 @@ export async function withRepoScope<T>(
   const pg = await getPg();
   const arrayStr = `{${repoIds.join(",")}}`;
   return pg.begin(async (tx) => {
-    await tx.unsafe(`SET LOCAL app.current_repo_ids = '${arrayStr}'`);
+    await tx.unsafe(`SELECT set_config('app.current_repo_ids', $1, true)`, [arrayStr]);
     return fn(tx);
   });
 }

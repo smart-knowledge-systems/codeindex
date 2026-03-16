@@ -1,6 +1,5 @@
 import type { HealthPolicy, PolicyContext, PolicyResult } from "../types";
-import { pgUnsafe } from "../../db/pg";
-import { getSqlite } from "../../db/sqlite";
+import { storeQueryOne } from "../store-query";
 
 const STALE_DAYS = 7;
 
@@ -8,25 +7,19 @@ async function getCounts(
   ctx: PolicyContext,
   cutoffIso: string,
 ): Promise<{ staleCount: number; totalCount: number }> {
-  if (ctx.store === "pg") {
-    const total = (await pgUnsafe("SELECT count(*)::int AS cnt FROM files WHERE repo_id = $1", [
-      ctx.repoId,
-    ])) as { cnt: number }[];
-    const stale = (await pgUnsafe(
-      "SELECT count(*)::int AS cnt FROM files WHERE repo_id = $1 AND indexed_at < $2",
-      [ctx.repoId, cutoffIso],
-    )) as { cnt: number }[];
-    return { totalCount: total[0].cnt, staleCount: stale[0].cnt };
-  }
-
-  const db = await getSqlite(ctx.repoRoot);
-  const total = db
-    .prepare("SELECT count(*) AS cnt FROM files WHERE repo_id = ?")
-    .get(ctx.repoId) as { cnt: number };
-  const stale = db
-    .prepare("SELECT count(*) AS cnt FROM files WHERE repo_id = ? AND indexed_at < ?")
-    .get(ctx.repoId, cutoffIso) as { cnt: number };
-  return { totalCount: total.cnt, staleCount: stale.cnt };
+  const total = await storeQueryOne<{ cnt: number }>(
+    ctx,
+    "SELECT count(*)::int AS cnt FROM files WHERE repo_id = $1",
+    "SELECT count(*) AS cnt FROM files WHERE repo_id = ?",
+    [ctx.repoId],
+  );
+  const stale = await storeQueryOne<{ cnt: number }>(
+    ctx,
+    "SELECT count(*)::int AS cnt FROM files WHERE repo_id = $1 AND indexed_at < $2",
+    "SELECT count(*) AS cnt FROM files WHERE repo_id = ? AND indexed_at < ?",
+    [ctx.repoId, cutoffIso],
+  );
+  return { totalCount: total!.cnt, staleCount: stale!.cnt };
 }
 
 export const indexFreshness: HealthPolicy = {

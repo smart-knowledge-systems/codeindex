@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { authenticateSession, type AuthSession } from "./auth";
+import { logEvent } from "../logging";
 
 export interface SessionEntry {
   transport: SSEServerTransport;
@@ -33,62 +34,75 @@ function setCorsHeaders(res: ServerResponse, req: IncomingMessage): void {
 }
 
 // ---------------------------------------------------------------------------
-// Rate limiting — simple in-memory token bucket per session
+// Rate limiting — in-memory token bucket per session
 // ---------------------------------------------------------------------------
 
 interface RateBucket {
-  tokens: number;
-  lastRefill: number;
+  readonly tokens: number;
+  readonly lastRefill: number;
 }
 
 const RATE_LIMIT = 60; // requests per minute
 const REFILL_INTERVAL_MS = 60_000;
 
-const rateBuckets = new Map<string, RateBucket>();
+function freshBucket(now: number): RateBucket {
+  return { tokens: RATE_LIMIT, lastRefill: now };
+}
 
-function checkRateLimit(sessionId: string): boolean {
-  const now = Date.now();
-  let bucket = rateBuckets.get(sessionId);
-
-  if (!bucket) {
-    bucket = { tokens: RATE_LIMIT, lastRefill: now };
-    rateBuckets.set(sessionId, bucket);
-  }
-
-  // Refill tokens based on elapsed time
+function refillBucket(bucket: RateBucket, now: number): RateBucket {
   const elapsed = now - bucket.lastRefill;
   if (elapsed >= REFILL_INTERVAL_MS) {
-    bucket.tokens = RATE_LIMIT;
-    bucket.lastRefill = now;
-  } else {
-    // Proportional refill
-    const refill = Math.floor((elapsed / REFILL_INTERVAL_MS) * RATE_LIMIT);
-    if (refill > 0) {
-      bucket.tokens = Math.min(RATE_LIMIT, bucket.tokens + refill);
-      bucket.lastRefill = now;
-    }
+    return { tokens: RATE_LIMIT, lastRefill: now };
   }
-
-  if (bucket.tokens <= 0) return false;
-
-  bucket.tokens--;
-  return true;
+  const refill = Math.floor((elapsed / REFILL_INTERVAL_MS) * RATE_LIMIT);
+  if (refill > 0) {
+    return { tokens: Math.min(RATE_LIMIT, bucket.tokens + refill), lastRefill: now };
+  }
+  return bucket;
 }
 
 /**
- * Clean up rate bucket when a session is removed.
+ * Encapsulated rate limiter with explicit lifecycle management.
+ * Each session gets a token bucket; stale buckets are evicted periodically.
  */
-function removeRateBucket(sessionId: string): void {
-  rateBuckets.delete(sessionId);
-}
+class RateLimiter {
+  private readonly buckets = new Map<string, RateBucket>();
+  private readonly evictionTimer: ReturnType<typeof setInterval>;
 
-// Periodically evict stale rate buckets that were not cleaned up on close
-setInterval(() => {
-  const threshold = Date.now() - REFILL_INTERVAL_MS * 2;
-  for (const [id, bucket] of rateBuckets) {
-    if (bucket.lastRefill < threshold) rateBuckets.delete(id);
+  constructor() {
+    this.evictionTimer = setInterval(() => {
+      const threshold = Date.now() - REFILL_INTERVAL_MS * 2;
+      for (const [id, bucket] of this.buckets) {
+        if (bucket.lastRefill < threshold) this.buckets.delete(id);
+      }
+    }, REFILL_INTERVAL_MS);
+    this.evictionTimer.unref();
   }
-}, REFILL_INTERVAL_MS).unref();
+
+  /** Returns true if the request is allowed, false if rate-limited. */
+  check(sessionId: string): boolean {
+    const now = Date.now();
+    const current = this.buckets.get(sessionId) ?? freshBucket(now);
+    const refilled = refillBucket(current, now);
+
+    if (refilled.tokens <= 0) {
+      this.buckets.set(sessionId, refilled);
+      return false;
+    }
+
+    this.buckets.set(sessionId, { ...refilled, tokens: refilled.tokens - 1 });
+    return true;
+  }
+
+  remove(sessionId: string): void {
+    this.buckets.delete(sessionId);
+  }
+
+  dispose(): void {
+    clearInterval(this.evictionTimer);
+    this.buckets.clear();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Transports
@@ -117,6 +131,7 @@ export async function startSSE(
   repoRoot: string,
 ): Promise<Map<string, SessionEntry>> {
   const sessions = new Map<string, SessionEntry>();
+  const rateLimiter = new RateLimiter();
 
   const httpServer = createServer(async (req, res) => {
     // Set CORS headers on all responses
@@ -146,7 +161,7 @@ export async function startSSE(
       sessions.set(sessionId, { transport, token, session });
       res.on("close", () => {
         sessions.delete(sessionId);
-        removeRateBucket(sessionId);
+        rateLimiter.remove(sessionId);
       });
       // Create a per-client McpServer with the authenticated session
       const perClientServer = createServer_(session);
@@ -162,7 +177,7 @@ export async function startSSE(
       }
 
       // Rate limit check
-      if (sessionId && !checkRateLimit(sessionId)) {
+      if (sessionId && !rateLimiter.check(sessionId)) {
         res.writeHead(429, { "Content-Type": "text/plain", "Retry-After": "60" });
         res.end("Too many requests. Limit: 60 requests per minute.");
         return;
@@ -176,7 +191,8 @@ export async function startSSE(
   });
 
   httpServer.listen(port, () => {
-    console.error(`codeindex MCP server (SSE) listening on http://localhost:${port}/sse`);
+    process.stderr.write(`codeindex MCP server listening on port ${port} (SSE)\n`);
+    logEvent({ event: "infra.server.started", port, protocol: "sse" });
   });
 
   return sessions;

@@ -9,6 +9,7 @@ export function mrrThreshold(threshold: number): QualityPolicy {
     assert(summary: EvalSummary): QualityResult {
       const actual = summary.avgMrr;
       return {
+        tag: "assessed",
         passed: actual >= threshold,
         metric: "avgMrr",
         actual,

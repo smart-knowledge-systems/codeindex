@@ -8,10 +8,47 @@ import { loadConfig } from "../config";
 
 const MIGRATIONS_DIR = path.join(import.meta.dir, "../../migrations");
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 interface MigrationFile {
   version: number;
   filename: string;
   sql: string;
+}
+
+export type MigrationResult = { tag: "ok"; versions: number[] } | { tag: "err"; error: Error };
+
+export type ChecksumVerification =
+  | { tag: "ok"; valid: boolean; mismatches: string[] }
+  | { tag: "unavailable" };
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
+
+/** Compute SHA-256 hex digest of a string. */
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/** Parse SQL into individual statements by splitting on semicolons. */
+function parseSqlStatements(sql: string): string[] {
+  return sql.split(";").map((s) => s.trim());
+}
+
+/** Remove comment-only lines from SQL statements. */
+function stripCommentLines(statements: string[]): string[] {
+  return statements
+    .map((s) =>
+      s
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("--"))
+        .join("\n")
+        .trim(),
+    )
+    .filter((s) => s.length > 0);
 }
 
 /**
@@ -84,10 +121,9 @@ function splitPgStatements(sql: string): string[] {
   return results;
 }
 
-/** Compute SHA-256 hex digest of a string. */
-function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
+// ---------------------------------------------------------------------------
+// I/O boundary — file loading
+// ---------------------------------------------------------------------------
 
 /**
  * Read and sort migration files for the given backend.
@@ -117,7 +153,7 @@ async function loadMigrationFiles(backend: "pg" | "sqlite"): Promise<MigrationFi
 }
 
 // ---------------------------------------------------------------------------
-// PostgreSQL
+// I/O boundary — PostgreSQL
 // ---------------------------------------------------------------------------
 
 async function getPgVersion(): Promise<number> {
@@ -133,7 +169,7 @@ async function getPgVersion(): Promise<number> {
   }
 }
 
-async function applyPgMigrations(): Promise<number[]> {
+async function applyPgMigrations(): Promise<MigrationResult> {
   const pg = await getPg();
   const currentVersion = await getPgVersion();
   const migrations = await loadMigrationFiles("pg");
@@ -165,9 +201,12 @@ async function applyPgMigrations(): Promise<number[]> {
         }
       });
       applied.push(m.version);
-      logEvent({ event: "migrate", version: m.version, backend: "pg" });
+      logEvent({ event: "infra.migrate.apply", version: m.version, backend: "pg" });
     } catch (err) {
-      throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
+      return {
+        tag: "err",
+        error: new Error(`Migration ${m.version} failed: ${err}`, { cause: err }),
+      };
     }
   }
 
@@ -189,11 +228,11 @@ async function applyPgMigrations(): Promise<number[]> {
     }
   }
 
-  return applied;
+  return { tag: "ok", versions: applied };
 }
 
 // ---------------------------------------------------------------------------
-// SQLite
+// I/O boundary — SQLite
 // ---------------------------------------------------------------------------
 
 async function getSqliteVersion(repoRoot?: string): Promise<number> {
@@ -202,7 +241,7 @@ async function getSqliteVersion(repoRoot?: string): Promise<number> {
   return rows[0]?.user_version ?? 0;
 }
 
-async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
+async function applySqliteMigrations(repoRoot?: string): Promise<MigrationResult> {
   const db = await getSqlite(repoRoot);
   const currentVersion = await getSqliteVersion(repoRoot);
   const migrations = await loadMigrationFiles("sqlite");
@@ -211,17 +250,7 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
   for (const m of migrations) {
     if (m.version <= currentVersion) continue;
 
-    const statements = m.sql
-      .split(";")
-      .map((s) => s.trim())
-      .map((s) =>
-        s
-          .split("\n")
-          .filter((line) => !line.trimStart().startsWith("--"))
-          .join("\n")
-          .trim(),
-      )
-      .filter((s) => s.length > 0);
+    const statements = stripCommentLines(parseSqlStatements(m.sql));
 
     const runMigration = db.transaction(() => {
       for (const stmt of statements) {
@@ -240,9 +269,12 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
     try {
       runMigration();
       applied.push(m.version);
-      logEvent({ event: "migrate", version: m.version, backend: "sqlite" });
+      logEvent({ event: "infra.migrate.apply", version: m.version, backend: "sqlite" });
     } catch (err) {
-      throw new Error(`Migration ${m.version} failed: ${err}`, { cause: err });
+      return {
+        tag: "err",
+        error: new Error(`Migration ${m.version} failed: ${err}`, { cause: err }),
+      };
     }
   }
 
@@ -258,7 +290,7 @@ async function applySqliteMigrations(repoRoot?: string): Promise<number[]> {
     }
   }
 
-  return applied;
+  return { tag: "ok", versions: applied };
 }
 
 // ---------------------------------------------------------------------------
@@ -280,18 +312,19 @@ export async function getLatestMigrationVersion(backend: "pg" | "sqlite"): Promi
 export async function applyMigrations(
   backend: "pg" | "sqlite",
   repoRoot?: string,
-): Promise<number[]> {
+): Promise<MigrationResult> {
   return backend === "pg" ? applyPgMigrations() : applySqliteMigrations(repoRoot);
 }
 
 /**
  * Verify that stored migration checksums match the current migration file contents.
- * Returns valid=true if all checksums match (or no checksums stored yet).
+ * Returns `{ tag: 'ok', valid, mismatches }` when verification is possible,
+ * or `{ tag: 'unavailable' }` when the checksum schema doesn't exist yet.
  */
 export async function verifyMigrationChecksums(
   backend: "pg" | "sqlite",
   repoRoot?: string,
-): Promise<{ valid: boolean; mismatches: string[] }> {
+): Promise<ChecksumVerification> {
   const migrations = await loadMigrationFiles(backend);
   const migrationMap = new Map(migrations.map((m) => [m.version, m]));
   const mismatches: string[] = [];
@@ -305,7 +338,7 @@ export async function verifyMigrationChecksums(
       )) as { version: number; checksum: string | null; filename: string | null }[];
     } catch {
       // checksum column may not exist yet
-      return { valid: true, mismatches: [] };
+      return { tag: "unavailable" };
     }
 
     for (const row of rows) {
@@ -330,7 +363,7 @@ export async function verifyMigrationChecksums(
       }[];
     } catch {
       // table may not exist yet
-      return { valid: true, mismatches: [] };
+      return { tag: "unavailable" };
     }
 
     for (const row of rows) {
@@ -346,7 +379,7 @@ export async function verifyMigrationChecksums(
     }
   }
 
-  return { valid: mismatches.length === 0, mismatches };
+  return { tag: "ok", valid: mismatches.length === 0, mismatches };
 }
 
 /**

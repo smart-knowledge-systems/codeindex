@@ -4,6 +4,7 @@ import { pgServerReachable, pgDatabaseExists, bootstrapPostgres } from "./setup/
 import { discoverRepos, type DiscoveredRepo } from "./setup/discover";
 import { generateIndexIgnore, writeIndexIgnore } from "./setup/indexignore";
 import { repoAddBulk } from "./repo";
+import { logEvent } from "./logging";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,20 +20,20 @@ export interface SetupOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Console output helpers — human-readable CLI output (not logging)
 // ---------------------------------------------------------------------------
 
 function ok(label: string) {
-  console.log(`[ok] ${label}`);
+  process.stdout.write(`[ok] ${label}\n`);
 }
 
 function fail(label: string, hint?: string) {
-  console.log(`[!!] ${label}`);
-  if (hint) console.log(`     ${hint}`);
+  process.stderr.write(`[!!] ${label}\n`);
+  if (hint) process.stderr.write(`     ${hint}\n`);
 }
 
 function info(msg: string) {
-  console.log(`     ${msg}`);
+  process.stdout.write(`     ${msg}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -42,15 +43,15 @@ function info(msg: string) {
 export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<void> {
   const isMultiRepo = !!opts.scanDir;
 
-  console.log("");
-  console.log("  codeindex setup");
-  console.log(`  ${isMultiRepo ? "Multi-repo PostgreSQL" : "Single-repo"} setup`);
-  console.log("");
+  info("");
+  info("  codeindex setup");
+  info(`  ${isMultiRepo ? "Multi-repo PostgreSQL" : "Single-repo"} setup`);
+  info("");
 
   // -----------------------------------------------------------------------
   // Step 1: Environment Detection
   // -----------------------------------------------------------------------
-  console.log("Step 1/7: Environment Detection");
+  info("Step 1/7: Environment Detection");
 
   const config = await loadConfig(repoRoot);
   const storeType = opts.store ?? config.store;
@@ -88,12 +89,12 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
     }
   }
 
-  console.log("");
+  info("");
 
   // -----------------------------------------------------------------------
   // Step 2: Database Bootstrap
   // -----------------------------------------------------------------------
-  console.log("Step 2/7: Database Bootstrap");
+  info("Step 2/7: Database Bootstrap");
 
   if (storeType === "pg") {
     if (opts.dryRun) {
@@ -127,12 +128,12 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
     ok("SQLite — no database setup needed");
   }
 
-  console.log("");
+  info("");
 
   // -----------------------------------------------------------------------
   // Step 3: Global Config
   // -----------------------------------------------------------------------
-  console.log("Step 3/7: Global Config");
+  info("Step 3/7: Global Config");
 
   const hasGlobal = await globalConfigExists();
   if (hasGlobal) {
@@ -152,12 +153,12 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
     ok(`Created ${cfgPath}`);
   }
 
-  console.log("");
+  info("");
 
   // -----------------------------------------------------------------------
   // Step 4: Repository Discovery
   // -----------------------------------------------------------------------
-  console.log("Step 4/7: Repository Discovery");
+  info("Step 4/7: Repository Discovery");
 
   let repos: DiscoveredRepo[];
 
@@ -193,19 +194,19 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
         absPath: repoRoot,
         name: path.basename(repoRoot),
         hasGit: true,
-        hasIndexIgnore: (await import("fs")).existsSync(path.join(repoRoot, ".indexignore")),
+        hasIndexIgnore: existsSync(path.join(repoRoot, ".indexignore")),
         estimatedFileCount: 0,
       },
     ];
     ok(`Repository: ${repos[0].name}`);
   }
 
-  console.log("");
+  info("");
 
   // -----------------------------------------------------------------------
   // Step 5: Repository Registration
   // -----------------------------------------------------------------------
-  console.log("Step 5/7: Repository Registration");
+  info("Step 5/7: Repository Registration");
 
   if (opts.dryRun) {
     info(`(dry run) Would register ${repos.length} repositories`);
@@ -226,12 +227,12 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
     }
   }
 
-  console.log("");
+  info("");
 
   // -----------------------------------------------------------------------
   // Step 6: .indexignore Generation
   // -----------------------------------------------------------------------
-  console.log("Step 6/7: .indexignore Generation");
+  info("Step 6/7: .indexignore Generation");
 
   let created = 0;
   let skipped = 0;
@@ -270,26 +271,35 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
     ok(`${created} created, ${skipped} already existed`);
   }
 
-  console.log("");
+  info("");
 
   // -----------------------------------------------------------------------
   // Step 7: Next Steps
   // -----------------------------------------------------------------------
-  console.log("Step 7/7: Next Steps");
+  info("Step 7/7: Next Steps");
 
   const totalFiles = repos.reduce((s, r) => s + r.estimatedFileCount, 0);
   if (totalFiles > 0) {
     info(`Total files: ~${totalFiles.toLocaleString()}`);
   }
 
-  console.log("");
+  info("");
   if (isMultiRepo) {
     info("Run: codeindex reindex --scope all --workers 4");
   } else {
     info("Run: codeindex reindex");
   }
 
-  console.log("");
-  console.log("Setup complete!");
-  console.log("");
+  info("");
+  info("Setup complete!");
+  info("");
+
+  logEvent({
+    event: "infra.setup.complete",
+    storeType,
+    isMultiRepo,
+    repoCount: repos.length,
+    totalFiles,
+    dryRun: !!opts.dryRun,
+  });
 }

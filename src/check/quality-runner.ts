@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { runEval } from "../../eval/run-eval";
-import type { EvalQuery, EvalSummary } from "../../eval/types";
+import type { EvalQuery, EvalResult, EvalSummary } from "../../eval/types";
 import type { QualityPolicy, QualityResult } from "./quality-types";
 import { precisionAt5 } from "./quality-policies/precision-at-5";
 import { mrrThreshold } from "./quality-policies/mrr-threshold";
@@ -15,6 +15,49 @@ export interface QualityReport {
   timestamp: string;
 }
 
+// ---------------------------------------------------------------------------
+// Pure core
+// ---------------------------------------------------------------------------
+
+/** Compute aggregate metrics from individual eval results. */
+function computeSummary(evalResults: EvalResult[]): EvalSummary {
+  const n = evalResults.length;
+  const avg = (fn: (r: EvalResult) => number) =>
+    n > 0 ? evalResults.reduce((s, r) => s + fn(r), 0) / n : 0;
+
+  return {
+    configName: "quality-check",
+    avgPrecision5: avg((r) => r.precision5),
+    avgHitRate5: avg((r) => r.hitRate5),
+    avgRecall: avg((r) => r.recall),
+    avgMrr: avg((r) => r.mrr),
+    avgNdcg: avg((r) => r.ndcg),
+    results: evalResults,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/** Run all policy assertions against a summary and collect results. */
+function assertPolicies(policies: QualityPolicy[], summary: EvalSummary): QualityReport["results"] {
+  return policies.map((policy) => ({
+    policy: policy.name,
+    result: policy.assert(summary),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// I/O boundary
+// ---------------------------------------------------------------------------
+
+/** Safely load and parse a JSON file, returning null on failure. */
+function loadJsonFileOrNull<T>(filePath: string): T | null {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as T;
+  } catch {
+    return null;
+  }
+}
+
 export async function runQualityCheck(
   repoRoot: string,
   datasetPath?: string,
@@ -23,38 +66,20 @@ export async function runQualityCheck(
   const resolvedDataset = datasetPath ?? path.join(import.meta.dir, "../../eval/dataset.json");
   const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(resolvedDataset, "utf-8"));
 
-  // Run eval
+  // I/O: run eval
   const evalResults = await runEval(repoRoot, dataset);
-  const n = evalResults.length;
-  const avgPrecision5 = n > 0 ? evalResults.reduce((s, r) => s + r.precision5, 0) / n : 0;
-  const avgHitRate5 = n > 0 ? evalResults.reduce((s, r) => s + r.hitRate5, 0) / n : 0;
-  const avgRecall = n > 0 ? evalResults.reduce((s, r) => s + r.recall, 0) / n : 0;
-  const avgMrr = n > 0 ? evalResults.reduce((s, r) => s + r.mrr, 0) / n : 0;
-  const avgNdcg = n > 0 ? evalResults.reduce((s, r) => s + r.ndcg, 0) / n : 0;
 
-  const summary: EvalSummary = {
-    configName: "quality-check",
-    avgPrecision5,
-    avgHitRate5,
-    avgRecall,
-    avgMrr,
-    avgNdcg,
-    results: evalResults,
-    timestamp: new Date().toISOString(),
-  };
+  // Pure: compute summary and run assertions
+  const summary = computeSummary(evalResults);
 
-  // Build policies
+  const baselineData = baselinePath ? loadJsonFileOrNull<EvalSummary>(baselinePath) : null;
+
   const policies: QualityPolicy[] = [precisionAt5(0.15), mrrThreshold(0.5)];
   if (baselinePath) {
-    policies.push(noRegression(baselinePath));
+    policies.push(noRegression(baselineData));
   }
 
-  // Assert
-  const results: QualityReport["results"] = [];
-  for (const policy of policies) {
-    const result = policy.assert(summary);
-    results.push({ policy: policy.name, result });
-  }
+  const results = assertPolicies(policies, summary);
 
   return {
     passed: results.every((r) => r.result.passed),
