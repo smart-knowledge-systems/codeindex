@@ -1,7 +1,5 @@
 // Cloud migrate command
 
-import path from "path";
-import { statSync } from "fs";
 import { hasFlag, type ParsedArgs } from "../cli";
 import { getSqlite } from "../db/sqlite";
 import { CloudClient } from "./client";
@@ -84,20 +82,14 @@ export async function cloudMigrate(repoRoot: string, parsed: ParsedArgs): Promis
   try {
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
       const batch = rows.slice(i, i + BATCH_SIZE);
-      const payload = batch.map((r) => {
-        let sizeBytes = 0;
-        try {
-          sizeBytes = statSync(path.join(repoRoot, r.rel_path)).size;
-        } catch {
-          // File may have been deleted since indexing — fall back to 0
-        }
-        return {
-          contentHash: r.content_hash,
-          path: r.rel_path,
-          language: r.file_type,
-          sizeBytes,
-        };
-      });
+      const payload = batch.map((r) => ({
+        contentHash: r.content_hash,
+        path: r.rel_path,
+        skeleton: r.skeleton ?? "",
+        skeletonEntries: r.skeleton_entries,
+        fileType: r.file_type,
+        importEdges: null,
+      }));
 
       const result = await client.migrate({ files: payload });
       totalImported += result.imported;
