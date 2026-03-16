@@ -14,24 +14,23 @@ type CommitRecord = {
   embedding: number[] | null;
 };
 
-async function commitExists(
+/** Batch-load all existing commit hashes for a repo into a Set. */
+async function loadExistingCommitHashes(
   repoId: number,
-  hash: string,
   store: string,
   repoRoot: string,
-): Promise<boolean> {
+): Promise<Set<string>> {
   if (store === "pg") {
-    const rows = await pgUnsafe("SELECT id FROM commits WHERE repo_id = $1 AND commit_hash = $2", [
+    const rows = (await pgUnsafe("SELECT commit_hash FROM commits WHERE repo_id = $1", [
       repoId,
-      hash,
-    ]);
-    return rows.length > 0;
+    ])) as { commit_hash: string }[];
+    return new Set(rows.map((r) => r.commit_hash));
   }
   const db = await getSqlite(repoRoot);
-  const row = db
-    .prepare("SELECT id FROM commits WHERE repo_id = ? AND commit_hash = ?")
-    .get(repoId, hash) as { id: number } | undefined;
-  return row !== undefined;
+  const rows = db.prepare("SELECT commit_hash FROM commits WHERE repo_id = ?").all(repoId) as {
+    commit_hash: string;
+  }[];
+  return new Set(rows.map((r) => r.commit_hash));
 }
 
 /**
@@ -45,6 +44,7 @@ export const indexCommits: IndexCommitsStage = async (
 ): Promise<number> => {
   const { repoRoot, repoId, config, store } = ctx;
 
+  const existingHashes = await loadExistingCommitHashes(repoId, store, repoRoot);
   const commitRecords: CommitRecord[] = [];
   const seenHashes = new Set<string>();
 
@@ -55,8 +55,7 @@ export const indexCommits: IndexCommitsStage = async (
       let embedding: number[] | null = null;
 
       if (!seenHashes.has(c.hash)) {
-        const exists = await commitExists(repoId, c.hash, store, repoRoot);
-        if (!exists) {
+        if (!existingHashes.has(c.hash)) {
           embedding = await embedSingle(c.message);
         }
         seenHashes.add(c.hash);
