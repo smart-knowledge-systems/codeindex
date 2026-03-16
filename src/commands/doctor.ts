@@ -23,11 +23,11 @@ export async function cmdDoctor(repoRoot: string) {
   const gitExists = await Bun.file(path.join(repoRoot, ".git", "HEAD")).exists();
   check("Git repository", gitExists, "Run `git init` to initialize a repository.");
 
-  // 2. OPENAI_API_KEY
+  // 2. OPENAI_API_KEY (or CODEINDEX_OPENAI_API_KEY)
   check(
     "OPENAI_API_KEY set",
     !!process.env.OPENAI_API_KEY,
-    "Set OPENAI_API_KEY in your environment to enable embeddings.",
+    "Set OPENAI_API_KEY or CODEINDEX_OPENAI_API_KEY in your environment, or add it to ~/.config/codeindex/.env",
   );
 
   // 3. Config loadable

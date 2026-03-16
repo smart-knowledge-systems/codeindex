@@ -69,7 +69,10 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
     if (process.env.OPENAI_API_KEY) {
       ok("OPENAI_API_KEY set");
     } else {
-      fail("OPENAI_API_KEY not set", "Required for embeddings. Set it in your shell profile.");
+      fail(
+        "OPENAI_API_KEY not set",
+        "Required for embeddings. Set OPENAI_API_KEY or CODEINDEX_OPENAI_API_KEY in ~/.config/codeindex/.env",
+      );
       process.exit(1);
     }
 
@@ -84,7 +87,10 @@ export async function cmdSetup(repoRoot: string, opts: SetupOptions): Promise<vo
     if (process.env.OPENAI_API_KEY) {
       ok("OPENAI_API_KEY set");
     } else {
-      fail("OPENAI_API_KEY not set", "Required for embeddings.");
+      fail(
+        "OPENAI_API_KEY not set",
+        "Required for embeddings. Set OPENAI_API_KEY or CODEINDEX_OPENAI_API_KEY in ~/.config/codeindex/.env",
+      );
       process.exit(1);
     }
   }
