@@ -2,6 +2,7 @@
 // Implemented by cloud-commands agent, refined by ingest agent
 
 import path from "path";
+import os from "os";
 import { hasFlag, type ParsedArgs } from "../cli";
 import { loadConfig } from "../config";
 import { getSqlite } from "../db/sqlite";
@@ -47,7 +48,7 @@ interface Checkpoint {
   batches: Record<number, "sent" | "acked">;
 }
 
-const CHECKPOINT_DIR = path.join(process.env.HOME ?? "~", ".cache", "cidx", "ingest");
+const CHECKPOINT_DIR = path.join(os.homedir(), ".cache", "cidx", "ingest");
 const STALE_TIMEOUT_MS = Number(process.env.CIDX_INGEST_TIMEOUT) || 3_600_000; // 1h default
 
 function checkpointPath(jobId: string): string {

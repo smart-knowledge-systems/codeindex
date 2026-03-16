@@ -1,4 +1,5 @@
 import path from "path";
+import os from "os";
 import { logEvent } from "../logging";
 import { CloudAuthError, CloudNetworkError, CloudRateLimitError, CloudServerError } from "./errors";
 
@@ -80,7 +81,7 @@ interface Credentials {
 // ---------------------------------------------------------------------------
 
 const MAX_RETRIES = 3;
-const CREDENTIALS_PATH = path.join(process.env.HOME ?? "~", ".config", "cidx", "credentials.json");
+const CREDENTIALS_PATH = path.join(os.homedir(), ".config", "cidx", "credentials.json");
 
 // ---------------------------------------------------------------------------
 // CloudClient
@@ -114,6 +115,10 @@ export class CloudClient {
 
   isAuthenticated(): boolean {
     return this.token !== undefined && this.token.length > 0;
+  }
+
+  getToken(): string | undefined {
+    return this.token;
   }
 
   static getCredentialsPath(): string {
