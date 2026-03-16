@@ -115,9 +115,10 @@ export async function handleResolveRequest(req: Request): Promise<Response> {
     return Response.json({ error: "rate limited" }, { status: 429 });
   }
 
-  // Audit log
+  // Audit log — use verified userId; sanitize body fields to prevent log injection
+  const safeRequesterId = requester_id.replace(/[\r\n]/g, " ");
   console.error(
-    `[resolve] ${new Date().toISOString()} requester=${requester_id} origin=${origin_url} commit=${commit_hash} file=${file_path}`,
+    `[resolve] ${new Date().toISOString()} userId=${userId} requester=${safeRequesterId} origin=${origin_url} commit=${commit_hash} file=${file_path}`,
   );
 
   // Sharing check
