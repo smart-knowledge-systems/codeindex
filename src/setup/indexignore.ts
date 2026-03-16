@@ -176,16 +176,18 @@ async function readDirEntries(dirPath: string): Promise<string[]> {
  * independent arrays that are concatenated without mutation.
  */
 export async function generateIndexIgnore(repoPath: string): Promise<IndexIgnorePattern[]> {
-  // Gather I/O results at the boundary
-  const dirCounts = new Map<string, number>();
-  for (const dir of DATA_DIRS) {
-    const dirPath = path.join(repoPath, dir);
-    if (existsSync(dirPath)) {
-      dirCounts.set(dir, await fileCountInDir(dirPath));
-    }
-  }
-  const mediaCounts = await countExtensions(repoPath, MEDIA_EXTS);
-  const rootEntries = await readDirEntries(repoPath);
+  // Gather I/O results at the boundary — parallelize independent reads
+  const existingDataDirs = DATA_DIRS.filter((dir) => existsSync(path.join(repoPath, dir)));
+  const [dirCountEntries, mediaCounts, rootEntries] = await Promise.all([
+    Promise.all(
+      existingDataDirs.map(
+        async (dir) => [dir, await fileCountInDir(path.join(repoPath, dir))] as const,
+      ),
+    ),
+    countExtensions(repoPath, MEDIA_EXTS),
+    readDirEntries(repoPath),
+  ]);
+  const dirCounts = new Map(dirCountEntries);
 
   // Combine patterns from pure builders
   const patterns = [
