@@ -31,7 +31,9 @@ async function resolveRepoId(
   }
 
   const db = await getSqlite(repoRoot);
-  const row = db.prepare("SELECT name FROM repos WHERE id = ?").get(repoId) as { name: string } | null;
+  const row = db.prepare("SELECT name FROM repos WHERE id = ?").get(repoId) as {
+    name: string;
+  } | null;
   if (!row) throw new Error("Repo not indexed. Run: codeindex reindex");
   return { repoId, repoName: row.name };
 }
