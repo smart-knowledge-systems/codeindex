@@ -6,8 +6,8 @@ import { logEvent } from "../../logging";
 // OpenAI embeddings API has a 300K token-per-request limit.
 // We batch by both item count and estimated token budget.
 const MAX_BATCH_ITEMS = 256;
-const MAX_BATCH_TOKENS = 250_000; // stay under 300K with headroom
-const CHARS_PER_TOKEN = 2; // code averages ~2 chars per token
+const MAX_BATCH_TOKENS = 200_000; // conservative to stay under 300K hard limit
+const CHARS_PER_TOKEN = 1.5; // code with identifiers averages ~1.5 chars per token
 const MAX_RETRIES = 6;
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_MAX_MS = 60_000;
@@ -46,7 +46,11 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
         text_count: texts.length,
       });
 
-      const embeddings = new Array<number[]>(response.data.length);
+      // Map by index, falling back to empty embedding for any missing slots
+      const embeddings: number[][] = [];
+      for (let i = 0; i < texts.length; i++) {
+        embeddings.push([]);
+      }
       for (const item of response.data) {
         embeddings[item.index] = item.embedding;
       }
@@ -58,7 +62,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
         // Respect Retry-After header if present, otherwise exponential backoff with jitter
         let delay: number;
         const retryAfter =
-          err instanceof OpenAI.APIError ? (err.headers?.["retry-after"] ?? null) : null;
+          err instanceof OpenAI.APIError ? (err.headers?.get("retry-after") ?? null) : null;
         if (retryAfter) {
           const parsed = parseFloat(retryAfter);
           delay = Number.isFinite(parsed) ? parsed * 1000 : BACKOFF_BASE_MS * Math.pow(2, attempt);
@@ -85,6 +89,26 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
         await new Promise((resolve) => setTimeout(resolve, delay));
         return this.embedBatch(texts, attempt + 1);
       }
+
+      // Retry 400 token-limit errors by splitting the batch in half
+      const isTokenLimit =
+        err instanceof OpenAI.APIError &&
+        err.status === 400 &&
+        err.message?.includes("maximum request size");
+      if (isTokenLimit && texts.length > 1) {
+        logEvent({
+          event: "infra.embed.batch_split",
+          provider: this.name,
+          original_size: texts.length,
+        });
+        const mid = Math.ceil(texts.length / 2);
+        const [left, right] = await Promise.all([
+          this.embedBatch(texts.slice(0, mid)),
+          this.embedBatch(texts.slice(mid)),
+        ]);
+        return [...left, ...right];
+      }
+
       logEvent({
         event: "infra.embed.failed",
         provider: this.name,
