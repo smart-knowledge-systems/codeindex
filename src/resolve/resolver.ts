@@ -227,6 +227,11 @@ export async function resolve(
 
   const tried: string[] = [];
 
+  // Validate strategy range
+  if (forceStrategy !== undefined && (forceStrategy < 1 || forceStrategy > 4)) {
+    return { error: `invalid strategy ${forceStrategy} — must be 1-4`, strategies_tried: [] };
+  }
+
   // If a specific strategy is forced, only try that one
   if (forceStrategy !== undefined && forceStrategy >= 1 && forceStrategy <= 4) {
     const strat = strategies[forceStrategy - 1];
