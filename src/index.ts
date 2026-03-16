@@ -119,7 +119,7 @@ Commands:
     sharing <sub>      Manage per-repo sharing (enable|disable|list)
   resolve <url> <commit> <path>  Resolve file content from git address
     --json             Output as JSON
-    --strategy <n>     Force resolution strategy (1-4)
+    --strategy <n>     Force resolution strategy (1-5)
   cache <sub>          Manage git clone cache
     list               Show cached repos
     clear              Evict cached repos
