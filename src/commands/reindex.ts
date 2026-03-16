@@ -1,0 +1,177 @@
+import path from "path";
+import { loadConfig, detectFormatter } from "../config";
+import { pgUnsafe } from "../db/pg";
+import { getSqlite } from "../db/sqlite";
+import { getProvider } from "../index/embedder";
+import { walkRepo, MAX_FILE_SIZE } from "../index/walker";
+import { initParser } from "../index/skeleton";
+import { setCurrentRepo, getProjectedCost } from "../cost";
+import { setCorrelationContext, hashPath, logEvent } from "../logging";
+import { ensureRepo } from "./helpers";
+import {
+  collectFiles,
+  embedFiles,
+  storeFiles,
+  pruneStale,
+  indexCommits,
+  summarizeDirs,
+} from "../pipeline";
+import type { PipelineContext, SummaryProvider } from "../pipeline";
+
+export async function cmdReindex(repoRoot: string, dryRun = false, budget?: number, force = false) {
+  const config = await loadConfig(repoRoot);
+  if (budget != null) {
+    config.costCap = { ...config.costCap, maxCostPerReindex: budget };
+  }
+
+  // Initialize embedding provider from config
+  getProvider(config);
+
+  const repoId = await ensureRepo(repoRoot);
+  setCurrentRepo(repoId, repoRoot, config.store);
+  setCorrelationContext({ repoId });
+
+  // Check for embedding provider mismatch
+  const currentProvider = config.embedding.provider ?? "openai";
+  let existingProvider: string | null = null;
+  if (config.store === "pg") {
+    try {
+      const rows = await pgUnsafe("SELECT embedding_provider FROM repos WHERE id = $1", [repoId]);
+      if (rows.length > 0) existingProvider = rows[0].embedding_provider as string | null;
+    } catch {
+      /* column may not exist yet */
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    try {
+      const row = db.prepare("SELECT embedding_provider FROM repos WHERE id = ?").get(repoId) as {
+        embedding_provider: string | null;
+      } | null;
+      if (row) existingProvider = row.embedding_provider;
+    } catch {
+      /* column may not exist yet */
+    }
+  }
+
+  if (existingProvider && existingProvider !== currentProvider && !force) {
+    console.error(
+      `Error: Embedding provider changed from "${existingProvider}" to "${currentProvider}".`,
+    );
+    console.error("All existing embeddings must be regenerated. Use --force to proceed.");
+    process.exit(1);
+  }
+
+  // Update repo with current embedding metadata
+  if (config.store === "pg") {
+    try {
+      await pgUnsafe(
+        "UPDATE repos SET embedding_provider = $1, embedding_dimensions = $2 WHERE id = $3",
+        [currentProvider, config.embedding.dimensions, repoId],
+      );
+    } catch {
+      /* column may not exist yet */
+    }
+  } else {
+    const db = await getSqlite(repoRoot);
+    try {
+      db.prepare(
+        "UPDATE repos SET embedding_provider = ?, embedding_dimensions = ? WHERE id = ?",
+      ).run(currentProvider, config.embedding.dimensions, repoId);
+    } catch {
+      /* column may not exist yet */
+    }
+  }
+
+  const formatter = config.formatter ?? (await detectFormatter(repoRoot));
+
+  console.log(`Indexing ${repoRoot} (repo_id=${repoId}, store=${config.store})`);
+  if (dryRun) console.log("(dry run — no changes will be made)");
+
+  await initParser();
+
+  const ctx: PipelineContext = {
+    repoRoot,
+    repoId,
+    config,
+    formatter,
+    store: config.store,
+    dryRun,
+    force,
+  };
+
+  // Collect files needing re-embedding
+  const collected = await collectFiles(ctx);
+
+  // Walk repo for the full file list (needed for prune/commits/summarize)
+  const allFiles: string[] = [];
+  for await (const relPath of walkRepo(repoRoot)) {
+    const absPath = path.join(repoRoot, relPath);
+    if (Bun.file(absPath).size <= MAX_FILE_SIZE) {
+      allFiles.push(relPath);
+    }
+  }
+
+  if (dryRun) {
+    const skipped = allFiles.length - collected.length;
+    console.log(`Files: ${collected.length} would be indexed, ${skipped} unchanged`);
+    for (const f of collected) {
+      console.log(`  ${f.relPath} (${f.fileType})`);
+    }
+    const projected = getProjectedCost(
+      collected.length,
+      collected.length * 3,
+      config.embedding.model,
+    );
+    console.log(`\nProjected cost:`);
+    console.log(`  Embeddings: $${projected.embeddingCost.toFixed(4)}`);
+    console.log(`  Summaries:  $${projected.summaryCost.toFixed(4)}`);
+    console.log(`  Total:      $${projected.totalCost.toFixed(4)}`);
+    if (config.costCap.maxCostPerReindex != null) {
+      console.log(`  Budget:     $${config.costCap.maxCostPerReindex.toFixed(4)}`);
+      if (projected.totalCost > config.costCap.maxCostPerReindex) {
+        console.log(`  WARNING: projected cost exceeds budget`);
+      }
+    }
+    return;
+  }
+
+  // Embed → store
+  const embedded = await embedFiles(ctx, collected);
+  const costExceeded = collected.length > 0 && embedded.length === 0;
+  if (costExceeded) {
+    return;
+  }
+  const indexed = embedded.length;
+  const skipped = allFiles.length - indexed;
+
+  if (embedded.length > 0) {
+    await storeFiles(ctx, embedded);
+  }
+  console.log(`Files: ${indexed} indexed, ${skipped} skipped (unchanged)`);
+
+  // Index commits
+  console.log("Indexing commits...");
+  const commitCount = await indexCommits(ctx, allFiles);
+  console.log(`Commits: ${commitCount} embedded`);
+
+  // Prune stale entries
+  const pruned = await pruneStale(ctx, new Set(allFiles));
+  if (pruned > 0) console.log(`Pruned ${pruned} stale entries`);
+
+  // Build directory index / summarize
+  console.log("Building directory index...");
+  const nullSummaryProvider: SummaryProvider = {
+    name: "none",
+    summarizeDirectory: async () => null,
+  };
+  await summarizeDirs(ctx, allFiles, nullSummaryProvider);
+  console.log("Directory index complete.");
+
+  logEvent({
+    event: "infra.reindex",
+    repo_hash: hashPath(repoRoot),
+    files_indexed: indexed,
+    files_skipped: skipped,
+  });
+  console.log("Reindex complete.");
+}
