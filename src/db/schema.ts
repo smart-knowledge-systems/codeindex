@@ -5,6 +5,9 @@ export async function ensurePgSchema(): Promise<number[]> {
   const result = await applyMigrations("pg");
   if (result.tag === "err") throw result.error;
   if (result.versions.length > 0) {
+    process.stderr.write(
+      `Applied ${result.versions.length} PG migration(s): ${result.versions.join(", ")}\n`,
+    );
     logEvent({
       event: "infra.schema.applied",
       backend: "pg",
@@ -20,6 +23,9 @@ export async function ensureSqliteSchema(repoRoot?: string) {
   if (result.tag === "err") throw result.error;
   await ensureSqliteVecTables(repoRoot);
   if (result.versions.length > 0) {
+    process.stderr.write(
+      `Applied ${result.versions.length} SQLite migration(s): ${result.versions.join(", ")}\n`,
+    );
     logEvent({
       event: "infra.schema.applied",
       backend: "sqlite",
