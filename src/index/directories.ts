@@ -11,6 +11,15 @@ import { logEvent, hashPath } from "../logging";
 
 type SummaryProviderKind = "claude-cli" | "anthropic-sdk";
 
+/** Sort directory paths deepest-first for bottom-up processing. */
+function sortByDepthDesc(dirs: Iterable<string>): string[] {
+  return [...dirs].sort((a, b) => {
+    const depthA = a === "." ? 0 : a.split("/").length;
+    const depthB = b === "." ? 0 : b.split("/").length;
+    return depthB - depthA;
+  });
+}
+
 export async function buildDirectoryIndex(
   repoRoot: string,
   repoId: number,
@@ -32,11 +41,7 @@ export async function buildDirectoryIndex(
   }
 
   // Sort by depth (deepest first) for bottom-up processing
-  const dirs = [...dirSet].sort((a, b) => {
-    const depthA = a === "." ? 0 : a.split("/").length;
-    const depthB = b === "." ? 0 : b.split("/").length;
-    return depthB - depthA;
-  });
+  const dirs = sortByDepthDesc(dirSet);
 
   const summaryCache = new Map<string, string>();
   let summariesGenerated = 0;
@@ -402,11 +407,7 @@ export async function updateAffectedDirectories(
   }
 
   // Re-process only affected directories
-  const dirs = [...affectedDirs].sort((a, b) => {
-    const depthA = a === "." ? 0 : a.split("/").length;
-    const depthB = b === "." ? 0 : b.split("/").length;
-    return depthB - depthA;
-  });
+  const dirs = sortByDepthDesc(affectedDirs);
 
   const summaryCache = new Map<string, string>();
 
