@@ -108,21 +108,6 @@ Commands:
   xref <symbol>        Cross-reference a symbol across repos
     --format <f>       json|table (default: table)
   doctor               Check environment and configuration
-  cloud <sub>          Cloud platform commands
-    login              Authenticate with cidx cloud
-    logout             Revoke token and sign out
-    status             Show account info, repos, and usage
-    reindex            Collect and upload index to cloud
-    search <query>     Search across cloud-indexed repos
-    migrate            Upload local index to cloud
-    mcp-config         Print cloud MCP integration config
-    sharing <sub>      Manage per-repo sharing (enable|disable|list)
-  resolve <url> <commit> <path>  Resolve file content from git address
-    --json             Output as JSON
-    --strategy <n>     Force resolution strategy (1-4)
-  cache <sub>          Manage git clone cache
-    list               Show cached repos
-    clear              Evict cached repos
 
 Options:
   --path <dir>         Repo root (default: cwd)
@@ -255,11 +240,6 @@ async function main() {
     "dataset",
     "baseline",
     "agents-md",
-    "strategy",
-    "install",
-    "quiet",
-    "batch-size",
-    "top",
   ];
   warnUnknownFlags(parsed, GLOBAL_FLAGS);
 
@@ -642,24 +622,6 @@ async function main() {
           const mcpServer = createMcpServer(repoRoot, session);
           await startStdio(mcpServer);
         }
-        break;
-      }
-
-      case "cloud": {
-        const { cmdCloud } = await import("./commands/cloud");
-        await cmdCloud(repoRoot, parsed);
-        break;
-      }
-
-      case "resolve": {
-        const { cmdResolve } = await import("./resolve/resolver");
-        await cmdResolve(parsed);
-        break;
-      }
-
-      case "cache": {
-        const { cmdCache } = await import("./resolve/git-cache");
-        await cmdCache(parsed);
         break;
       }
 
