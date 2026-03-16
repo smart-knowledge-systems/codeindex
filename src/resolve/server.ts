@@ -64,6 +64,16 @@ setInterval(() => {
 const authCache = new Map<string, { userId: string; expiresAt: number }>();
 const AUTH_CACHE_TTL_MS = 5 * 60 * 1000;
 
+// Periodic cleanup of expired auth cache entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of authCache) {
+    if (now >= entry.expiresAt) {
+      authCache.delete(key);
+    }
+  }
+}, AUTH_CACHE_TTL_MS);
+
 async function verifyToken(authHeader: string | null): Promise<string | null> {
   if (!authHeader?.startsWith("Bearer ")) return null;
   const token = authHeader.slice(7);
