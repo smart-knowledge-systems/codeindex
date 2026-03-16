@@ -1,8 +1,9 @@
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { loadConfig } from "./config";
+import { cosineSimilarity, deserializeEmbedding } from "./db/util";
+import { requireRepoId } from "./db/repo-lookup";
 import { pgUnsafe } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
-import { cosineSimilarity, deserializeEmbedding } from "./db/util";
 import { embed } from "./index/embedder";
 import { logEvent } from "./logging";
 
@@ -14,14 +15,6 @@ export interface DriftResult {
   dirPath: string;
   status: "fresh" | "stale" | "missing";
   similarity?: number;
-}
-
-interface PgRepoRow {
-  id: string;
-}
-
-interface SqliteRepoRow {
-  id: number;
 }
 
 interface SqliteDirEmbeddingRow {
@@ -98,27 +91,6 @@ function formatDriftTable(results: readonly DriftResult[]): string {
     return `${r.dirPath.padEnd(20)}${r.status.padEnd(10)}${simStr}`;
   });
   return ["", ...lines, ""].join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// Data access (impure)
-// ---------------------------------------------------------------------------
-
-async function getRepoId(repoRoot: string, store: string): Promise<number> {
-  if (store === "pg") {
-    const rows = (await pgUnsafe(`SELECT id FROM repos WHERE root_path = $1`, [
-      repoRoot,
-    ])) as PgRepoRow[];
-    if (rows.length === 0) throw new Error(`Repo not found for path: ${repoRoot}`);
-    return parseInt(rows[0].id);
-  } else {
-    const db = await getSqlite(repoRoot);
-    const rows = db
-      .prepare(`SELECT id FROM repos WHERE root_path = ?`)
-      .all(repoRoot) as SqliteRepoRow[];
-    if (rows.length === 0) throw new Error(`Repo not found for path: ${repoRoot}`);
-    return rows[0].id;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +211,7 @@ export async function detectDrift(
   const effectiveThreshold = threshold ?? 0.3;
   const config = await loadConfig(repoRoot);
   const store = config.store;
-  const repoId = await getRepoId(repoRoot, store);
+  const repoId = await requireRepoId(repoRoot, undefined, `Repo not found for path: ${repoRoot}`);
 
   const content = readFileSync(agentsMdPath, "utf-8");
   const sections = parseAgentsMd(content);

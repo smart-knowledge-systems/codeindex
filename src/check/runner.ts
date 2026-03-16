@@ -1,6 +1,7 @@
 import { loadConfig } from "../config";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
+import { requireRepoId } from "../db/repo-lookup";
 import type { HealthPolicy, PolicyContext, CheckReport } from "./types";
 import { indexFreshness } from "./policies/index-freshness";
 import { summaryCompleteness } from "./policies/summary-completeness";
@@ -18,23 +19,19 @@ async function resolveRepoId(
   repoRoot: string,
   store: "pg" | "sqlite",
 ): Promise<{ repoId: number; repoName: string }> {
-  const notIndexedError = () => new Error("Repo not indexed. Run: codeindex reindex");
+  const repoId = await requireRepoId(repoRoot);
 
+  // Fetch the repo name
   if (store === "pg") {
-    const rows = (await pgUnsafe("SELECT id, name FROM repos WHERE root_path = $1", [
-      repoRoot,
-    ])) as { id: string; name: string }[];
-    if (rows.length === 0) throw notIndexedError();
-    return { repoId: parseInt(rows[0].id), repoName: rows[0].name };
+    const rows = (await pgUnsafe("SELECT name FROM repos WHERE id = $1", [repoId])) as {
+      name: string;
+    }[];
+    return { repoId, repoName: rows[0].name };
   }
 
   const db = await getSqlite(repoRoot);
-  const rows = db.prepare("SELECT id, name FROM repos WHERE root_path = ?").all(repoRoot) as {
-    id: number;
-    name: string;
-  }[];
-  if (rows.length === 0) throw notIndexedError();
-  return { repoId: rows[0].id, repoName: rows[0].name };
+  const row = db.prepare("SELECT name FROM repos WHERE id = ?").get(repoId) as { name: string };
+  return { repoId, repoName: row.name };
 }
 
 export async function runHealthCheck(repoRoot: string): Promise<CheckReport> {
