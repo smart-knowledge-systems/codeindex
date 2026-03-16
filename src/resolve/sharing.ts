@@ -43,7 +43,7 @@ async function saveSharingConfig(config: SharingConfig): Promise<void> {
   if (!existsSync(CONFIG_DIR)) {
     await mkdir(CONFIG_DIR, { recursive: true });
   }
-  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2));
+  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
 // ---------------------------------------------------------------------------
