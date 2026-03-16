@@ -31,31 +31,12 @@ interface PgConnection {
  * short-lived connection (bypasses the singleton pool).
  *
  * Accepts a pre-built SQL tagged template or a simple statement string.
- * For parameterized queries, callers should use `pgOneShotParameterized`.
+ * For parameterized queries, callers should use `pgOneShot`.
  */
-async function pgOneShot(conn: PgConnection, query: string): Promise<unknown[]> {
-  const sql = new SQL({
-    hostname: conn.host,
-    port: conn.port,
-    database: conn.database,
-    username: conn.user,
-    max: 1,
-  });
-  try {
-    return [...(await sql.unsafe(query))];
-  } finally {
-    await sql.close();
-  }
-}
-
-/**
- * Execute a parameterized query (safe from SQL injection) against a
- * specific database using a short-lived connection.
- */
-async function pgOneShotParameterized(
+async function pgOneShot(
   conn: PgConnection,
   query: string,
-  params: unknown[],
+  params: unknown[] = [],
 ): Promise<unknown[]> {
   const sql = new SQL({
     hostname: conn.host,
@@ -97,7 +78,7 @@ export async function pgDatabaseExists(
   database: string,
 ): Promise<boolean> {
   try {
-    const rows = (await pgOneShotParameterized(
+    const rows = (await pgOneShot(
       { host, port, user, database: "postgres" },
       "SELECT 1 FROM pg_database WHERE datname = $1",
       [database],
@@ -131,7 +112,7 @@ export async function pgVectorAvailable(
   database: string,
 ): Promise<boolean> {
   try {
-    const rows = (await pgOneShotParameterized(
+    const rows = (await pgOneShot(
       { host, port, user, database },
       "SELECT 1 FROM pg_available_extensions WHERE name = $1",
       ["vector"],
