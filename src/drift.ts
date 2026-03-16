@@ -136,9 +136,10 @@ async function getBatchSummaryEmbeddings(
   if (dirPaths.length === 0) return result;
 
   if (store === "pg") {
+    const pathPlaceholders = dirPaths.map((_, i) => `$${i + 2}`).join(",");
     const rows = (await pgUnsafe(
-      `SELECT dir_path, summary_embedding FROM directories WHERE repo_id = $1 AND dir_path = ANY($2)`,
-      [repoId, dirPaths],
+      `SELECT dir_path, summary_embedding FROM directories WHERE repo_id = $1 AND dir_path IN (${pathPlaceholders})`,
+      [repoId, ...dirPaths],
     )) as { dir_path: string; summary_embedding: string | null }[];
     for (const row of rows) {
       if (row.summary_embedding) {
