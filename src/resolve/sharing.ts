@@ -8,6 +8,7 @@ import { mkdir, writeFile, readFile } from "fs/promises";
 import { type ParsedArgs } from "../cli";
 import { CloudClient } from "../cloud/client";
 import { logEvent } from "../logging";
+import { normalizeUrl } from "./resolver";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,7 +53,11 @@ async function saveSharingConfig(config: SharingConfig): Promise<void> {
 
 export async function isSharingEnabled(originUrl: string): Promise<boolean> {
   const config = await loadSharingConfig();
-  return config.repos[originUrl]?.enabled === true;
+  const normalizedInput = normalizeUrl(originUrl);
+  for (const [url, entry] of Object.entries(config.repos)) {
+    if (normalizeUrl(url) === normalizedInput && entry.enabled) return true;
+  }
+  return false;
 }
 
 export async function setSharingEnabled(originUrl: string, enabled: boolean): Promise<void> {

@@ -194,7 +194,7 @@ async function strategyRelay(
 // URL matching — normalize for comparison
 // ---------------------------------------------------------------------------
 
-function normalizeUrl(url: string): string {
+export function normalizeUrl(url: string): string {
   // Remove trailing .git
   let normalized = url.replace(/\.git$/, "");
   // Convert SSH to HTTPS-like for comparison
