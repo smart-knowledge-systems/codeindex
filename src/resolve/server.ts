@@ -61,16 +61,23 @@ setInterval(() => {
 // Auth verification
 // ---------------------------------------------------------------------------
 
+const authCache = new Map<string, { userId: string; expiresAt: number }>();
+const AUTH_CACHE_TTL_MS = 5 * 60 * 1000;
+
 async function verifyToken(authHeader: string | null): Promise<string | null> {
   if (!authHeader?.startsWith("Bearer ")) return null;
   const token = authHeader.slice(7);
   if (!token) return null;
+
+  const cached = authCache.get(token);
+  if (cached && Date.now() < cached.expiresAt) return cached.userId;
 
   try {
     const { CloudClient } = await import("../cloud/client");
     const client = new CloudClient();
     client.setToken(token);
     const status = await client.getStatus();
+    authCache.set(token, { userId: status.user.id, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
     return status.user.id;
   } catch {
     return null;
