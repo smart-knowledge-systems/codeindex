@@ -32,8 +32,11 @@ export interface EmbeddedFile extends CollectedFile {
 // ---------------------------------------------------------------------------
 
 /**
- * Shared immutable context passed to every pipeline stage.
- * Created once by the orchestrator (cmdReindex / cmdUpdate) and threaded through.
+ * Shared context passed to every pipeline stage. Created once by the
+ * orchestrator (cmdReindex / cmdUpdate / cloudReindex / reindexOne) and
+ * threaded through. Most fields are immutable configuration; a small number
+ * of fields (marked below) are mutable accumulators that pipeline stages
+ * write to as they process files.
  */
 export interface PipelineContext {
   repoRoot: string;
@@ -44,7 +47,8 @@ export interface PipelineContext {
   dryRun: boolean; // when true, collect runs but embed/store are skipped
   force: boolean; // when true, collect bypasses content-hash dedup
   repoVisibility?: "public" | "private" | "unknown";
-  secretOverrideCount?: number; // mutable accumulator
+  /** Mutable accumulator: incremented by processFile each time a secret-flagged file is overridden via the public-repo path. */
+  secretOverrideCount?: number;
 }
 
 // ---------------------------------------------------------------------------
