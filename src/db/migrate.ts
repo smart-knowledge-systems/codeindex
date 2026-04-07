@@ -1,12 +1,14 @@
 import { createHash } from "crypto";
 import { readdir, readFile } from "fs/promises";
 import path from "path";
+import type { Database } from "bun:sqlite";
 import { getPg } from "./pg";
 import { getSqlite } from "./sqlite";
 import { logEvent } from "../logging";
 import { loadConfig } from "../config";
 
 const MIGRATIONS_DIR = path.join(import.meta.dir, "../../migrations");
+const GLOBAL_MIGRATIONS_DIR = path.join(import.meta.dir, "../../migrations/global");
 
 // ---------------------------------------------------------------------------
 // Types
@@ -130,10 +132,17 @@ function splitPgStatements(sql: string): string[] {
  * Files must match the pattern: NNNN_description.{pg,sqlite}.sql
  */
 async function loadMigrationFiles(backend: "pg" | "sqlite"): Promise<MigrationFile[]> {
+  return loadMigrationsFromDir(MIGRATIONS_DIR, backend);
+}
+
+async function loadMigrationsFromDir(
+  dir: string,
+  backend: "pg" | "sqlite",
+): Promise<MigrationFile[]> {
   const suffix = `.${backend}.sql`;
   let entries: string[];
   try {
-    entries = await readdir(MIGRATIONS_DIR);
+    entries = await readdir(dir);
   } catch {
     return [];
   }
@@ -145,7 +154,7 @@ async function loadMigrationFiles(backend: "pg" | "sqlite"): Promise<MigrationFi
     const version = parseInt(versionStr, 10);
     if (isNaN(version)) continue;
 
-    const sql = await readFile(path.join(MIGRATIONS_DIR, filename), "utf-8");
+    const sql = await readFile(path.join(dir, filename), "utf-8");
     migrations.push({ version, filename, sql });
   }
 
@@ -380,6 +389,108 @@ export async function verifyMigrationChecksums(
   }
 
   return { tag: "ok", valid: mismatches.length === 0, mismatches };
+}
+
+// ---------------------------------------------------------------------------
+// Global dedup store migrations
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply global-store migrations against a Postgres connection.
+ * Versioned independently from per-repo migrations via global_schema_version.
+ */
+export async function applyGlobalPgMigrations(): Promise<MigrationResult> {
+  const pg = await getPg();
+  const migrations = await loadMigrationsFromDir(GLOBAL_MIGRATIONS_DIR, "pg");
+  const applied: number[] = [];
+
+  // Read current version (table may not exist yet — first migration creates it)
+  let currentVersion = 0;
+  try {
+    const rows = await pg.unsafe(
+      "SELECT version FROM global_schema_version ORDER BY version DESC LIMIT 1",
+    );
+    if (rows.length > 0) currentVersion = rows[0].version as number;
+  } catch {
+    currentVersion = 0;
+  }
+
+  for (const m of migrations) {
+    if (m.version <= currentVersion) continue;
+    try {
+      await pg.begin(async (tx) => {
+        const statements = splitPgStatements(m.sql);
+        for (const stmt of statements) {
+          await tx.unsafe(stmt);
+        }
+        await tx.unsafe(
+          "INSERT INTO global_schema_version (version, checksum, filename) VALUES ($1, $2, $3) ON CONFLICT (version) DO NOTHING",
+          [m.version, sha256(m.sql), m.filename],
+        );
+      });
+      applied.push(m.version);
+      logEvent({ event: "infra.migrate.apply", version: m.version, backend: "pg-global" });
+    } catch (err) {
+      return {
+        tag: "err",
+        error: new Error(`Global migration ${m.version} failed: ${err}`, { cause: err }),
+      };
+    }
+  }
+
+  return { tag: "ok", versions: applied };
+}
+
+/**
+ * Apply global-store migrations against an explicitly-passed SQLite handle.
+ * Caller owns the Database (typically the global ~/.codeindex/global.db).
+ * Versioned via PRAGMA user_version on that handle.
+ */
+export async function applyGlobalSqliteMigrations(db: Database): Promise<MigrationResult> {
+  const migrations = await loadMigrationsFromDir(GLOBAL_MIGRATIONS_DIR, "sqlite");
+  const applied: number[] = [];
+
+  const versionRows = db.prepare("PRAGMA user_version").all() as { user_version: number }[];
+  const currentVersion = versionRows[0]?.user_version ?? 0;
+
+  for (const m of migrations) {
+    if (m.version <= currentVersion) continue;
+    const statements = stripCommentLines(parseSqlStatements(m.sql));
+
+    const runMigration = db.transaction(() => {
+      for (const stmt of statements) {
+        db.exec(stmt);
+      }
+      db.exec(`PRAGMA user_version = ${m.version}`);
+    });
+
+    try {
+      runMigration();
+      applied.push(m.version);
+      logEvent({ event: "infra.migrate.apply", version: m.version, backend: "sqlite-global" });
+    } catch (err) {
+      return {
+        tag: "err",
+        error: new Error(`Global migration ${m.version} failed: ${err}`, { cause: err }),
+      };
+    }
+  }
+
+  return { tag: "ok", versions: applied };
+}
+
+/**
+ * Create the vec0 virtual table for global content_blobs embeddings.
+ * Must be called after applyGlobalSqliteMigrations() so the parent table exists.
+ * The dimension count must match the embedding provider config.
+ */
+export function ensureGlobalSqliteVecTables(db: Database, dimensions: number): void {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS content_blob_embeddings USING vec0(
+      blob_id integer PRIMARY KEY,
+      embedding float[${dimensions}]
+    )
+  `);
 }
 
 /**
