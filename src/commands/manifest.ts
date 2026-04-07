@@ -60,7 +60,16 @@ export async function cmdManifest(repoRoot: string) {
 
   const { fileCount, filePaths, dirCount, commitCount } = dbStats;
 
-  const visibility = await checkRepoVisibility(repoRoot);
+  // Lazy: only call the GitHub API if we actually encounter a secret-flagged
+  // file below. Most manifest invocations have no secrets and shouldn't pay
+  // a network round-trip.
+  let visibilityCache: "public" | "private" | "unknown" | undefined;
+  const getVisibility = async (): Promise<"public" | "private" | "unknown"> => {
+    if (visibilityCache === undefined) {
+      visibilityCache = await checkRepoVisibility(repoRoot);
+    }
+    return visibilityCache;
+  };
 
   // --- Walk repo to collect all non-indexed file paths (I/O boundary) ---
   const indexedSet = new Set(filePaths);
@@ -88,7 +97,7 @@ export async function cmdManifest(repoRoot: string) {
       const scan = scanForSecrets(content);
       if (scan.hasSecrets) {
         let overridden = false;
-        if (visibility === "public" && (await isPublishedContent(repoRoot, relPath))) {
+        if ((await getVisibility()) === "public" && (await isPublishedContent(repoRoot, relPath))) {
           overridden = true;
         }
         classified.push({
@@ -116,7 +125,7 @@ export async function cmdManifest(repoRoot: string) {
   const manifest = {
     repoRoot,
     store: config.store,
-    repoVisibility: visibility,
+    repoVisibility: visibilityCache ?? "unknown",
     indexed: {
       files: { count: fileCount, paths: filePaths },
       directories: dirCount,
