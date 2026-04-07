@@ -10,6 +10,7 @@ import { ensureSqliteSchema } from "../db/schema";
 import { collectFiles } from "../pipeline/collect";
 import type { CollectedFile, PipelineContext } from "../pipeline/types";
 import { getRepoOrigin } from "../index/commits";
+import { checkRepoVisibility } from "../index/public-repo";
 import { CloudClient } from "./client";
 import { CloudRateLimitError } from "./errors";
 import { formatError } from "../errors";
@@ -163,6 +164,8 @@ export async function cloudReindex(repoRoot: string, parsed: ParsedArgs): Promis
     };
   }
 
+  const repoVisibility = await checkRepoVisibility(repoRoot);
+
   const ctx: PipelineContext = {
     repoRoot,
     repoId: repoRow!.id,
@@ -171,6 +174,7 @@ export async function cloudReindex(repoRoot: string, parsed: ParsedArgs): Promis
     store: "sqlite",
     dryRun: false,
     force: true, // bypass local hash dedup — let the cloud decide
+    repoVisibility,
   };
 
   const collected = await collectFiles(ctx);
