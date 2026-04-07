@@ -53,6 +53,24 @@ async function processFile(
   // Skip if hash matches existing DB record (dedup)
   if (!ctx.force && existingHashes.get(file.relPath) === hash) return null;
 
+  // Global dedup-store hit: reuse skeleton + embedding verbatim, no parse, no embed.
+  const cached = await lookupGlobalBlob(ctx, hash);
+  if (cached) {
+    if (ctx.dedupStats) ctx.dedupStats.hits++;
+    return {
+      relPath: file.relPath,
+      absPath: file.absPath,
+      fileType: ext,
+      contentHash: hash,
+      content: file.content,
+      skeleton: cached.skeleton ?? "",
+      skeletonEntries: cached.skeletonEntries,
+      importEdges: extractImports(file.relPath, file.content),
+      cachedEmbedding: cached.embedding,
+    };
+  }
+  if (ctx.dedupStats) ctx.dedupStats.misses++;
+
   const { text: skeleton, entries } = await extractSkeletonWithEntries(
     file.relPath,
     file.content,
@@ -71,6 +89,23 @@ async function processFile(
     skeletonEntries,
     importEdges,
   };
+}
+
+/**
+ * Single-blob global-store lookup, scoped to the repo's embedding config.
+ * Returns null when dedup is disabled, the store is absent, or it's a miss.
+ */
+async function lookupGlobalBlob(
+  ctx: PipelineContext,
+  contentHash: string,
+): Promise<{
+  skeleton: string | null;
+  skeletonEntries: string | null;
+  embedding: number[];
+} | null> {
+  if (!ctx.globalStore) return null;
+  const { provider, model, dimensions } = ctx.config.embedding;
+  return ctx.globalStore.lookupBlob({ contentHash, provider, model, dimensions });
 }
 
 // ---------------------------------------------------------------------------
