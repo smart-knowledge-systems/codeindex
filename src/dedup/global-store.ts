@@ -113,10 +113,14 @@ let _instance: GlobalDedupStore | null = null;
 export async function getGlobalStore(config: CodeindexConfig): Promise<GlobalDedupStore> {
   if (_instance) return _instance;
 
-  // Postgres backend lands in the next commit; for now everyone falls back
-  // to the local SQLite store.
-  const { openSqliteGlobalStore } = await import("./global-store-sqlite");
-  _instance = await openSqliteGlobalStore(config);
+  const backend = (config as CodeindexConfig & { dedup?: { backend?: string } }).dedup?.backend;
+  if (backend === "pg") {
+    const { openPgGlobalStore } = await import("./global-store-pg");
+    _instance = await openPgGlobalStore(config);
+  } else {
+    const { openSqliteGlobalStore } = await import("./global-store-sqlite");
+    _instance = await openSqliteGlobalStore(config);
+  }
   return _instance;
 }
 
