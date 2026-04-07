@@ -72,10 +72,24 @@ export async function checkRepoVisibility(
 // ---------------------------------------------------------------------------
 
 export async function isPublishedContent(repoRoot: string, relPath: string): Promise<boolean> {
-  // Get local blob hash
+  // Reject any working-tree modification vs HEAD. The override is meant for
+  // content that is *already published*, so any uncommitted edit (including a
+  // freshly added secret) must disqualify the file.
+  const diffResult = await runGit(
+    ["-C", repoRoot, "diff", "--quiet", "HEAD", "--", relPath],
+    "diffQuiet",
+  );
+  if (!diffResult.ok) return false;
+
+  // Get local blob hash from HEAD's tree, not from disk. `hash-object` on a
+  // working-tree file hashes raw bytes, but `ls-tree` returns the post-clean-
+  // filter hash from git's object database. On any repo with .gitattributes
+  // line-ending normalization or LFS, those two never match. Reading from
+  // HEAD via rev-parse keeps both sides on the same side of git's filter
+  // pipeline.
   const localResult = await runGit(
-    ["-C", repoRoot, "hash-object", `${repoRoot}/${relPath}`],
-    "hashObject",
+    ["-C", repoRoot, "rev-parse", `HEAD:${relPath}`],
+    "revParseHead",
   );
   if (!localResult.ok) return false;
   const localHash = localResult.stdout.trim();
