@@ -7,6 +7,7 @@ import { withCostContext } from "../cost";
 import { walkRepo, MAX_FILE_SIZE } from "./walker";
 import { initParser } from "./skeleton";
 import { getRepoOrigin, getRepoName } from "./commits";
+import { checkRepoVisibility } from "./public-repo";
 import { collectFiles, embedFiles, storeFiles, pruneStale, summarizeDirs } from "../pipeline";
 import type { PipelineContext, SummaryProvider } from "../pipeline";
 import { logEvent } from "../logging";
@@ -111,6 +112,8 @@ async function reindexOne(
     process.stderr.write(`${tag} Scanning files...\n`);
     logEvent({ event: "infra.reindex.started", repo_name: repoName });
 
+    const repoVisibility = await checkRepoVisibility(repoRoot);
+
     const ctx: PipelineContext = {
       repoRoot,
       repoId,
@@ -119,6 +122,7 @@ async function reindexOne(
       store: config.store,
       dryRun: false,
       force: false,
+      repoVisibility,
     };
 
     const collected = await collectFiles(ctx);
