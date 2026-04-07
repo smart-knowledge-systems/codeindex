@@ -6,6 +6,7 @@ import { serializeEmbedding } from "../db/util";
 import { getChangedFiles } from "../index/commits";
 import { updateAffectedDirectories } from "../index/directories";
 import { initParser } from "../index/skeleton";
+import { checkRepoVisibility } from "../index/public-repo";
 import { embedSingle } from "../index/embedder";
 import { setCurrentRepo } from "../cost";
 import { setCorrelationContext } from "../logging";
@@ -58,6 +59,8 @@ export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: 
     return;
   }
 
+  const repoVisibility = await checkRepoVisibility(repoRoot);
+
   const ctx: PipelineContext = {
     repoRoot,
     repoId,
@@ -66,6 +69,7 @@ export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: 
     store: config.store,
     dryRun: false,
     force: false,
+    repoVisibility,
   };
 
   // Collect only the specified changed files (not a full repo walk)
