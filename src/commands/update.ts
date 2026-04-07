@@ -13,6 +13,11 @@ import { setCorrelationContext } from "../logging";
 import { ensureRepo, collectChangedFiles, getCommitMessage } from "./helpers";
 import { embedFiles, storeFiles } from "../pipeline";
 import type { PipelineContext } from "../pipeline";
+import { ensureDedupBackend } from "../dedup/prompt";
+import { getGlobalStore } from "../dedup/global-store";
+import type { GlobalDedupStore } from "../dedup/global-store";
+import { logEvent } from "../logging";
+import { getProjectedCost } from "../cost";
 
 export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: string) {
   const config = await loadConfig(repoRoot);
@@ -61,6 +66,22 @@ export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: 
 
   const repoVisibility = await checkRepoVisibility(repoRoot);
 
+  const dedupChoice = await ensureDedupBackend(config);
+  let globalStore: GlobalDedupStore | undefined;
+  if (dedupChoice.enabled && dedupChoice.backend !== null) {
+    if (config.dedup) {
+      config.dedup.backend = dedupChoice.backend;
+      config.dedup.enabled = true;
+    }
+    try {
+      globalStore = await getGlobalStore(config);
+    } catch (err) {
+      process.stderr.write(
+        `[dedup] failed to open global store (${err instanceof Error ? err.message : String(err)}); proceeding without dedup\n`,
+      );
+    }
+  }
+
   const ctx: PipelineContext = {
     repoRoot,
     repoId,
@@ -70,6 +91,8 @@ export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: 
     dryRun: false,
     force: false,
     repoVisibility,
+    globalStore,
+    dedupStats: { hits: 0, misses: 0 },
   };
 
   // Collect only the specified changed files (not a full repo walk)
@@ -166,4 +189,20 @@ export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: 
   await updateAffectedDirectories(repoRoot, repoId, changedFiles);
 
   console.log(`Updated ${collected.length} files.`);
+  if (ctx.dedupStats && (ctx.dedupStats.hits > 0 || ctx.dedupStats.misses > 0)) {
+    const { hits, misses } = ctx.dedupStats;
+    const total = hits + misses;
+    const pct = total > 0 ? ((hits / total) * 100).toFixed(1) : "0.0";
+    const projected = getProjectedCost(hits, hits * 3, config.embedding.model);
+    console.log(
+      `Dedup:  ${hits} hits / ${misses} misses (${pct}% hit rate, ~$${projected.embeddingCost.toFixed(4)} saved)`,
+    );
+    logEvent({
+      event: "infra.dedup.summary",
+      hits,
+      misses,
+      hit_rate: total > 0 ? hits / total : 0,
+      embedding_cost_saved: projected.embeddingCost,
+    });
+  }
 }
