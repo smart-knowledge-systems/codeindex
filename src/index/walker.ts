@@ -1,6 +1,9 @@
 import path from "path";
+import { realpath, readdir } from "fs/promises";
+import { existsSync } from "fs";
 import ignore from "ignore";
 import { logEvent } from "../logging";
+import { detectPackage, type DetectedPackage } from "../dedup/package-detect";
 
 // ---------------------------------------------------------------------------
 // Extension allowlist — only files we have real parsers for
@@ -152,5 +155,71 @@ export async function* walkRepo(repoRoot: string): AsyncGenerator<string> {
     if (isIndexable(entry, hardIg, softIg)) {
       yield entry;
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dependency-mode descent — yields installed packages for the dedup pipeline
+// ---------------------------------------------------------------------------
+
+/**
+ * Roots to probe inside a repo for installed-package directories. Each entry
+ * is a relative path from the repo root; missing roots are silently skipped.
+ *
+ * Cargo and Go modcache live globally, not inside the repo, so they are
+ * walked from the user's home directory by walkGlobalDependencyCaches() —
+ * not implemented in Phase 1 because their cache layout already deduplicates
+ * on disk.
+ */
+const REPO_DEP_ROOTS = ["node_modules", "vendor"];
+
+/**
+ * Walk a repo's installed-dependency trees and yield each detected package
+ * exactly once (deduped by realpath, which handles pnpm's symlink store).
+ *
+ * Caller is responsible for tree-hashing each yielded package and consulting
+ * the global dedup store.
+ */
+export async function* walkDependencies(repoRoot: string): AsyncGenerator<DetectedPackage> {
+  const seen = new Set<string>();
+
+  for (const rel of REPO_DEP_ROOTS) {
+    const root = path.join(repoRoot, rel);
+    if (!existsSync(root)) continue;
+    yield* walkDepRoot(root, seen);
+  }
+}
+
+async function* walkDepRoot(root: string, seen: Set<string>): AsyncGenerator<DetectedPackage> {
+  let entries: string[];
+  try {
+    entries = await readdir(root);
+  } catch {
+    return;
+  }
+
+  for (const name of entries) {
+    if (name.startsWith(".")) continue;
+    const childPath = path.join(root, name);
+
+    // npm scoped packages live one level deeper: node_modules/@scope/pkg
+    if (name.startsWith("@")) {
+      yield* walkDepRoot(childPath, seen);
+      continue;
+    }
+
+    // Resolve realpath so pnpm's .pnpm/<hash>/node_modules/<pkg> symlinks
+    // collapse to a single physical directory across the whole tree.
+    let real: string;
+    try {
+      real = await realpath(childPath);
+    } catch {
+      continue;
+    }
+    if (seen.has(real)) continue;
+    seen.add(real);
+
+    const pkg = await detectPackage(real);
+    if (pkg) yield pkg;
   }
 }
