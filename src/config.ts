@@ -47,6 +47,10 @@ const DEFAULTS: CodeindexConfig = {
   providerProfiles: {
     ollama: { hybridWeight: 0.45, alpha: 0.2 },
   },
+  dedup: {
+    enabled: true,
+    backend: null, // null = unprompted; first reindex triggers interactive chooser
+  },
 };
 
 const GLOBAL_CONFIG_PATH = path.join(

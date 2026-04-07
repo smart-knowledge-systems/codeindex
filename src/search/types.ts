@@ -98,6 +98,19 @@ export interface CodeindexConfig {
   languageProfiles?: Record<string, Partial<ScoringConfig>>;
   reranking?: RerankingConfig;
   providerProfiles?: Record<string, Partial<ScoringConfig>>;
+  dedup?: DedupConfig;
+}
+
+export interface DedupConfig {
+  /** Master switch. When false, dedup is bypassed entirely. */
+  enabled: boolean;
+  /**
+   * Where the global dedup store lives. `null` means the user has not yet
+   * been prompted; the next reindex will trigger an interactive chooser.
+   */
+  backend: "pg" | "sqlite" | null;
+  /** Override path for the SQLite global store (default: ~/.codeindex/global.db). */
+  sqlitePath?: string;
 }
 
 export interface ScoringConfig {
