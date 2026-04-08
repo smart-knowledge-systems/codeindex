@@ -112,7 +112,9 @@ export async function cloudMcpConfig(parsed: ParsedArgs): Promise<void> {
 
   const isLocal = hasFlag(parsed, "local");
   const buildConfig = isLocal ? buildLocalMcpConfig : buildCloudMcpConfig;
-  const config = buildConfig(client.baseUrl, "$(cidx cloud token)");
+  // stdio env vars are shell-evaluated by editors; HTTP headers are sent verbatim
+  const placeholder = isLocal ? "$(cidx cloud token)" : "<YOUR_TOKEN>";
+  const config = buildConfig(client.baseUrl, placeholder);
 
   // Read the actual token for install mode
   if (hasFlag(parsed, "install")) {
