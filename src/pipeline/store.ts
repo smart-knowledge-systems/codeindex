@@ -106,46 +106,39 @@ export const storeFiles: StoreFilesStage = async (
         const upserted = rows.at(0);
         if (upserted) fileIdMap.set(f.relPath, upserted.id);
 
-        // Phase 3 dual-write: best-effort populate file_blobs + repo_files.
-        // Failures here log and continue — the legacy files row above is the
-        // source of truth until commit 9 flips useBlobSchema to true.
-        try {
-          await tx.unsafe(
-            `INSERT INTO file_blobs
-               (content_hash, provider, model, dimensions, skeleton, skeleton_entries, file_type, embedding)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
-             ON CONFLICT (content_hash, provider, model, dimensions) DO NOTHING`,
-            [
-              f.contentHash,
-              provider,
-              model,
-              dimensions,
-              f.skeleton,
-              f.skeletonEntries,
-              f.fileType,
-              `[${f.embedding.join(",")}]`,
-            ],
-          );
-          await tx.unsafe(
-            `INSERT INTO repo_files
-               (repo_id, file_path, content_hash, provider, model, dimensions)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (repo_id, file_path) DO UPDATE SET
-               content_hash = EXCLUDED.content_hash,
-               provider = EXCLUDED.provider,
-               model = EXCLUDED.model,
-               dimensions = EXCLUDED.dimensions,
-               indexed_at = now()`,
-            [repoId, f.relPath, f.contentHash, provider, model, dimensions],
-          );
-        } catch (err) {
-          logEvent({
-            event: "infra.dedup.dualwrite_failed",
-            backend: "pg",
-            content_hash: f.contentHash,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        // Phase 3 content-addressed write: file_blobs + repo_files are now
+        // load-bearing (useBlobSchema defaults to true). Failures propagate
+        // and abort the reindex transaction; the legacy files row is kept
+        // populated for the export path until the legacy table is dropped
+        // in a follow-up PR.
+        await tx.unsafe(
+          `INSERT INTO file_blobs
+             (content_hash, provider, model, dimensions, skeleton, skeleton_entries, file_type, embedding)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
+           ON CONFLICT (content_hash, provider, model, dimensions) DO NOTHING`,
+          [
+            f.contentHash,
+            provider,
+            model,
+            dimensions,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+            `[${f.embedding.join(",")}]`,
+          ],
+        );
+        await tx.unsafe(
+          `INSERT INTO repo_files
+             (repo_id, file_path, content_hash, provider, model, dimensions)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (repo_id, file_path) DO UPDATE SET
+             content_hash = EXCLUDED.content_hash,
+             provider = EXCLUDED.provider,
+             model = EXCLUDED.model,
+             dimensions = EXCLUDED.dimensions,
+             indexed_at = now()`,
+          [repoId, f.relPath, f.contentHash, provider, model, dimensions],
+        );
       }
 
       // Load existing files not in this batch for import resolution
@@ -249,32 +242,24 @@ export const storeFiles: StoreFilesStage = async (
         insertEmb.run(row.id, serializeEmbedding(f.embedding));
         fileIdMap.set(f.relPath, row.id);
 
-        // Phase 3 dual-write (SQLite): scalar file_blobs + repo_files plus
-        // the file_blob_embeddings vec0 table keyed on the surrogate blob_id.
-        // Best-effort: failures log and continue.
-        try {
-          const blobRow = insertBlob.get(
-            f.contentHash,
-            provider,
-            model,
-            dimensions,
-            f.skeleton,
-            f.skeletonEntries,
-            f.fileType,
-          ) as { blob_id: number } | undefined;
-          if (blobRow) {
-            deleteBlobEmb.run(blobRow.blob_id);
-            insertBlobEmb.run(blobRow.blob_id, serializeEmbedding(f.embedding));
-          }
-          upsertRepoFile.run(repoId, f.relPath, f.contentHash, provider, model, dimensions);
-        } catch (err) {
-          logEvent({
-            event: "infra.dedup.dualwrite_failed",
-            backend: "sqlite",
-            content_hash: f.contentHash,
-            error: err instanceof Error ? err.message : String(err),
-          });
+        // Phase 3 content-addressed write (SQLite): scalar file_blobs +
+        // repo_files plus the file_blob_embeddings vec0 table keyed on the
+        // surrogate blob_id. Now load-bearing — failures abort the reindex
+        // transaction.
+        const blobRow = insertBlob.get(
+          f.contentHash,
+          provider,
+          model,
+          dimensions,
+          f.skeleton,
+          f.skeletonEntries,
+          f.fileType,
+        ) as { blob_id: number } | undefined;
+        if (blobRow) {
+          deleteBlobEmb.run(blobRow.blob_id);
+          insertBlobEmb.run(blobRow.blob_id, serializeEmbedding(f.embedding));
         }
+        upsertRepoFile.run(repoId, f.relPath, f.contentHash, provider, model, dimensions);
 
         deleteImports.run(row.id);
         const imports = resolveFileImports(f, allFiles, fileIdMap);

@@ -52,7 +52,7 @@ const DEFAULTS: CodeindexConfig = {
     backend: null, // null = unprompted; first reindex triggers interactive chooser
   },
   search: {
-    useBlobSchema: false,
+    useBlobSchema: true,
   },
 };
 
