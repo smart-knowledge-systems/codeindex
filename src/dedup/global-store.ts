@@ -137,6 +137,17 @@ export interface GlobalDedupStore {
   /** Hard-delete blobs whose content_hash is NOT in the given live set. */
   deleteBlobsExcept(liveHashes: Set<string>): Promise<number>;
 
+  /**
+   * Single-pass orphan sweep: delete `file_blobs` rows that no `repo_files`
+   * row and no `package_files` row references. Returns `null` on backends
+   * that don't yet store blobs in the unified `file_blobs` table (today:
+   * SQLite global store), in which case the caller falls back to the
+   * legacy live-set protocol.
+   *
+   * The dry-run flag returns the candidate count without deleting.
+   */
+  sweepOrphanedBlobs(opts: { dryRun: boolean }): Promise<number | null>;
+
   /** Close any underlying connection (idempotent). */
   close(): Promise<void>;
 }

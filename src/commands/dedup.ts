@@ -81,13 +81,15 @@ function printStatsHuman(stats: DedupStats, backend: string): void {
  * orphaned packages from the global store.
  *
  * The package tier is GC'd by removing rows whose `repo_packages` link count
- * dropped to zero. The blob tier is GC'd by computing the live set as the
- * union of:
- *   1. content_hashes referenced by package_files of surviving packages
- *   2. content_hashes referenced by every registered repo's `files` table
- * and deleting any blob whose hash is not in that set. Blob entries written
- * outside any package context (the regular collect path) are kept exactly
- * when at least one registered repo still has a `files` row pointing at them.
+ * dropped to zero. The blob tier on PG is a single NOT EXISTS sweep: any
+ * `file_blobs` row not referenced by `repo_files` (per-repo) and not pinned
+ * by `package_files` (global package cache) is collected.
+ *
+ * On SQLite the global store still uses its own `content_blobs` table, so
+ * `sweepOrphanedBlobs()` returns null and we fall back to the legacy live-set
+ * protocol — union of (a) hashes from surviving package_files and (b) hashes
+ * from every registered repo's `files` table — until the SQLite machine-wide
+ * dedup unification follow-up lands.
  */
 export async function cmdDedupGc(repoRoot: string, opts: CmdOptions = {}): Promise<void> {
   const config = await loadConfig(repoRoot);
@@ -98,8 +100,41 @@ export async function cmdDedupGc(repoRoot: string, opts: CmdOptions = {}): Promi
   }
 
   const store = await getGlobalStore(config);
+  const dryRun = opts.dryRun ?? false;
 
+  // Package tier (unchanged): orphan packages whose repo_packages link
+  // count dropped to zero.
   const orphanIds = await store.listOrphanedPackageIds();
+
+  // Try the unified single-pass sweep first. PG returns a number; SQLite
+  // returns null and we fall back to the legacy live-set computation.
+  const sweptCandidates = await store.sweepOrphanedBlobs({ dryRun: true });
+
+  if (sweptCandidates !== null) {
+    const plan = {
+      enabled: true,
+      dryRun,
+      orphanedPackages: orphanIds.length,
+      blobsToDelete: sweptCandidates,
+      strategy: "not-exists-sweep" as const,
+    };
+
+    if (dryRun) {
+      if (opts.json) console.log(JSON.stringify(plan, null, 2));
+      else printGcPlan(plan, "Would delete");
+      return;
+    }
+
+    await store.deletePackages(orphanIds);
+    const blobsDeleted = (await store.sweepOrphanedBlobs({ dryRun: false })) ?? 0;
+
+    const result = { ...plan, dryRun: false, blobsDeleted };
+    if (opts.json) console.log(JSON.stringify(result, null, 2));
+    else printGcPlan({ ...plan, blobsToDelete: blobsDeleted }, "Deleted");
+    return;
+  }
+
+  // Legacy live-set path (SQLite global store).
   const liveFromPackages = await store.listLivePackageBlobHashes(orphanIds);
   const liveFromRepos = await collectLiveBlobHashesFromRepos(repoRoot);
 
@@ -108,20 +143,18 @@ export async function cmdDedupGc(repoRoot: string, opts: CmdOptions = {}): Promi
 
   const plan = {
     enabled: true,
-    dryRun: opts.dryRun ?? false,
+    dryRun,
     orphanedPackages: orphanIds.length,
     liveHashes: liveHashes.size,
     liveFromPackages: liveFromPackages.length,
     liveFromRepos: liveFromRepos.length,
     blobsToDelete,
+    strategy: "live-set" as const,
   };
 
-  if (opts.dryRun) {
-    if (opts.json) {
-      console.log(JSON.stringify(plan, null, 2));
-    } else {
-      printGcPlan(plan, "Would delete");
-    }
+  if (dryRun) {
+    if (opts.json) console.log(JSON.stringify(plan, null, 2));
+    else printLegacyGcPlan(plan, "Would delete");
     return;
   }
 
@@ -129,22 +162,28 @@ export async function cmdDedupGc(repoRoot: string, opts: CmdOptions = {}): Promi
   const blobsDeleted = await store.deleteBlobsExcept(liveHashes);
 
   const result = { ...plan, dryRun: false, blobsDeleted };
-  if (opts.json) {
-    console.log(JSON.stringify(result, null, 2));
-  } else {
-    printGcPlan({ ...plan, blobsToDelete: blobsDeleted }, "Deleted");
-  }
+  if (opts.json) console.log(JSON.stringify(result, null, 2));
+  else printLegacyGcPlan({ ...plan, blobsToDelete: blobsDeleted }, "Deleted");
 }
 
 interface GcPlan {
   orphanedPackages: number;
-  liveHashes: number;
-  liveFromPackages: number;
-  liveFromRepos: number;
   blobsToDelete: number;
 }
 
+interface LegacyGcPlan extends GcPlan {
+  liveHashes: number;
+  liveFromPackages: number;
+  liveFromRepos: number;
+}
+
 function printGcPlan(plan: GcPlan, verb: string): void {
+  console.log(`${verb}:`);
+  console.log(`  ${plan.orphanedPackages} orphaned package(s)`);
+  console.log(`  ${plan.blobsToDelete} unreferenced blob(s)`);
+}
+
+function printLegacyGcPlan(plan: LegacyGcPlan, verb: string): void {
   console.log(`${verb}:`);
   console.log(`  ${plan.orphanedPackages} orphaned package(s)`);
   console.log(`  ${plan.blobsToDelete} unreferenced blob(s)`);

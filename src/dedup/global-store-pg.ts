@@ -318,6 +318,33 @@ class PgGlobalStore implements GlobalDedupStore {
     return rows.length;
   }
 
+  async sweepOrphanedBlobs(opts: { dryRun: boolean }): Promise<number | null> {
+    const pg = await getPg();
+    const orphanWhere = `
+      WHERE NOT EXISTS (
+        SELECT 1 FROM repo_files rf
+        WHERE rf.content_hash = fb.content_hash
+          AND rf.provider     = fb.provider
+          AND rf.model        = fb.model
+          AND rf.dimensions   = fb.dimensions
+      )
+        AND NOT EXISTS (
+        SELECT 1 FROM package_files pf
+        WHERE pf.content_hash = fb.content_hash
+      )
+    `;
+    if (opts.dryRun) {
+      const rows = (await pg.unsafe(
+        `SELECT COUNT(*)::int AS n FROM file_blobs fb ${orphanWhere}`,
+      )) as Array<{ n: number }>;
+      return rows[0]?.n ?? 0;
+    }
+    const rows = (await pg.unsafe(
+      `DELETE FROM file_blobs fb ${orphanWhere} RETURNING content_hash`,
+    )) as Array<{ content_hash: string }>;
+    return rows.length;
+  }
+
   async close(): Promise<void> {
     // Connection pool is shared with per-repo pg ops; closing is the caller's job.
   }

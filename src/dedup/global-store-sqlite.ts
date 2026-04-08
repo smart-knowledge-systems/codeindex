@@ -343,6 +343,13 @@ class SqliteGlobalStore implements GlobalDedupStore {
     });
   }
 
+  async sweepOrphanedBlobs(): Promise<number | null> {
+    // SQLite global store still keeps its own content_blobs table; the
+    // unified file_blobs sweep only applies to the PG backend until the
+    // SQLite machine-wide dedup unification follow-up lands.
+    return null;
+  }
+
   async deleteBlobsExcept(liveHashes: Set<string>): Promise<number> {
     return this.withLiveHashTable(liveHashes, () => {
       // Delete embeddings first (FK), then blobs.
