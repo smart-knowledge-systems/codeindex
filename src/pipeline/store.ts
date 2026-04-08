@@ -199,9 +199,11 @@ export const storeFiles: StoreFilesStage = async (
          file_type = excluded.file_type
        RETURNING blob_id`,
     );
-    const deleteBlobEmb = db.prepare(`DELETE FROM file_blob_embeddings WHERE blob_id = ?`);
     const insertBlobEmb = db.prepare(
       `INSERT INTO file_blob_embeddings (blob_id, embedding) VALUES (?, ?)`,
+    );
+    const blobEmbExists = db.prepare(
+      `SELECT 1 FROM file_blob_embeddings WHERE blob_id = ? LIMIT 1`,
     );
     const upsertRepoFile = db.prepare(
       `INSERT INTO repo_files
@@ -256,8 +258,12 @@ export const storeFiles: StoreFilesStage = async (
           f.fileType,
         ) as { blob_id: number } | undefined;
         if (blobRow) {
-          deleteBlobEmb.run(blobRow.blob_id);
-          insertBlobEmb.run(blobRow.blob_id, serializeEmbedding(f.embedding));
+          // Content-addressed: if an embedding already exists for this
+          // blob_id, the content hash guarantees it matches, so skip the
+          // vec0 delete+insert to avoid write amplification on reindex.
+          if (!blobEmbExists.get(blobRow.blob_id)) {
+            insertBlobEmb.run(blobRow.blob_id, serializeEmbedding(f.embedding));
+          }
         }
         upsertRepoFile.run(repoId, f.relPath, f.contentHash, provider, model, dimensions);
 
