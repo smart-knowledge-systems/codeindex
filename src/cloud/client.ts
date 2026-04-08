@@ -4,73 +4,39 @@ import { logEvent } from "../logging";
 import { CloudAuthError, CloudNetworkError, CloudRateLimitError, CloudServerError } from "./errors";
 
 // ---------------------------------------------------------------------------
-// Types
+// Types — re-exported from shared/types.ts (single source of truth)
 // ---------------------------------------------------------------------------
 
-export interface CloudUser {
-  id: string;
-  email: string;
-  name: string;
-  plan: string;
-}
+export type {
+  CloudUser,
+  IngestBeginParams,
+  IngestBeginResult,
+  IngestBatchFile,
+  IngestBatchParams,
+  IngestBatchResult,
+  IngestCompleteParams,
+  IngestCompleteResult,
+  SearchParams,
+  SearchResult,
+  StatusResult,
+  MigrateParams,
+  MigrateResult,
+} from "../../shared/types";
 
-export interface IngestBeginParams {
-  repo?: string;
-  hashes?: string[];
-}
-
-export interface IngestBeginResult {
-  jobId: string;
-  known_hashes: string[];
-}
-
-export interface IngestBatchParams {
-  jobId: string;
-  files: { contentHash: string; path: string; language: string; sizeBytes: number }[];
-}
-
-export interface IngestBatchResult {
-  embedded: number;
-  skipped: number;
-}
-
-export interface IngestCompleteParams {
-  jobId: string;
-}
-
-export interface IngestCompleteResult {
-  cost_usd: number;
-  files_indexed: number;
-}
-
-export interface SearchParams {
-  query: string;
-  limit?: number;
-}
-
-export interface SearchResult {
-  path: string;
-  language: string;
-  contentHash: string;
-  score: number;
-}
-
-export interface StatusResult {
-  user: CloudUser;
-  repos: number;
-  files_indexed: number;
-  usage: { embeddings: number; storage_mb: number };
-}
-
-export interface MigrateParams {
-  files: { contentHash: string; path: string; language: string; sizeBytes: number }[];
-}
-
-export interface MigrateResult {
-  imported: number;
-  skipped: number;
-  total: number;
-}
+import type {
+  IngestBeginParams,
+  IngestBeginResult,
+  IngestBatchParams,
+  IngestBatchResult,
+  IngestCompleteParams,
+  IngestCompleteResult,
+  SearchParams,
+  SearchResult,
+  StatusResult,
+  MigrateParams,
+  MigrateResult,
+  CloudUser,
+} from "../../shared/types";
 
 interface Credentials {
   token: string;

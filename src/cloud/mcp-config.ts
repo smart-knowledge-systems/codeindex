@@ -6,11 +6,18 @@ import { hasFlag, flag, type ParsedArgs } from "../cli";
 import { CloudClient } from "./client";
 import { formatError } from "../errors";
 
-interface McpServerConfig {
+interface McpServerStdioConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
 }
+
+interface McpServerHttpConfig {
+  url: string;
+  headers: Record<string, string>;
+}
+
+type McpServerConfig = McpServerStdioConfig | McpServerHttpConfig;
 
 interface McpConfig {
   mcpServers: Record<string, McpServerConfig>;
@@ -23,7 +30,20 @@ const EDITOR_CONFIGS: Record<string, string[]> = {
   windsurf: [".windsurf/mcp.json", ".codeium/windsurf/mcp_config.json"],
 };
 
-function buildMcpConfig(baseUrl: string, token: string): McpConfig {
+function buildCloudMcpConfig(baseUrl: string, token: string): McpConfig {
+  return {
+    mcpServers: {
+      "codeindex-cloud": {
+        url: `${baseUrl}/mcp`,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    },
+  };
+}
+
+function buildLocalMcpConfig(baseUrl: string, token: string): McpConfig {
   return {
     mcpServers: {
       codeindex: {
@@ -90,25 +110,30 @@ export async function cloudMcpConfig(parsed: ParsedArgs): Promise<void> {
     process.exit(1);
   }
 
-  // Read the actual token for both print and install modes
-  const credPath = CloudClient.getCredentialsPath();
-  const credFile = Bun.file(credPath);
-  let token = "";
-  try {
-    const creds = (await credFile.json()) as { token: string };
-    token = creds.token;
-  } catch {
-    process.stderr.write("Could not read credentials. Run `cidx cloud login` first.\n");
-    process.exit(1);
-  }
+  const isLocal = hasFlag(parsed, "local");
+  const buildConfig = isLocal ? buildLocalMcpConfig : buildCloudMcpConfig;
+  // stdio env vars are shell-evaluated by editors; HTTP headers are sent verbatim
+  const placeholder = isLocal ? "$(cidx cloud token)" : "<YOUR_TOKEN>";
+  const config = buildConfig(client.baseUrl, placeholder);
 
-  const config = buildMcpConfig(client.baseUrl, token);
-
+  // Read the actual token for install mode
   if (hasFlag(parsed, "install")) {
+    const credPath = CloudClient.getCredentialsPath();
+    const credFile = Bun.file(credPath);
+    let token = "";
+    try {
+      const creds = (await credFile.json()) as { token: string };
+      token = creds.token;
+    } catch {
+      process.stderr.write("Could not read credentials. Run `cidx cloud login` first.\n");
+      process.exit(1);
+    }
+
+    const installConfig = buildConfig(client.baseUrl, token);
     const editor = flag(parsed, "config-name") ?? "claude-code";
 
     try {
-      const ok = await installToEditor(config, editor);
+      const ok = await installToEditor(installConfig, editor);
       if (!ok) process.exit(1);
     } catch (err) {
       process.stderr.write(`Install failed: ${formatError(err)}\n`);

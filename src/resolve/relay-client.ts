@@ -21,6 +21,7 @@ interface RelayMessage {
   filePath?: string;
   content?: string | null;
   error?: string;
+  publicKey?: string;
   authToken?: string;
 }
 

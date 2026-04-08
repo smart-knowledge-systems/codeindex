@@ -243,8 +243,16 @@ export async function cloudReindex(repoRoot: string, parsed: ParsedArgs): Promis
         files: safeBatch.map((f) => ({
           contentHash: f.contentHash,
           path: f.relPath,
-          language: f.fileType,
+          skeleton: f.skeleton,
+          skeletonEntries: f.skeletonEntries,
+          fileType: f.fileType,
           sizeBytes: f.sizeBytes,
+          importEdges: f.importEdges
+            ? f.importEdges.map((e) => ({
+                specifier: e.importedModule,
+                kind: e.language,
+              }))
+            : null,
         })),
       };
 
