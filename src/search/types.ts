@@ -99,6 +99,17 @@ export interface CodeindexConfig {
   reranking?: RerankingConfig;
   providerProfiles?: Record<string, Partial<ScoringConfig>>;
   dedup?: DedupConfig;
+  search?: SearchConfig;
+}
+
+export interface SearchConfig {
+  /**
+   * When true, the PG/SQLite search backends use the content-addressed
+   * `file_blobs` + `repo_files` junction schema instead of the legacy
+   * per-repo `files` table. Default false during the dual-write transition;
+   * flipped to true once all consumers (xref, gc, export) have migrated.
+   */
+  useBlobSchema?: boolean;
 }
 
 export interface DedupConfig {

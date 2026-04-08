@@ -51,6 +51,9 @@ const DEFAULTS: CodeindexConfig = {
     enabled: true,
     backend: null, // null = unprompted; first reindex triggers interactive chooser
   },
+  search: {
+    useBlobSchema: false,
+  },
 };
 
 const GLOBAL_CONFIG_PATH = path.join(

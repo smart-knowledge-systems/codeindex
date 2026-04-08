@@ -23,6 +23,7 @@ export async function searchPg(
   options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
+  useBlobSchema: boolean = false,
 ): Promise<SearchResult[]> {
   // Use withRepoScope to pin to a single connection, set RLS scope, and
   // apply SET LOCAL hnsw.ef_search within the same transaction
@@ -36,8 +37,71 @@ export async function searchPg(
       options,
       scoring,
       languageProfiles,
+      useBlobSchema,
     );
   });
+}
+
+/**
+ * Pure: build the SQL + bind params for the junction-based file query
+ * (`file_blobs` JOIN `repo_files`). HNSW scan happens on `fb.embedding`;
+ * scope and dir/lang/since filters are applied on the junction join.
+ *
+ * Exported for unit testing.
+ */
+export function buildBlobFileQuery(args: {
+  repoIds: number[];
+  vecLiteral: string;
+  langExts: string[] | null;
+  dirFilters: string[] | null;
+  sinceIso: string | null;
+}): { sql: string; params: string[] } {
+  const { repoIds, vecLiteral, langExts, dirFilters, sinceIso } = args;
+  for (const id of repoIds) {
+    if (typeof id !== "number" || !Number.isInteger(id)) {
+      throw new Error(`Invalid repo ID: ${String(id)}`);
+    }
+  }
+  const repoIdList = repoIds.join(",");
+  const params: string[] = [];
+  let paramIdx = 1;
+  let filterSql = "";
+
+  if (langExts && langExts.length > 0) {
+    filterSql += ` AND fb.file_type IN (${langExts.map(() => `$${paramIdx++}`).join(",")})`;
+    params.push(...langExts);
+  }
+  if (dirFilters && dirFilters.length > 0) {
+    const dirConds = dirFilters.map(() => `rf.file_path LIKE $${paramIdx++}`).join(" OR ");
+    filterSql += ` AND (${dirConds})`;
+    params.push(...dirFilters.map((d) => `${d.replace(/\/$/, "")}/%`));
+  }
+  if (sinceIso) {
+    // file_commits still references files.id during the dual-write window;
+    // resolve via the legacy files table to preserve identical semantics
+    // with the legacy query path (filter by commit authored_at, not by
+    // repo_files.indexed_at).
+    filterSql +=
+      ` AND EXISTS (SELECT 1 FROM files f` +
+      ` JOIN file_commits fc ON fc.file_id = f.id` +
+      ` JOIN commits c ON c.id = fc.commit_id` +
+      ` WHERE f.repo_id = rf.repo_id AND f.file_path = rf.file_path` +
+      ` AND c.authored_at >= $${paramIdx++})`;
+    params.push(sinceIso);
+  }
+
+  const sql =
+    `SELECT rf.repo_id, rf.file_path, fb.skeleton, fb.file_type,` +
+    ` 1 - (fb.embedding <=> ${vecLiteral}) AS similarity` +
+    ` FROM file_blobs fb` +
+    ` JOIN repo_files rf` +
+    `   ON rf.content_hash = fb.content_hash` +
+    `  AND rf.provider     = fb.provider` +
+    `  AND rf.model        = fb.model` +
+    `  AND rf.dimensions   = fb.dimensions` +
+    ` WHERE rf.repo_id IN (${repoIdList}) AND fb.embedding IS NOT NULL${filterSql}`;
+
+  return { sql, params };
 }
 
 export async function searchPgInTransaction(
@@ -49,6 +113,7 @@ export async function searchPgInTransaction(
   options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
+  useBlobSchema: boolean = false,
 ): Promise<SearchResult[]> {
   await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
 
@@ -102,13 +167,61 @@ export async function searchPgInTransaction(
     fileFilterParams.push(sinceDate.toISOString());
   }
 
-  const fileRows = (await pg.unsafe(
-    `SELECT id, repo_id, file_path, skeleton, file_type,
-            1 - (embedding <=> ${vecLiteral}) AS similarity
-     FROM files
-     WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL${fileFilterSql}`,
-    fileFilterParams.length > 0 ? (fileFilterParams as never[]) : undefined,
-  )) as PgFileRow[];
+  let fileRows: PgFileRow[];
+  if (useBlobSchema) {
+    const built = buildBlobFileQuery({
+      repoIds,
+      vecLiteral,
+      langExts,
+      dirFilters,
+      sinceIso: sinceDate ? sinceDate.toISOString() : null,
+    });
+    const junctionRows = (await pg.unsafe(
+      built.sql,
+      built.params.length > 0 ? (built.params as never[]) : undefined,
+    )) as Array<{
+      repo_id: string;
+      file_path: string;
+      skeleton: string | null;
+      file_type: string;
+      similarity: string;
+    }>;
+
+    // file_commits still references files.id during the dual-write window,
+    // so resolve a legacy id per (repo_id, file_path) for BM25 keying and
+    // commit-boost lookup. Fall back to a synthetic key when no legacy row
+    // exists (e.g. blob-only rows from a future migration).
+    const idMap = new Map<string, string>();
+    if (junctionRows.length > 0) {
+      const repoIdArr = [...new Set(junctionRows.map((r) => parseInt(r.repo_id)))];
+      const pathArr = [...new Set(junctionRows.map((r) => r.file_path))];
+      const idRows = (await pg.unsafe(
+        `SELECT id, repo_id, file_path FROM files
+         WHERE repo_id = ANY($1) AND file_path = ANY($2)`,
+        [repoIdArr, pathArr] as never[],
+      )) as { id: string; repo_id: string; file_path: string }[];
+      for (const r of idRows) {
+        idMap.set(`${r.repo_id}:${r.file_path}`, r.id);
+      }
+    }
+    let synthCounter = -1;
+    fileRows = junctionRows.map((r) => ({
+      id: idMap.get(`${r.repo_id}:${r.file_path}`) ?? String(synthCounter--),
+      repo_id: r.repo_id,
+      file_path: r.file_path,
+      skeleton: r.skeleton,
+      file_type: r.file_type,
+      similarity: r.similarity,
+    }));
+  } else {
+    fileRows = (await pg.unsafe(
+      `SELECT id, repo_id, file_path, skeleton, file_type,
+              1 - (embedding <=> ${vecLiteral}) AS similarity
+       FROM files
+       WHERE repo_id IN (${repoIdList}) AND embedding IS NOT NULL${fileFilterSql}`,
+      fileFilterParams.length > 0 ? (fileFilterParams as never[]) : undefined,
+    )) as PgFileRow[];
+  }
 
   // --- Directories ---
   let dirFilterSql = "";
