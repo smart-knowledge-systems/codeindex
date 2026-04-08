@@ -100,6 +100,13 @@ export interface GlobalDedupStore {
   /** Link a repo to a package it consumes (for future GC refcounting). */
   linkRepoPackage(repoRoot: string, packageId: number, mountPath: string): Promise<void>;
 
+  /**
+   * Drop every `repo_packages` row for a repo. Called from `repoRemove` so
+   * `dedup gc` can subsequently reclaim packages whose only references were
+   * in the removed repo.
+   */
+  unlinkRepoPackages(repoRoot: string): Promise<number>;
+
   /** Diagnostic counts for telemetry. */
   stats(): Promise<DedupStats>;
 

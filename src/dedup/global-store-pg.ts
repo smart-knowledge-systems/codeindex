@@ -204,6 +204,15 @@ class PgGlobalStore implements GlobalDedupStore {
     };
   }
 
+  async unlinkRepoPackages(repoRoot: string): Promise<number> {
+    const pg = await getPg();
+    const rows = (await pg.unsafe(
+      `DELETE FROM repo_packages WHERE repo_root = $1 RETURNING package_id`,
+      [repoRoot],
+    )) as Array<{ package_id: number }>;
+    return rows.length;
+  }
+
   async listOrphanedPackageIds(): Promise<number[]> {
     const pg = await getPg();
     const rows = (await pg.unsafe(

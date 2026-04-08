@@ -274,6 +274,16 @@ class SqliteGlobalStore implements GlobalDedupStore {
     };
   }
 
+  async unlinkRepoPackages(repoRoot: string): Promise<number> {
+    const before = (
+      this.db
+        .prepare(`SELECT COUNT(*) AS n FROM repo_packages WHERE repo_root = ?`)
+        .get(repoRoot) as { n: number }
+    ).n;
+    this.db.prepare(`DELETE FROM repo_packages WHERE repo_root = ?`).run(repoRoot);
+    return before;
+  }
+
   async listOrphanedPackageIds(): Promise<number[]> {
     const rows = this.db
       .prepare(
