@@ -103,6 +103,33 @@ export interface GlobalDedupStore {
   /** Diagnostic counts for telemetry. */
   stats(): Promise<DedupStats>;
 
+  // -------------------------------------------------------------------------
+  // GC primitives (`codeindex dedup gc`)
+  //
+  // The store is the source of truth for the package tier; per-repo `files`
+  // tables are the source of truth for the file tier. The CLI walks both,
+  // builds a "live" hash set, and asks the store to delete the rest.
+  // -------------------------------------------------------------------------
+
+  /** Return package_ids that have no `repo_packages` link rows. */
+  listOrphanedPackageIds(): Promise<number[]>;
+
+  /**
+   * Return all content hashes referenced by package_files of packages NOT in
+   * the given orphaned-id set. These are mandatory-keep blobs irrespective of
+   * any per-repo references.
+   */
+  listLivePackageBlobHashes(excludePackageIds: number[]): Promise<string[]>;
+
+  /** Hard-delete the named packages (cascades to package_files via FK). */
+  deletePackages(packageIds: number[]): Promise<void>;
+
+  /** Count blobs whose content_hash is NOT in the given live set. Read-only. */
+  countBlobsExcept(liveHashes: Set<string>): Promise<number>;
+
+  /** Hard-delete blobs whose content_hash is NOT in the given live set. */
+  deleteBlobsExcept(liveHashes: Set<string>): Promise<number>;
+
   /** Close any underlying connection (idempotent). */
   close(): Promise<void>;
 }

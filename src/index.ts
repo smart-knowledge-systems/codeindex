@@ -41,7 +41,7 @@ import { cmdConfig, cmdConfigList } from "./commands/config";
 import { cmdDoctor } from "./commands/doctor";
 import { cmdGraph } from "./commands/graph";
 import { cmdMcpConfig } from "./commands/mcp-config";
-import { cmdDedupStats } from "./commands/dedup";
+import { cmdDedupStats, cmdDedupGc } from "./commands/dedup";
 
 // ---------------------------------------------------------------------------
 // CLI dispatch
@@ -130,6 +130,9 @@ Commands:
     clear              Evict cached repos
   dedup <sub>          Manage the global dedup store
     stats              Show blob/package counts and breakdowns
+      --json           Emit machine-readable JSON
+    gc                 Sweep unreferenced blobs and orphaned packages
+      --dry-run        Compute the plan without deleting
       --json           Emit machine-readable JSON
 
 Options:
@@ -685,8 +688,14 @@ async function main() {
           case "stats":
             await cmdDedupStats(repoRoot, { json: hasFlag(parsed, "json") });
             break;
+          case "gc":
+            await cmdDedupGc(repoRoot, {
+              json: hasFlag(parsed, "json"),
+              dryRun: hasFlag(parsed, "dry-run"),
+            });
+            break;
           default:
-            console.error("Usage: codeindex dedup <stats>");
+            console.error("Usage: codeindex dedup <stats|gc>");
             process.exit(1);
         }
         break;

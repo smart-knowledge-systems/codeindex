@@ -204,6 +204,70 @@ class PgGlobalStore implements GlobalDedupStore {
     };
   }
 
+  async listOrphanedPackageIds(): Promise<number[]> {
+    const pg = await getPg();
+    const rows = (await pg.unsafe(
+      `SELECT id FROM packages
+       WHERE id NOT IN (SELECT DISTINCT package_id FROM repo_packages)`,
+    )) as Array<{ id: number }>;
+    return rows.map((r) => r.id);
+  }
+
+  async listLivePackageBlobHashes(excludePackageIds: number[]): Promise<string[]> {
+    const pg = await getPg();
+    if (excludePackageIds.length === 0) {
+      const rows = (await pg.unsafe(`SELECT DISTINCT content_hash FROM package_files`)) as Array<{
+        content_hash: string;
+      }>;
+      return rows.map((r) => r.content_hash);
+    }
+    const rows = (await pg.unsafe(
+      `SELECT DISTINCT content_hash FROM package_files
+       WHERE NOT (package_id = ANY($1::int[]))`,
+      [excludePackageIds],
+    )) as Array<{ content_hash: string }>;
+    return rows.map((r) => r.content_hash);
+  }
+
+  async deletePackages(packageIds: number[]): Promise<void> {
+    if (packageIds.length === 0) return;
+    const pg = await getPg();
+    await pg.unsafe(`DELETE FROM packages WHERE id = ANY($1::int[])`, [packageIds]);
+  }
+
+  async countBlobsExcept(liveHashes: Set<string>): Promise<number> {
+    const pg = await getPg();
+    if (liveHashes.size === 0) {
+      const rows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM content_blobs`)) as Array<{
+        n: number;
+      }>;
+      return rows[0]?.n ?? 0;
+    }
+    const rows = (await pg.unsafe(
+      `SELECT COUNT(*)::int AS n FROM content_blobs
+       WHERE NOT (content_hash = ANY($1::text[]))`,
+      [Array.from(liveHashes)],
+    )) as Array<{ n: number }>;
+    return rows[0]?.n ?? 0;
+  }
+
+  async deleteBlobsExcept(liveHashes: Set<string>): Promise<number> {
+    const pg = await getPg();
+    if (liveHashes.size === 0) {
+      const rows = (await pg.unsafe(`DELETE FROM content_blobs RETURNING content_hash`)) as Array<{
+        content_hash: string;
+      }>;
+      return rows.length;
+    }
+    const rows = (await pg.unsafe(
+      `DELETE FROM content_blobs
+       WHERE NOT (content_hash = ANY($1::text[]))
+       RETURNING content_hash`,
+      [Array.from(liveHashes)],
+    )) as Array<{ content_hash: string }>;
+    return rows.length;
+  }
+
   async close(): Promise<void> {
     // Connection pool is shared with per-repo pg ops; closing is the caller's job.
   }
