@@ -67,6 +67,7 @@ export const storeFiles: StoreFilesStage = async (
   if (files.length === 0) return;
 
   const { repoRoot, repoId, store } = ctx;
+  const { provider, model, dimensions } = ctx.config.embedding;
 
   // Write freshly-embedded files (cache misses) back to the global store so
   // future reindexes — local OR cross-repo — can reuse them. Best-effort:
@@ -104,6 +105,47 @@ export const storeFiles: StoreFilesStage = async (
         )) as { id: number }[];
         const upserted = rows.at(0);
         if (upserted) fileIdMap.set(f.relPath, upserted.id);
+
+        // Phase 3 dual-write: best-effort populate file_blobs + repo_files.
+        // Failures here log and continue — the legacy files row above is the
+        // source of truth until commit 9 flips useBlobSchema to true.
+        try {
+          await tx.unsafe(
+            `INSERT INTO file_blobs
+               (content_hash, provider, model, dimensions, skeleton, skeleton_entries, file_type, embedding)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
+             ON CONFLICT (content_hash, provider, model, dimensions) DO NOTHING`,
+            [
+              f.contentHash,
+              provider,
+              model,
+              dimensions,
+              f.skeleton,
+              f.skeletonEntries,
+              f.fileType,
+              `[${f.embedding.join(",")}]`,
+            ],
+          );
+          await tx.unsafe(
+            `INSERT INTO repo_files
+               (repo_id, file_path, content_hash, provider, model, dimensions)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (repo_id, file_path) DO UPDATE SET
+               content_hash = EXCLUDED.content_hash,
+               provider = EXCLUDED.provider,
+               model = EXCLUDED.model,
+               dimensions = EXCLUDED.dimensions,
+               indexed_at = now()`,
+            [repoId, f.relPath, f.contentHash, provider, model, dimensions],
+          );
+        } catch (err) {
+          logEvent({
+            event: "infra.dedup.dualwrite_failed",
+            backend: "pg",
+            content_hash: f.contentHash,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       // Load existing files not in this batch for import resolution
@@ -152,6 +194,23 @@ export const storeFiles: StoreFilesStage = async (
       `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
        VALUES (?, ?, ?, ?)`,
     );
+    const insertBlob = db.prepare(
+      `INSERT INTO file_blobs
+         (content_hash, provider, model, dimensions, skeleton, skeleton_entries, file_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (content_hash, provider, model, dimensions) DO NOTHING`,
+    );
+    const upsertRepoFile = db.prepare(
+      `INSERT INTO repo_files
+         (repo_id, file_path, content_hash, provider, model, dimensions)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (repo_id, file_path) DO UPDATE SET
+         content_hash = excluded.content_hash,
+         provider = excluded.provider,
+         model = excluded.model,
+         dimensions = excluded.dimensions,
+         indexed_at = datetime('now')`,
+    );
 
     db.transaction(() => {
       // Build file ID map from existing rows
@@ -179,6 +238,29 @@ export const storeFiles: StoreFilesStage = async (
         deleteEmb.run(row.id);
         insertEmb.run(row.id, serializeEmbedding(f.embedding));
         fileIdMap.set(f.relPath, row.id);
+
+        // Phase 3 dual-write (SQLite): scalar tables only — vec0 virtual
+        // table for blobs lands in a later commit. Best-effort: failures log
+        // and continue.
+        try {
+          insertBlob.run(
+            f.contentHash,
+            provider,
+            model,
+            dimensions,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+          );
+          upsertRepoFile.run(repoId, f.relPath, f.contentHash, provider, model, dimensions);
+        } catch (err) {
+          logEvent({
+            event: "infra.dedup.dualwrite_failed",
+            backend: "sqlite",
+            content_hash: f.contentHash,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
 
         deleteImports.run(row.id);
         const imports = resolveFileImports(f, allFiles, fileIdMap);
