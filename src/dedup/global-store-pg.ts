@@ -341,6 +341,13 @@ class PgGlobalStore implements GlobalDedupStore {
           AND rf.dimensions   = fb.dimensions
       )
         AND NOT EXISTS (
+        -- package_files stores only content_hash (not provider/model/dimensions):
+        -- packages are embedding-config-agnostic on disk and the per-config blob
+        -- is resolved lazily at search time. This means any file_blobs row whose
+        -- content_hash is referenced by *any* package is retained, even if its
+        -- (provider, model, dimensions) is no longer in use. Acceptable trade-off
+        -- vs widening package_files; a "dedup gc --packages" pass is the escape
+        -- hatch for pruning stale package embeddings after a model migration.
         SELECT 1 FROM package_files pf
         WHERE pf.content_hash = fb.content_hash
       )
