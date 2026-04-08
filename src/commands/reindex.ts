@@ -8,6 +8,7 @@ import { initParser } from "../index/skeleton";
 import { setCurrentRepo, getProjectedCost } from "../cost";
 import { setCorrelationContext, hashPath, logEvent } from "../logging";
 import { ensureRepo } from "./helpers";
+import { checkRepoVisibility } from "../index/public-repo";
 import {
   collectFiles,
   embedFiles,
@@ -89,6 +90,8 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
 
   await initParser();
 
+  const repoVisibility = await checkRepoVisibility(repoRoot);
+
   const ctx: PipelineContext = {
     repoRoot,
     repoId,
@@ -97,6 +100,8 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
     store: config.store,
     dryRun,
     force,
+    repoVisibility,
+    secretOverrideCount: 0,
   };
 
   // Collect files needing re-embedding
@@ -114,6 +119,12 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
   if (dryRun) {
     const skipped = allFiles.length - collected.length;
     console.log(`Files: ${collected.length} would be indexed, ${skipped} unchanged`);
+    const overrides = ctx.secretOverrideCount ?? 0;
+    if (overrides > 0) {
+      console.log(
+        `  (${overrides} secret-flagged files overridden — public repo, published content)`,
+      );
+    }
     for (const f of collected) {
       console.log(`  ${f.relPath} (${f.fileType})`);
     }

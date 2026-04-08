@@ -5,6 +5,7 @@ import { getSqlite } from "../db/sqlite";
 import { extractSkeletonWithEntries, initParser } from "./skeleton";
 import { formatAndHash } from "./formatter";
 import { scanForSecrets } from "./secrets";
+import { isPublishedContent } from "./public-repo";
 import { updateAffectedDirectories } from "./directories";
 import { extractImports } from "./imports";
 import { MAX_FILE_SIZE } from "./walker";
@@ -162,6 +163,7 @@ export async function reindexSingleFile(
   repoId: number,
   relPath: string,
   fileIndex?: FileIndex,
+  repoVisibility?: "public" | "private" | "unknown",
 ): Promise<boolean> {
   const config = await loadConfig(repoRoot);
   const formatter = config.formatter ?? (await detectFormatter(repoRoot));
@@ -177,7 +179,16 @@ export async function reindexSingleFile(
 
   const content = (await file.text()).replace(/\0/g, "");
 
-  if (scanForSecrets(content).hasSecrets) return false;
+  const scan = scanForSecrets(content);
+  if (scan.hasSecrets) {
+    if (repoVisibility === "public" && (await isPublishedContent(repoRoot, relPath))) {
+      process.stderr.write(
+        `  OVERRIDE ${relPath}: secret patterns [${scan.patterns.join(", ")}] overridden — public repo, published content\n`,
+      );
+    } else {
+      return false;
+    }
+  }
 
   const { hash } = await formatAndHash(content, formatter);
 
@@ -199,6 +210,7 @@ export async function reindexSingleFile(
     store: config.store,
     dryRun: false,
     force: false,
+    repoVisibility,
   };
 
   const stored = await embedAndStore(ctx, collected);

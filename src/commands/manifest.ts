@@ -5,6 +5,7 @@ import { getSqlite } from "../db/sqlite";
 import { getRepoIdByPath } from "../db/repo-lookup";
 import { walkRepo } from "../index/walker";
 import { scanForSecrets } from "../index/secrets";
+import { checkRepoVisibility, isPublishedContent } from "../index/public-repo";
 
 export async function cmdManifest(repoRoot: string) {
   const config = await loadConfig(repoRoot);
@@ -59,6 +60,17 @@ export async function cmdManifest(repoRoot: string) {
 
   const { fileCount, filePaths, dirCount, commitCount } = dbStats;
 
+  // Lazy: only call the GitHub API if we actually encounter a secret-flagged
+  // file below. Most manifest invocations have no secrets and shouldn't pay
+  // a network round-trip.
+  let visibilityCache: "public" | "private" | "unknown" | undefined;
+  const getVisibility = async (): Promise<"public" | "private" | "unknown"> => {
+    if (visibilityCache === undefined) {
+      visibilityCache = await checkRepoVisibility(repoRoot);
+    }
+    return visibilityCache;
+  };
+
   // --- Walk repo to collect all non-indexed file paths (I/O boundary) ---
   const indexedSet = new Set(filePaths);
   const walkedFiles: { relPath: string; content: string | null }[] = [];
@@ -74,29 +86,46 @@ export async function cmdManifest(repoRoot: string) {
     walkedFiles.push({ relPath, content });
   }
 
-  // --- Pure transform: classify each walked file into skipped/secret ---
-  const classified = walkedFiles.map(({ relPath, content }) => {
+  // --- Classify each walked file into skipped/secret (async for published check) ---
+  const classified: {
+    skipped: { path: string; reason: string };
+    secret: { path: string; patterns: string[]; overridden?: boolean } | null;
+  }[] = [];
+
+  for (const { relPath, content } of walkedFiles) {
     if (content !== null) {
       const scan = scanForSecrets(content);
       if (scan.hasSecrets) {
-        return {
-          skipped: { path: relPath, reason: `secrets: ${scan.patterns.join(", ")}` },
-          secret: { path: relPath, patterns: scan.patterns },
-        };
+        let overridden = false;
+        if ((await getVisibility()) === "public" && (await isPublishedContent(repoRoot, relPath))) {
+          overridden = true;
+        }
+        classified.push({
+          skipped: {
+            path: relPath,
+            reason: overridden
+              ? `secrets (overridden — public repo): ${scan.patterns.join(", ")}`
+              : `secrets: ${scan.patterns.join(", ")}`,
+          },
+          secret: { path: relPath, patterns: scan.patterns, overridden },
+        });
+        continue;
       }
     }
-    return {
+    classified.push({
       skipped: { path: relPath, reason: "not indexed (unchanged or new)" },
       secret: null,
-    };
-  });
+    });
+  }
 
   const skippedFiles = classified.map((c) => c.skipped);
   const secretFlags = classified.filter((c) => c.secret !== null).map((c) => c.secret!);
+  const secretOverrides = secretFlags.filter((s) => s.overridden);
 
   const manifest = {
     repoRoot,
     store: config.store,
+    repoVisibility: visibilityCache ?? "unknown",
     indexed: {
       files: { count: fileCount, paths: filePaths },
       directories: dirCount,
@@ -104,6 +133,7 @@ export async function cmdManifest(repoRoot: string) {
     },
     skipped: skippedFiles,
     secretFlags,
+    secretOverrides,
   };
 
   console.log(JSON.stringify(manifest, null, 2));

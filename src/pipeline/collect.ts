@@ -6,6 +6,7 @@ import { scanForSecrets } from "../index/secrets";
 import { extractImports } from "../index/imports";
 import { getStoreOps } from "../repo";
 import { logEvent, hashPath } from "../logging";
+import { isPublishedContent } from "../index/public-repo";
 import type { PipelineContext, CollectedFile, CollectStage } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -21,31 +22,41 @@ interface FileInput {
 async function processFile(
   file: FileInput,
   existingHashes: Map<string, string>,
-  force: boolean,
-  skeletonFallbackLines: number,
-  formatter: string | null,
+  ctx: PipelineContext,
 ): Promise<CollectedFile | null> {
   const scan = scanForSecrets(file.content);
   if (scan.hasSecrets) {
-    process.stderr.write(`  SKIP ${file.relPath}: potential secrets detected\n`);
-    logEvent({
-      event: "infra.secrets.detected",
-      file_path_hash: hashPath(file.relPath),
-      patterns: scan.patterns,
-    });
-    return null;
+    if (ctx.repoVisibility === "public" && (await isPublishedContent(ctx.repoRoot, file.relPath))) {
+      process.stderr.write(
+        `  OVERRIDE ${file.relPath}: secret patterns [${scan.patterns.join(", ")}] overridden — public repo, published content\n`,
+      );
+      logEvent({
+        event: "infra.secrets.override",
+        file_path_hash: hashPath(file.relPath),
+        patterns: scan.patterns,
+      });
+      if (ctx.secretOverrideCount != null) ctx.secretOverrideCount++;
+    } else {
+      process.stderr.write(`  SKIP ${file.relPath}: potential secrets detected\n`);
+      logEvent({
+        event: "infra.secrets.detected",
+        file_path_hash: hashPath(file.relPath),
+        patterns: scan.patterns,
+      });
+      return null;
+    }
   }
 
   const ext = path.extname(file.relPath).toLowerCase() || ".txt";
-  const { hash } = await formatAndHash(file.content, formatter);
+  const { hash } = await formatAndHash(file.content, ctx.formatter);
 
   // Skip if hash matches existing DB record (dedup)
-  if (!force && existingHashes.get(file.relPath) === hash) return null;
+  if (!ctx.force && existingHashes.get(file.relPath) === hash) return null;
 
   const { text: skeleton, entries } = await extractSkeletonWithEntries(
     file.relPath,
     file.content,
-    skeletonFallbackLines,
+    ctx.config.skeletonFallbackLines,
   );
   const skeletonEntries = entries.length > 0 ? JSON.stringify(entries) : null;
   const importEdges = extractImports(file.relPath, file.content);
@@ -85,7 +96,7 @@ async function loadExistingHashes(repoRoot: string, repoId: number): Promise<Map
 export const collectFiles: CollectStage = async (
   ctx: PipelineContext,
 ): Promise<CollectedFile[]> => {
-  const { repoRoot, repoId, config, force } = ctx;
+  const { repoRoot, repoId, force } = ctx;
 
   const existingHashes = force
     ? new Map<string, string>()
@@ -102,13 +113,7 @@ export const collectFiles: CollectStage = async (
     const raw = await file.text();
     const content = raw.replace(/\0/g, "");
 
-    const result = await processFile(
-      { relPath, absPath, content },
-      existingHashes,
-      !!force,
-      config.skeletonFallbackLines,
-      ctx.formatter,
-    );
+    const result = await processFile({ relPath, absPath, content }, existingHashes, ctx);
     if (result) collected.push(result);
   }
 
