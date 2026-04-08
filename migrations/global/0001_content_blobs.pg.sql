@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS content_blobs (
   dimensions        int  NOT NULL,
   skeleton          text,
   skeleton_entries  jsonb,
-  embedding         vector(1536),
+  embedding         vector,
   ref_count         int  NOT NULL DEFAULT 1,
   created_at        timestamptz DEFAULT now(),
   PRIMARY KEY (content_hash, provider, model, dimensions)
