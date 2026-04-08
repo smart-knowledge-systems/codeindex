@@ -43,15 +43,7 @@ export async function cloudSearch(parsed: ParsedArgs): Promise<void> {
       return;
     }
 
-    if (hasFlag(parsed, "pretty") || !hasFlag(parsed, "json")) {
-      process.stdout.write(formatPretty(results));
-      return;
-    }
-
-    // Default: one path per line
-    for (const r of results) {
-      process.stdout.write(`${r.path}\n`);
-    }
+    process.stdout.write(formatPretty(results));
   } catch (err) {
     process.stderr.write(`Cloud search failed: ${formatError(err)}\n`);
     process.exit(1);
