@@ -7,6 +7,7 @@ import { extractImports } from "../index/imports";
 import { getStoreOps } from "../repo";
 import { logEvent, hashPath } from "../logging";
 import { isPublishedContent } from "../index/public-repo";
+import { gitLsTreeHead } from "../dedup/git-ls-tree";
 import type { PipelineContext, CollectedFile, CollectStage } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,7 @@ async function processFile(
   file: FileInput,
   existingHashes: Map<string, string>,
   ctx: PipelineContext,
+  gitBlobOid?: string,
 ): Promise<CollectedFile | null> {
   const scan = scanForSecrets(file.content);
   if (scan.hasSecrets) {
@@ -48,7 +50,11 @@ async function processFile(
   }
 
   const ext = path.extname(file.relPath).toLowerCase() || ".txt";
-  const { hash } = await formatAndHash(file.content, ctx.formatter);
+  // Git fast path: when a blob OID is available we use it directly as the
+  // content hash, skipping the formatter SHA-256. The blob OID is git's own
+  // content addressing — a value identical for byte-identical files across
+  // every clean repo on this machine.
+  const hash = gitBlobOid ?? (await formatAndHash(file.content, ctx.formatter)).hash;
 
   // Skip if hash matches existing DB record (dedup)
   if (!ctx.force && existingHashes.get(file.relPath) === hash) return null;
@@ -137,20 +143,43 @@ export const collectFiles: CollectStage = async (
     ? new Map<string, string>()
     : await loadExistingHashes(repoRoot, repoId);
 
+  // Git fast-path: when the working tree is clean we have authoritative
+  // (path, blob_oid) for every tracked file in one syscall. Once a previous
+  // clean reindex has populated files.content_hash with blob OIDs, we can
+  // skip the disk read entirely for unchanged files.
+  const gitBlobByPath = await loadGitBlobMap(repoRoot);
+
   const collected: CollectedFile[] = [];
 
   for await (const relPath of walkRepo(repoRoot)) {
     const absPath = path.join(repoRoot, relPath);
-    const file = Bun.file(absPath);
 
+    const blobOid = gitBlobByPath?.get(relPath);
+    // Cheapest possible skip: clean repo + git OID matches the stored hash.
+    // No file read, no parser, no embedder.
+    if (!force && blobOid && existingHashes.get(relPath) === blobOid) continue;
+
+    const file = Bun.file(absPath);
     if (file.size > MAX_FILE_SIZE) continue;
 
     const raw = await file.text();
     const content = raw.replace(/\0/g, "");
 
-    const result = await processFile({ relPath, absPath, content }, existingHashes, ctx);
+    const result = await processFile({ relPath, absPath, content }, existingHashes, ctx, blobOid);
     if (result) collected.push(result);
   }
 
   return collected;
 };
+
+/**
+ * Probe git for an authoritative path → blob_oid map. Returns null on a dirty
+ * working tree (or any git error) so callers fall back to the formatter path.
+ */
+async function loadGitBlobMap(repoRoot: string): Promise<Map<string, string> | null> {
+  const tree = await gitLsTreeHead(repoRoot);
+  if (!tree.clean || tree.entries.length === 0) return null;
+  const m = new Map<string, string>();
+  for (const e of tree.entries) m.set(e.path, e.blobOid);
+  return m;
+}

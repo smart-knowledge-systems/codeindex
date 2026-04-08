@@ -36,6 +36,21 @@ export interface EvalResult {
   uniqueDirsInTop5?: number;
 }
 
+/**
+ * Snapshot of the global dedup store at the time the eval ran. Captured so a
+ * regression in dedup behavior (cache silently disabled, accidental wipe,
+ * dedup_savings drop after a refactor) shows up as a sudden delta in the
+ * eval baseline rather than a hidden cost regression on the next reindex.
+ */
+export interface DedupSnapshot {
+  enabled: boolean;
+  backend?: string;
+  blobCount?: number;
+  packageCount?: number;
+  repoLinkCount?: number;
+  storageBytes?: number | null;
+}
+
 export interface EvalSummary {
   configName: string;
   model?: string;
@@ -49,4 +64,5 @@ export interface EvalSummary {
   avgUniqueDirsInTop5?: number;
   results: EvalResult[];
   timestamp: string;
+  dedup?: DedupSnapshot;
 }

@@ -55,6 +55,14 @@ export interface PackageMeta {
 export interface DedupStats {
   blobCount: number;
   packageCount: number;
+  /** Number of repo→package link rows (the GC refcount source). */
+  repoLinkCount: number;
+  /** Per-ecosystem package counts. */
+  ecosystems: Array<{ ecosystem: string; count: number }>;
+  /** Per-(provider, model, dimensions) blob counts. */
+  providers: Array<{ provider: string; model: string; dimensions: number; blobs: number }>;
+  /** On-disk byte count for the SQLite store (null on Postgres). */
+  storageBytes: number | null;
 }
 
 export interface GlobalDedupStore {
@@ -92,8 +100,53 @@ export interface GlobalDedupStore {
   /** Link a repo to a package it consumes (for future GC refcounting). */
   linkRepoPackage(repoRoot: string, packageId: number, mountPath: string): Promise<void>;
 
+  /**
+   * Drop every `repo_packages` row for a repo. Called from `repoRemove` so
+   * `dedup gc` can subsequently reclaim packages whose only references were
+   * in the removed repo.
+   */
+  unlinkRepoPackages(repoRoot: string): Promise<number>;
+
   /** Diagnostic counts for telemetry. */
   stats(): Promise<DedupStats>;
+
+  // -------------------------------------------------------------------------
+  // GC primitives (`codeindex dedup gc`)
+  //
+  // The store is the source of truth for the package tier; per-repo `files`
+  // tables are the source of truth for the file tier. The CLI walks both,
+  // builds a "live" hash set, and asks the store to delete the rest.
+  // -------------------------------------------------------------------------
+
+  /** Return package_ids that have no `repo_packages` link rows. */
+  listOrphanedPackageIds(): Promise<number[]>;
+
+  /**
+   * Return all content hashes referenced by package_files of packages NOT in
+   * the given orphaned-id set. These are mandatory-keep blobs irrespective of
+   * any per-repo references.
+   */
+  listLivePackageBlobHashes(excludePackageIds: number[]): Promise<string[]>;
+
+  /** Hard-delete the named packages (cascades to package_files via FK). */
+  deletePackages(packageIds: number[]): Promise<void>;
+
+  /** Count blobs whose content_hash is NOT in the given live set. Read-only. */
+  countBlobsExcept(liveHashes: Set<string>): Promise<number>;
+
+  /** Hard-delete blobs whose content_hash is NOT in the given live set. */
+  deleteBlobsExcept(liveHashes: Set<string>): Promise<number>;
+
+  /**
+   * Single-pass orphan sweep: delete `file_blobs` rows that no `repo_files`
+   * row and no `package_files` row references. Returns `null` on backends
+   * that don't yet store blobs in the unified `file_blobs` table (today:
+   * SQLite global store), in which case the caller falls back to the
+   * legacy live-set protocol.
+   *
+   * The dry-run flag returns the candidate count without deleting.
+   */
+  sweepOrphanedBlobs(opts: { dryRun: boolean }): Promise<number | null>;
 
   /** Close any underlying connection (idempotent). */
   close(): Promise<void>;

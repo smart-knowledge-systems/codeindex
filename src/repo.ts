@@ -253,12 +253,13 @@ export async function repoRemove(repoRoot: string, name: string): Promise<void> 
   const isPg = store === "pg";
   const ph = isPg ? "$1" : "?";
 
-  const repos = await ops.query<{ id: number | string }>(
-    `SELECT id FROM repos WHERE name = ${ph}`,
+  const repos = await ops.query<{ id: number | string; root_path: string }>(
+    `SELECT id, root_path FROM repos WHERE name = ${ph}`,
     [name],
   );
   if (repos.length === 0) throw new Error(`Repo not found: ${name}`);
   const repoId = typeof repos[0].id === "string" ? parseInt(repos[0].id) : repos[0].id;
+  const removedRootPath = repos[0].root_path;
 
   if (isPg) {
     await removePgRepo(repoId);
@@ -266,7 +267,37 @@ export async function repoRemove(repoRoot: string, name: string): Promise<void> 
     await removeSqliteRepo(repoRoot, repoId);
   }
 
+  // Drop the removed repo's package links from the global dedup store so a
+  // subsequent `dedup gc` can reclaim packages no other repo references.
+  // Best-effort: failures here log and continue — they leave stale rows the
+  // next gc sweep won't act on, not data loss.
+  await unlinkGlobalDedupRepoPackages(repoRoot, removedRootPath);
+
   logEvent({ event: "infra.repo.remove", repo_name: name });
+}
+
+async function unlinkGlobalDedupRepoPackages(
+  configRoot: string,
+  removedRootPath: string,
+): Promise<void> {
+  try {
+    const config = await loadConfig(configRoot);
+    if (!config.dedup?.enabled || !config.dedup.backend) return;
+    const { getGlobalStore } = await import("./dedup/global-store");
+    const store = await getGlobalStore(config);
+    const dropped = await store.unlinkRepoPackages(removedRootPath);
+    if (dropped > 0) {
+      logEvent({
+        event: "infra.dedup.repo_unlink",
+        dropped_links: dropped,
+      });
+    }
+  } catch (err) {
+    logEvent({
+      event: "infra.dedup.repo_unlink_failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

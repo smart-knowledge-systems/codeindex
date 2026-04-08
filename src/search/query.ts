@@ -394,6 +394,7 @@ export async function search(
       resolvedOptions,
       scoring,
       config.languageProfiles,
+      config.search?.useBlobSchema ?? false,
     );
   } else {
     results = await searchSqlite(
@@ -405,6 +406,7 @@ export async function search(
       resolvedOptions,
       scoring,
       config.languageProfiles,
+      config.search?.useBlobSchema ?? false,
     );
   }
 

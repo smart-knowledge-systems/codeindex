@@ -67,6 +67,7 @@ export const storeFiles: StoreFilesStage = async (
   if (files.length === 0) return;
 
   const { repoRoot, repoId, store } = ctx;
+  const { provider, model, dimensions } = ctx.config.embedding;
 
   // Write freshly-embedded files (cache misses) back to the global store so
   // future reindexes — local OR cross-repo — can reuse them. Best-effort:
@@ -104,6 +105,40 @@ export const storeFiles: StoreFilesStage = async (
         )) as { id: number }[];
         const upserted = rows.at(0);
         if (upserted) fileIdMap.set(f.relPath, upserted.id);
+
+        // Phase 3 content-addressed write: file_blobs + repo_files are now
+        // load-bearing (useBlobSchema defaults to true). Failures propagate
+        // and abort the reindex transaction; the legacy files row is kept
+        // populated for the export path until the legacy table is dropped
+        // in a follow-up PR.
+        await tx.unsafe(
+          `INSERT INTO file_blobs
+             (content_hash, provider, model, dimensions, skeleton, skeleton_entries, file_type, embedding)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
+           ON CONFLICT (content_hash, provider, model, dimensions) DO NOTHING`,
+          [
+            f.contentHash,
+            provider,
+            model,
+            dimensions,
+            f.skeleton,
+            f.skeletonEntries,
+            f.fileType,
+            `[${f.embedding.join(",")}]`,
+          ],
+        );
+        await tx.unsafe(
+          `INSERT INTO repo_files
+             (repo_id, file_path, content_hash, provider, model, dimensions)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (repo_id, file_path) DO UPDATE SET
+             content_hash = EXCLUDED.content_hash,
+             provider = EXCLUDED.provider,
+             model = EXCLUDED.model,
+             dimensions = EXCLUDED.dimensions,
+             indexed_at = now()`,
+          [repoId, f.relPath, f.contentHash, provider, model, dimensions],
+        );
       }
 
       // Load existing files not in this batch for import resolution
@@ -152,6 +187,35 @@ export const storeFiles: StoreFilesStage = async (
       `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
        VALUES (?, ?, ?, ?)`,
     );
+    // Upsert returning blob_id: ON CONFLICT DO UPDATE (no-op self-assignment)
+    // is the SQLite idiom that always RETURNS the row, including on conflict.
+    const insertBlob = db.prepare(
+      `INSERT INTO file_blobs
+         (content_hash, provider, model, dimensions, skeleton, skeleton_entries, file_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (content_hash, provider, model, dimensions) DO UPDATE SET
+         skeleton = excluded.skeleton,
+         skeleton_entries = excluded.skeleton_entries,
+         file_type = excluded.file_type
+       RETURNING blob_id`,
+    );
+    const insertBlobEmb = db.prepare(
+      `INSERT INTO file_blob_embeddings (blob_id, embedding) VALUES (?, ?)`,
+    );
+    const blobEmbExists = db.prepare(
+      `SELECT 1 FROM file_blob_embeddings WHERE blob_id = ? LIMIT 1`,
+    );
+    const upsertRepoFile = db.prepare(
+      `INSERT INTO repo_files
+         (repo_id, file_path, content_hash, provider, model, dimensions)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (repo_id, file_path) DO UPDATE SET
+         content_hash = excluded.content_hash,
+         provider = excluded.provider,
+         model = excluded.model,
+         dimensions = excluded.dimensions,
+         indexed_at = datetime('now')`,
+    );
 
     db.transaction(() => {
       // Build file ID map from existing rows
@@ -179,6 +243,29 @@ export const storeFiles: StoreFilesStage = async (
         deleteEmb.run(row.id);
         insertEmb.run(row.id, serializeEmbedding(f.embedding));
         fileIdMap.set(f.relPath, row.id);
+
+        // Phase 3 content-addressed write (SQLite): scalar file_blobs +
+        // repo_files plus the file_blob_embeddings vec0 table keyed on the
+        // surrogate blob_id. Now load-bearing — failures abort the reindex
+        // transaction.
+        const blobRow = insertBlob.get(
+          f.contentHash,
+          provider,
+          model,
+          dimensions,
+          f.skeleton,
+          f.skeletonEntries,
+          f.fileType,
+        ) as { blob_id: number } | undefined;
+        if (blobRow) {
+          // Content-addressed: if an embedding already exists for this
+          // blob_id, the content hash guarantees it matches, so skip the
+          // vec0 delete+insert to avoid write amplification on reindex.
+          if (!blobEmbExists.get(blobRow.blob_id)) {
+            insertBlobEmb.run(blobRow.blob_id, serializeEmbedding(f.embedding));
+          }
+        }
+        upsertRepoFile.run(repoId, f.relPath, f.contentHash, provider, model, dimensions);
 
         deleteImports.run(row.id);
         const imports = resolveFileImports(f, allFiles, fileIdMap);

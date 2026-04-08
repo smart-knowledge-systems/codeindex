@@ -62,13 +62,16 @@ async function loadIgnoreFile(filePath: string): Promise<string[]> {
   return [];
 }
 
-function createExportSchema(
+export function createExportSchema(
   db: Database,
   redactEmbeddings: boolean,
   redactCommits: boolean,
   dims: number,
 ): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS _metadata (
+      key text PRIMARY KEY, value text
+    );
     CREATE TABLE IF NOT EXISTS repos (
       id integer PRIMARY KEY, origin_url text, root_path text UNIQUE NOT NULL,
       name text NOT NULL, formatter_cmd text
@@ -254,15 +257,46 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
   // Wrap all writes in a transaction for atomicity and performance
   db.exec("BEGIN");
   try {
+    // Stamp export format version so future bumps can be detected by
+    // downstream consumers.
+    db.prepare("INSERT OR REPLACE INTO _metadata (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      "1",
+    );
+
     // Fetch and export repos
     const repos = await pg.unsafe("SELECT * FROM repos WHERE id = $1", [repoId]);
     exportRepos(db, repos as PgRow[]);
 
-    // Fetch and export files + embeddings
-    const fileColumns = redactEmbeddings
-      ? "id, repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, indexed_at::text"
-      : "id, repo_id, file_path, content_hash, skeleton, skeleton_entries, file_type, indexed_at::text, embedding::text";
-    const files = await pg.unsafe(`SELECT ${fileColumns} FROM files WHERE repo_id = $1`, [repoId]);
+    // Fetch and export files + embeddings.
+    // Phase 3: re-denormalize on export from the content-addressed dedup
+    // tables (repo_files JOIN file_blobs) so the export format stays
+    // byte-stable for downstream consumers (cidx-cloud ingest, IDE plugins)
+    // even after the legacy files table is dropped. The legacy files table
+    // is still joined here for the numeric `id` (used as FK by file_commits
+    // and the vec0 file_embeddings table) until that FK is rewritten in a
+    // follow-up PR.
+    const provider = config?.embedding?.provider ?? "openai";
+    const model = config?.embedding?.model ?? "text-embedding-3-small";
+    const fileSelectCols = redactEmbeddings
+      ? "f.id, rf.repo_id, rf.file_path, rf.content_hash, fb.skeleton, fb.skeleton_entries::text AS skeleton_entries, fb.file_type, rf.indexed_at::text"
+      : "f.id, rf.repo_id, rf.file_path, rf.content_hash, fb.skeleton, fb.skeleton_entries::text AS skeleton_entries, fb.file_type, rf.indexed_at::text, fb.embedding::text";
+    const files = await pg.unsafe(
+      `SELECT ${fileSelectCols}
+       FROM repo_files rf
+       JOIN file_blobs fb
+         ON fb.content_hash = rf.content_hash
+        AND fb.provider     = rf.provider
+        AND fb.model        = rf.model
+        AND fb.dimensions   = rf.dimensions
+       JOIN files f
+         ON f.repo_id = rf.repo_id AND f.file_path = rf.file_path
+       WHERE rf.repo_id = $1
+         AND rf.provider = $2
+         AND rf.model = $3
+         AND rf.dimensions = $4`,
+      [repoId, provider, model, dims],
+    );
     const exportedFileIds = exportFiles(db, files as PgRow[], shouldExclude, redactEmbeddings);
 
     // Fetch and export directories + embeddings

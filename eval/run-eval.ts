@@ -2,8 +2,10 @@ import fs from "fs";
 import path from "path";
 import { search } from "../src/search/query";
 import type { SearchOptions, ScoringConfig } from "../src/search/types";
-import type { EvalQuery, EvalResult, EvalSummary } from "./types";
+import type { EvalQuery, EvalResult, EvalSummary, DedupSnapshot } from "./types";
 import { validateDataset, printValidationReport } from "./maintenance";
+import { loadConfig } from "../src/config";
+import { getGlobalStore } from "../src/dedup/global-store";
 
 // ---------------------------------------------------------------------------
 // Metrics
@@ -267,6 +269,8 @@ async function main() {
   const avgUniqueDirsInTop5 =
     results.reduce((s, r) => s + (r.uniqueDirsInTop5 ?? 0), 0) / results.length;
 
+  const dedupSnapshot = await captureDedupSnapshot(repoRoot);
+
   const summary: EvalSummary = {
     configName,
     avgPrecision5,
@@ -278,6 +282,7 @@ async function main() {
     avgUniqueDirsInTop5,
     results,
     timestamp: new Date().toISOString(),
+    dedup: dedupSnapshot,
   };
 
   let ripgrepSummary: EvalSummary | undefined;
@@ -341,6 +346,34 @@ async function main() {
   console.log(`  Avg nDCG:   ${avgNdcg.toFixed(3)}`);
   console.log(`  Avg Unique Files@5: ${avgUniqueFilesInTop5.toFixed(2)}`);
   console.log(`  Avg Unique Dirs@5:  ${avgUniqueDirsInTop5.toFixed(2)}`);
+}
+
+/**
+ * Capture a one-shot snapshot of the global dedup store at eval time.
+ * Failures are non-fatal — we just record `enabled: false`. Comparing
+ * this snapshot across baselines lets a regression in dedup behavior
+ * (cache silently disabled, accidental wipe) show up as a sudden drop
+ * in blob/package counts between eval runs.
+ */
+async function captureDedupSnapshot(repoRoot: string): Promise<DedupSnapshot> {
+  try {
+    const config = await loadConfig(repoRoot);
+    if (!config.dedup?.enabled || !config.dedup.backend) {
+      return { enabled: false };
+    }
+    const store = await getGlobalStore(config);
+    const stats = await store.stats();
+    return {
+      enabled: true,
+      backend: config.dedup.backend,
+      blobCount: stats.blobCount,
+      packageCount: stats.packageCount,
+      repoLinkCount: stats.repoLinkCount,
+      storageBytes: stats.storageBytes,
+    };
+  } catch {
+    return { enabled: false };
+  }
 }
 
 if (import.meta.main) {

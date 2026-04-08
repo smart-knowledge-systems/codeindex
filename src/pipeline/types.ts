@@ -55,7 +55,18 @@ export interface PipelineContext {
   /** Optional dedup store; when present collect/embed/store consult it. */
   globalStore?: GlobalDedupStore;
   /** Mutable counters surfaced in reindex telemetry (commit 11). */
-  dedupStats?: { hits: number; misses: number };
+  dedupStats?: {
+    hits: number;
+    misses: number;
+    /** Dependency-package short-circuits (whole package skipped). */
+    packageHits?: number;
+    /** Dependency packages newly embedded into the global store. */
+    packageMisses?: number;
+    /** File-level cache hits encountered while embedding a missed package. */
+    packageBlobReuse?: number;
+    /** File-level embeddings written while pre-warming missed packages. */
+    packageBlobEmbedded?: number;
+  };
 }
 
 // ---------------------------------------------------------------------------

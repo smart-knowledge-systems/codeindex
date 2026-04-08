@@ -234,7 +234,168 @@ class SqliteGlobalStore implements GlobalDedupStore {
   async stats(): Promise<DedupStats> {
     const blob = this.db.prepare(`SELECT COUNT(*) AS n FROM content_blobs`).get() as { n: number };
     const pkg = this.db.prepare(`SELECT COUNT(*) AS n FROM packages`).get() as { n: number };
-    return { blobCount: blob.n, packageCount: pkg.n };
+    const links = this.db.prepare(`SELECT COUNT(*) AS n FROM repo_packages`).get() as {
+      n: number;
+    };
+    const ecoRows = this.db
+      .prepare(`SELECT ecosystem, COUNT(*) AS n FROM packages GROUP BY ecosystem ORDER BY n DESC`)
+      .all() as Array<{ ecosystem: string; n: number }>;
+    const provRows = this.db
+      .prepare(
+        `SELECT provider, model, dimensions, COUNT(*) AS n
+         FROM content_blobs
+         GROUP BY provider, model, dimensions
+         ORDER BY n DESC`,
+      )
+      .all() as Array<{ provider: string; model: string; dimensions: number; n: number }>;
+    let storageBytes: number | null = null;
+    try {
+      const filename = (this.db.prepare("PRAGMA database_list").all() as Array<{ file: string }>)[0]
+        ?.file;
+      if (filename) {
+        const file = Bun.file(filename);
+        storageBytes = file.size;
+      }
+    } catch {
+      /* size lookup is best-effort */
+    }
+    return {
+      blobCount: blob.n,
+      packageCount: pkg.n,
+      repoLinkCount: links.n,
+      ecosystems: ecoRows.map((r) => ({ ecosystem: r.ecosystem, count: r.n })),
+      providers: provRows.map((r) => ({
+        provider: r.provider,
+        model: r.model,
+        dimensions: r.dimensions,
+        blobs: r.n,
+      })),
+      storageBytes,
+    };
+  }
+
+  async unlinkRepoPackages(repoRoot: string): Promise<number> {
+    const before = (
+      this.db
+        .prepare(`SELECT COUNT(*) AS n FROM repo_packages WHERE repo_root = ?`)
+        .get(repoRoot) as { n: number }
+    ).n;
+    this.db.prepare(`DELETE FROM repo_packages WHERE repo_root = ?`).run(repoRoot);
+    return before;
+  }
+
+  async listOrphanedPackageIds(): Promise<number[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT id FROM packages
+         WHERE id NOT IN (SELECT DISTINCT package_id FROM repo_packages)`,
+      )
+      .all() as Array<{ id: number }>;
+    return rows.map((r) => r.id);
+  }
+
+  async listLivePackageBlobHashes(excludePackageIds: number[]): Promise<string[]> {
+    if (excludePackageIds.length === 0) {
+      const rows = this.db
+        .prepare(`SELECT DISTINCT content_hash FROM package_files`)
+        .all() as Array<{ content_hash: string }>;
+      return rows.map((r) => r.content_hash);
+    }
+    // Chunk to keep parameter count safe.
+    const live = new Set<string>();
+    const CHUNK = 500;
+    for (let i = 0; i < excludePackageIds.length; i += CHUNK) {
+      const chunk = excludePackageIds.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      const rows = this.db
+        .prepare(
+          `SELECT DISTINCT content_hash FROM package_files
+           WHERE package_id NOT IN (${placeholders})`,
+        )
+        .all(...chunk) as Array<{ content_hash: string }>;
+      for (const r of rows) live.add(r.content_hash);
+    }
+    return Array.from(live);
+  }
+
+  async deletePackages(packageIds: number[]): Promise<void> {
+    if (packageIds.length === 0) return;
+    const stmt = this.db.prepare(`DELETE FROM packages WHERE id = ?`);
+    this.db.transaction(() => {
+      for (const id of packageIds) stmt.run(id);
+    })();
+  }
+
+  async countBlobsExcept(liveHashes: Set<string>): Promise<number> {
+    if (liveHashes.size === 0) {
+      const row = this.db.prepare(`SELECT COUNT(*) AS n FROM content_blobs`).get() as { n: number };
+      return row.n;
+    }
+    // Materialise live set to a temp table for an O(1) anti-join.
+    return this.withLiveHashTable(liveHashes, () => {
+      const row = this.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM content_blobs cb
+           WHERE cb.content_hash NOT IN (SELECT h FROM _gc_live)`,
+        )
+        .get() as { n: number };
+      return row.n;
+    });
+  }
+
+  async sweepOrphanedBlobs(): Promise<number | null> {
+    // SQLite global store still keeps its own content_blobs table; the
+    // unified file_blobs sweep only applies to the PG backend until the
+    // SQLite machine-wide dedup unification follow-up lands.
+    return null;
+  }
+
+  async deleteBlobsExcept(liveHashes: Set<string>): Promise<number> {
+    return this.withLiveHashTable(liveHashes, () => {
+      // Delete embeddings first (FK), then blobs.
+      const before = (
+        this.db.prepare(`SELECT COUNT(*) AS n FROM content_blobs`).get() as { n: number }
+      ).n;
+      this.db.transaction(() => {
+        this.db
+          .prepare(
+            `DELETE FROM content_blob_embeddings
+             WHERE blob_id IN (
+               SELECT id FROM content_blobs
+               WHERE content_hash NOT IN (SELECT h FROM _gc_live)
+             )`,
+          )
+          .run();
+        this.db
+          .prepare(
+            `DELETE FROM content_blobs
+             WHERE content_hash NOT IN (SELECT h FROM _gc_live)`,
+          )
+          .run();
+      })();
+      const after = (
+        this.db.prepare(`SELECT COUNT(*) AS n FROM content_blobs`).get() as { n: number }
+      ).n;
+      return before - after;
+    });
+  }
+
+  /**
+   * Materialise the live-hash set into a temporary table so anti-joins run in
+   * one statement instead of N parameter binds. Cleaned up unconditionally.
+   */
+  private withLiveHashTable<T>(liveHashes: Set<string>, fn: () => T): T {
+    this.db.exec(`CREATE TEMP TABLE IF NOT EXISTS _gc_live (h TEXT PRIMARY KEY)`);
+    this.db.exec(`DELETE FROM _gc_live`);
+    const insert = this.db.prepare(`INSERT OR IGNORE INTO _gc_live (h) VALUES (?)`);
+    this.db.transaction(() => {
+      for (const h of liveHashes) insert.run(h);
+    })();
+    try {
+      return fn();
+    } finally {
+      this.db.exec(`DROP TABLE IF EXISTS _gc_live`);
+    }
   }
 
   async close(): Promise<void> {

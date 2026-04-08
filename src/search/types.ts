@@ -99,6 +99,17 @@ export interface CodeindexConfig {
   reranking?: RerankingConfig;
   providerProfiles?: Record<string, Partial<ScoringConfig>>;
   dedup?: DedupConfig;
+  search?: SearchConfig;
+}
+
+export interface SearchConfig {
+  /**
+   * When true, the PG/SQLite search backends use the content-addressed
+   * `file_blobs` + `repo_files` junction schema instead of the legacy
+   * per-repo `files` table. Default false during the dual-write transition;
+   * flipped to true once all consumers (xref, gc, export) have migrated.
+   */
+  useBlobSchema?: boolean;
 }
 
 export interface DedupConfig {
@@ -111,6 +122,13 @@ export interface DedupConfig {
   backend: "pg" | "sqlite" | null;
   /** Override path for the SQLite global store (default: ~/.codeindex/global.db). */
   sqlitePath?: string;
+  /**
+   * Pre-warm the global store by walking installed dependency packages
+   * (`node_modules`, `vendor/`) in each reindex. Off by default — turning this
+   * on will embed dep-package code on first encounter, then deduplicate every
+   * subsequent reindex (local or cross-repo) at near-zero cost.
+   */
+  indexDependencies?: boolean;
 }
 
 export interface ScoringConfig {
