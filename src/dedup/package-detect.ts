@@ -143,7 +143,10 @@ export async function detectPython(dir: string): Promise<DetectedPackage | null>
     const relpath = parts[0];
     const hashField = parts[1];
     if (!hashField.startsWith("sha256=")) continue;
-    files.push({ relpath, contentHash: hashField.slice("sha256=".length) });
+    const b64 = hashField.slice("sha256=".length);
+    // RECORD uses URL-safe base64 without padding; convert to hex to match the rest of the system.
+    const hex = Buffer.from(b64.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("hex");
+    files.push({ relpath, contentHash: hex });
   }
   if (files.length === 0) return null;
 
