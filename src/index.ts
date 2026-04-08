@@ -257,6 +257,7 @@ async function main() {
     "agents-md",
     "strategy",
     "install",
+    "local",
     "quiet",
     "batch-size",
     "top",
