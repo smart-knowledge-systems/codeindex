@@ -41,6 +41,7 @@ import { cmdConfig, cmdConfigList } from "./commands/config";
 import { cmdDoctor } from "./commands/doctor";
 import { cmdGraph } from "./commands/graph";
 import { cmdMcpConfig } from "./commands/mcp-config";
+import { cmdDedupStats } from "./commands/dedup";
 
 // ---------------------------------------------------------------------------
 // CLI dispatch
@@ -127,6 +128,9 @@ Commands:
   cache <sub>          Manage git clone cache
     list               Show cached repos
     clear              Evict cached repos
+  dedup <sub>          Manage the global dedup store
+    stats              Show blob/package counts and breakdowns
+      --json           Emit machine-readable JSON
 
 Options:
   --path <dir>         Repo root (default: cwd)
@@ -672,6 +676,19 @@ async function main() {
       case "cache": {
         const { cmdCache } = await import("./resolve/git-cache");
         await cmdCache(parsed);
+        break;
+      }
+
+      case "dedup": {
+        const sub = parsed.positional[0];
+        switch (sub) {
+          case "stats":
+            await cmdDedupStats(repoRoot, { json: hasFlag(parsed, "json") });
+            break;
+          default:
+            console.error("Usage: codeindex dedup <stats>");
+            process.exit(1);
+        }
         break;
       }
 

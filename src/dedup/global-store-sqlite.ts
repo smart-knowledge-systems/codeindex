@@ -234,7 +234,44 @@ class SqliteGlobalStore implements GlobalDedupStore {
   async stats(): Promise<DedupStats> {
     const blob = this.db.prepare(`SELECT COUNT(*) AS n FROM content_blobs`).get() as { n: number };
     const pkg = this.db.prepare(`SELECT COUNT(*) AS n FROM packages`).get() as { n: number };
-    return { blobCount: blob.n, packageCount: pkg.n };
+    const links = this.db.prepare(`SELECT COUNT(*) AS n FROM repo_packages`).get() as {
+      n: number;
+    };
+    const ecoRows = this.db
+      .prepare(`SELECT ecosystem, COUNT(*) AS n FROM packages GROUP BY ecosystem ORDER BY n DESC`)
+      .all() as Array<{ ecosystem: string; n: number }>;
+    const provRows = this.db
+      .prepare(
+        `SELECT provider, model, dimensions, COUNT(*) AS n
+         FROM content_blobs
+         GROUP BY provider, model, dimensions
+         ORDER BY n DESC`,
+      )
+      .all() as Array<{ provider: string; model: string; dimensions: number; n: number }>;
+    let storageBytes: number | null = null;
+    try {
+      const filename = (this.db.prepare("PRAGMA database_list").all() as Array<{ file: string }>)[0]
+        ?.file;
+      if (filename) {
+        const file = Bun.file(filename);
+        storageBytes = file.size;
+      }
+    } catch {
+      /* size lookup is best-effort */
+    }
+    return {
+      blobCount: blob.n,
+      packageCount: pkg.n,
+      repoLinkCount: links.n,
+      ecosystems: ecoRows.map((r) => ({ ecosystem: r.ecosystem, count: r.n })),
+      providers: provRows.map((r) => ({
+        provider: r.provider,
+        model: r.model,
+        dimensions: r.dimensions,
+        blobs: r.n,
+      })),
+      storageBytes,
+    };
   }
 
   async close(): Promise<void> {

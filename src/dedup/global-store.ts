@@ -55,6 +55,14 @@ export interface PackageMeta {
 export interface DedupStats {
   blobCount: number;
   packageCount: number;
+  /** Number of repo→package link rows (the GC refcount source). */
+  repoLinkCount: number;
+  /** Per-ecosystem package counts. */
+  ecosystems: Array<{ ecosystem: string; count: number }>;
+  /** Per-(provider, model, dimensions) blob counts. */
+  providers: Array<{ provider: string; model: string; dimensions: number; blobs: number }>;
+  /** On-disk byte count for the SQLite store (null on Postgres). */
+  storageBytes: number | null;
 }
 
 export interface GlobalDedupStore {

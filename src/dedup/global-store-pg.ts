@@ -177,7 +177,31 @@ class PgGlobalStore implements GlobalDedupStore {
     const pkgRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM packages`)) as Array<{
       n: number;
     }>;
-    return { blobCount: blobRows[0]?.n ?? 0, packageCount: pkgRows[0]?.n ?? 0 };
+    const linkRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM repo_packages`)) as Array<{
+      n: number;
+    }>;
+    const ecoRows = (await pg.unsafe(
+      `SELECT ecosystem, COUNT(*)::int AS n FROM packages GROUP BY ecosystem ORDER BY n DESC`,
+    )) as Array<{ ecosystem: string; n: number }>;
+    const provRows = (await pg.unsafe(
+      `SELECT provider, model, dimensions, COUNT(*)::int AS n
+       FROM content_blobs
+       GROUP BY provider, model, dimensions
+       ORDER BY n DESC`,
+    )) as Array<{ provider: string; model: string; dimensions: number; n: number }>;
+    return {
+      blobCount: blobRows[0]?.n ?? 0,
+      packageCount: pkgRows[0]?.n ?? 0,
+      repoLinkCount: linkRows[0]?.n ?? 0,
+      ecosystems: ecoRows.map((r) => ({ ecosystem: r.ecosystem, count: r.n })),
+      providers: provRows.map((r) => ({
+        provider: r.provider,
+        model: r.model,
+        dimensions: r.dimensions,
+        blobs: r.n,
+      })),
+      storageBytes: null,
+    };
   }
 
   async close(): Promise<void> {
