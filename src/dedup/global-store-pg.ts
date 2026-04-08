@@ -88,6 +88,18 @@ class PgGlobalStore implements GlobalDedupStore {
   }
 
   async writeBlob(key: BlobKey, record: BlobRecord): Promise<void> {
+    // The `file_blobs.embedding` column is typed `vector(1536)` because
+    // pgvector HNSW indexes require a fixed dimension. The composite key
+    // carries `dimensions` to leave room for multi-dim support, but today
+    // only 1536-dim embeddings can be written to PG. Fail loudly rather
+    // than let pgvector raise a dimension-mismatch error mid-transaction
+    // (which silently drops every blob write for that config).
+    if (key.dimensions !== 1536) {
+      throw new Error(
+        `PG file_blobs only supports 1536-dimension embeddings (got ${key.dimensions} for ${key.provider}/${key.model}). ` +
+          `Use the SQLite store or configure a 1536-dim model until multi-dim PG support lands.`,
+      );
+    }
     const pg = await getPg();
     // file_blobs is immutable by composite key — DO NOTHING on conflict.
     // The legacy ref_count column is gone; lifetime is governed by the

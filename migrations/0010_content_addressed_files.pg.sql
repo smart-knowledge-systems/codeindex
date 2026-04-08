@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS file_blobs (
   skeleton          text,
   skeleton_entries  jsonb,
   file_type         text,
+  -- pgvector HNSW indexes require a fixed dimension, so `embedding` is
+  -- hard-pinned to 1536. The composite PK still carries `dimensions` to
+  -- leave room for future multi-dim support (likely via separate typed
+  -- tables per dim). Non-1536 inserts are rejected at the app layer in
+  -- `writeBlob` (src/dedup/global-store-pg.ts) so they fail loudly rather
+  -- than triggering a pgvector dimension-mismatch mid-transaction.
   embedding         vector(1536),
   created_at        timestamptz DEFAULT now(),
   PRIMARY KEY (content_hash, provider, model, dimensions)
