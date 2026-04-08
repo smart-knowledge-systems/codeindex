@@ -54,37 +54,79 @@ export const embedFiles: EmbedStage = async (
   if (files.length === 0) return [];
 
   const { repoRoot, repoId, config } = ctx;
-  const start = performance.now();
 
-  logEvent({ event: "infra.embed.start", file_count: files.length });
-
-  const embeddings = await embed(
-    files.map((f) => f.skeleton),
-    config,
-  );
-
-  logEvent({
-    event: "infra.embed.complete",
-    file_count: files.length,
-    duration_ms: Math.round(performance.now() - start),
-  });
-
-  const exceeded = await checkAndLogCostCap(repoRoot, repoId, config);
-  if (exceeded) return [];
-
-  // Filter out files whose embeddings failed (empty array)
-  const results: EmbeddedFile[] = [];
-  let skipped = 0;
+  // Partition: files with a cached embedding (dedup hits) skip the embedder
+  // entirely; only the rest go through the API.
+  const cached: EmbeddedFile[] = [];
+  const needEmbed: { idx: number; file: CollectedFile }[] = [];
   for (let i = 0; i < files.length; i++) {
-    if (embeddings[i].length > 0) {
-      results.push({ ...files[i], embedding: embeddings[i] });
+    const f = files[i];
+    if (f.cachedEmbedding && f.cachedEmbedding.length > 0) {
+      cached.push({ ...f, embedding: f.cachedEmbedding });
     } else {
-      skipped++;
+      needEmbed.push({ idx: i, file: f });
     }
   }
+
+  const start = performance.now();
+  logEvent({
+    event: "infra.embed.start",
+    file_count: needEmbed.length,
+    cached_count: cached.length,
+  });
+
+  const freshlyEmbedded: EmbeddedFile[] = [];
+  let skipped = 0;
+  if (needEmbed.length > 0) {
+    const embeddings = await embed(
+      needEmbed.map((e) => e.file.skeleton),
+      config,
+    );
+
+    logEvent({
+      event: "infra.embed.complete",
+      file_count: needEmbed.length,
+      duration_ms: Math.round(performance.now() - start),
+    });
+
+    const exceeded = await checkAndLogCostCap(repoRoot, repoId, config);
+    if (exceeded) return [];
+
+    for (let i = 0; i < needEmbed.length; i++) {
+      if (embeddings[i].length > 0) {
+        freshlyEmbedded.push({ ...needEmbed[i].file, embedding: embeddings[i] });
+      } else {
+        skipped++;
+      }
+    }
+  } else {
+    logEvent({
+      event: "infra.embed.complete",
+      file_count: 0,
+      cached_count: cached.length,
+      duration_ms: Math.round(performance.now() - start),
+    });
+  }
+
   if (skipped > 0) {
     process.stderr.write(`  ${skipped} file(s) skipped due to embedding failures\n`);
     logEvent({ event: "infra.embed.skipped_files", count: skipped });
   }
-  return results;
+
+  // Preserve original input order so downstream stages see deterministic ordering.
+  const merged: EmbeddedFile[] = [];
+  let cachedIdx = 0;
+  let freshIdx = 0;
+  for (const f of files) {
+    if (f.cachedEmbedding && f.cachedEmbedding.length > 0) {
+      merged.push(cached[cachedIdx++]);
+    } else if (
+      freshIdx < freshlyEmbedded.length &&
+      freshlyEmbedded[freshIdx].relPath === f.relPath
+    ) {
+      merged.push(freshlyEmbedded[freshIdx++]);
+    }
+    // else: dropped due to embedding failure; intentionally omitted.
+  }
+  return merged;
 };

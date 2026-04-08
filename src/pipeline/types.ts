@@ -1,5 +1,6 @@
 import type { CodeindexConfig } from "../search/types";
 import type { ImportEdge } from "../index/imports";
+import type { GlobalDedupStore } from "../dedup/global-store";
 
 // ---------------------------------------------------------------------------
 // Intermediate representations
@@ -13,11 +14,13 @@ export interface CollectedFile {
   relPath: string; // repo-relative path, e.g. "src/foo.ts"
   absPath: string; // absolute path on disk
   fileType: string; // lowercased extension, e.g. ".ts"
-  contentHash: string; // formatter-derived content hash
+  contentHash: string; // formatter-derived content hash (or git blob OID)
   content: string; // raw file content (NUL-stripped)
   skeleton: string; // extracted skeleton text used for embedding
   skeletonEntries: string | null; // JSON-serialized SkeletonEntry[] or null
   importEdges: ImportEdge[]; // raw import edges extracted from content
+  /** Global-store cache hit: if set, embed stage skips this file. */
+  cachedEmbedding?: number[];
 }
 
 /**
@@ -49,6 +52,10 @@ export interface PipelineContext {
   repoVisibility?: "public" | "private" | "unknown";
   /** Mutable accumulator: incremented by processFile each time a secret-flagged file is overridden via the public-repo path. */
   secretOverrideCount?: number;
+  /** Optional dedup store; when present collect/embed/store consult it. */
+  globalStore?: GlobalDedupStore;
+  /** Mutable counters surfaced in reindex telemetry (commit 11). */
+  dedupStats?: { hits: number; misses: number };
 }
 
 // ---------------------------------------------------------------------------

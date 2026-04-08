@@ -9,6 +9,9 @@ import { setCurrentRepo, getProjectedCost } from "../cost";
 import { setCorrelationContext, hashPath, logEvent } from "../logging";
 import { ensureRepo } from "./helpers";
 import { checkRepoVisibility } from "../index/public-repo";
+import { ensureDedupBackend } from "../dedup/prompt";
+import { getGlobalStore } from "../dedup/global-store";
+import type { GlobalDedupStore } from "../dedup/global-store";
 import {
   collectFiles,
   embedFiles,
@@ -92,6 +95,23 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
 
   const repoVisibility = await checkRepoVisibility(repoRoot);
 
+  // Resolve dedup backend (prompt on first use) and open the global store.
+  const dedupChoice = await ensureDedupBackend(config);
+  let globalStore: GlobalDedupStore | undefined;
+  if (dedupChoice.enabled && dedupChoice.backend !== null) {
+    if (config.dedup) {
+      config.dedup.backend = dedupChoice.backend;
+      config.dedup.enabled = true;
+    }
+    try {
+      globalStore = await getGlobalStore(config);
+    } catch (err) {
+      process.stderr.write(
+        `[dedup] failed to open global store (${err instanceof Error ? err.message : String(err)}); proceeding without dedup\n`,
+      );
+    }
+  }
+
   const ctx: PipelineContext = {
     repoRoot,
     repoId,
@@ -102,6 +122,8 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
     force,
     repoVisibility,
     secretOverrideCount: 0,
+    globalStore,
+    dedupStats: { hits: 0, misses: 0 },
   };
 
   // Collect files needing re-embedding
@@ -159,6 +181,22 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
     await storeFiles(ctx, embedded);
   }
   console.log(`Files: ${indexed} indexed, ${skipped} skipped (unchanged)`);
+  if (ctx.dedupStats && (ctx.dedupStats.hits > 0 || ctx.dedupStats.misses > 0)) {
+    const { hits, misses } = ctx.dedupStats;
+    const total = hits + misses;
+    const pct = total > 0 ? ((hits / total) * 100).toFixed(1) : "0.0";
+    const projected = getProjectedCost(hits, 0, config.embedding.model);
+    console.log(
+      `Dedup:  ${hits} hits / ${misses} misses (${pct}% hit rate, ~$${projected.embeddingCost.toFixed(4)} saved)`,
+    );
+    logEvent({
+      event: "infra.dedup.summary",
+      hits,
+      misses,
+      hit_rate: total > 0 ? hits / total : 0,
+      embedding_cost_saved: projected.embeddingCost,
+    });
+  }
 
   // Index commits
   console.log("Indexing commits...");

@@ -2,7 +2,42 @@ import { getPg } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "../db/util";
 import { resolveImport } from "../index/imports";
+import { logEvent } from "../logging";
 import type { PipelineContext, EmbeddedFile, StoreFilesStage } from "./types";
+import type { GlobalDedupStore } from "../dedup/global-store";
+
+/**
+ * Push freshly-embedded files into the global dedup store. Files that came
+ * out of the embed stage with a cachedEmbedding are skipped — they were
+ * already in the store. Failures are logged but never abort the per-repo
+ * write path; the global store is a cache, not a source of truth for search.
+ */
+async function writeFreshBlobsToGlobalStore(
+  globalStore: GlobalDedupStore,
+  ctx: PipelineContext,
+  files: EmbeddedFile[],
+): Promise<void> {
+  const { provider, model, dimensions } = ctx.config.embedding;
+  for (const f of files) {
+    if (f.cachedEmbedding && f.cachedEmbedding.length > 0) continue;
+    try {
+      await globalStore.writeBlob(
+        { contentHash: f.contentHash, provider, model, dimensions },
+        {
+          skeleton: f.skeleton,
+          skeletonEntries: f.skeletonEntries,
+          embedding: f.embedding,
+        },
+      );
+    } catch (err) {
+      logEvent({
+        event: "infra.dedup.write_failed",
+        content_hash: f.contentHash,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
 
 /**
  * Pure: resolve import edges for a file against a known set of all file paths.
@@ -32,6 +67,13 @@ export const storeFiles: StoreFilesStage = async (
   if (files.length === 0) return;
 
   const { repoRoot, repoId, store } = ctx;
+
+  // Write freshly-embedded files (cache misses) back to the global store so
+  // future reindexes — local OR cross-repo — can reuse them. Best-effort:
+  // global-store failures log and continue; per-repo writes are the contract.
+  if (ctx.globalStore) {
+    await writeFreshBlobsToGlobalStore(ctx.globalStore, ctx, files);
+  }
 
   if (store === "pg") {
     const pg = await getPg();
