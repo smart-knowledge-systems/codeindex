@@ -32,7 +32,11 @@ export async function discoverCrossRepoEdges(repoRoot: string): Promise<CrossRep
   const start = performance.now();
   const config = await loadConfig(repoRoot);
 
-  const edges = config.store === "pg" ? await discoverPg() : await discoverSqlite(repoRoot);
+  const { provider, model, dimensions } = config.embedding;
+  const edges =
+    config.store === "pg"
+      ? await discoverPg(provider, model, dimensions)
+      : await discoverSqlite(repoRoot, provider, model, dimensions);
 
   logEvent({
     event: "index.discovery.cross_repo.complete",
@@ -43,7 +47,11 @@ export async function discoverCrossRepoEdges(repoRoot: string): Promise<CrossRep
   return edges;
 }
 
-async function discoverPg(): Promise<CrossRepoEdge[]> {
+async function discoverPg(
+  provider: string,
+  model: string,
+  dimensions: number,
+): Promise<CrossRepoEdge[]> {
   // Get all unresolved imports
   const unresolved = (await pgUnsafe(
     `SELECT fi.id, fi.source_file_id, f.repo_id AS source_repo_id,
@@ -62,9 +70,16 @@ async function discoverPg(): Promise<CrossRepoEdge[]> {
 
   if (unresolved.length === 0) return [];
 
-  // Get all files from all repos for cross-repo resolution
+  // Enumerate cross-repo file inventory from the content-addressed
+  // repo_files junction (Phase 3 dedup). Joined back to legacy `files` for
+  // the numeric id required by cross_repo_edges.target_file_id until that
+  // FK is rewritten in a follow-up PR.
   const allFiles = (await pgUnsafe(
-    `SELECT f.id AS file_id, f.repo_id, f.file_path FROM files f`,
+    `SELECT f.id AS file_id, rf.repo_id, rf.file_path
+     FROM repo_files rf
+     JOIN files f ON f.repo_id = rf.repo_id AND f.file_path = rf.file_path
+     WHERE rf.provider = $1 AND rf.model = $2 AND rf.dimensions = $3`,
+    [provider, model, dimensions],
   )) as { file_id: string; repo_id: string; file_path: string }[];
 
   // Group files by repo and build path→RepoFile index for O(1) lookups
@@ -150,7 +165,12 @@ async function discoverPg(): Promise<CrossRepoEdge[]> {
   }
 }
 
-async function discoverSqlite(repoRoot: string): Promise<CrossRepoEdge[]> {
+async function discoverSqlite(
+  repoRoot: string,
+  provider: string,
+  model: string,
+  dimensions: number,
+): Promise<CrossRepoEdge[]> {
   const db = await getSqlite(repoRoot);
 
   const unresolved = db
@@ -172,9 +192,22 @@ async function discoverSqlite(repoRoot: string): Promise<CrossRepoEdge[]> {
 
   if (unresolved.length === 0) return [];
 
+  // Enumerate cross-repo file inventory from the content-addressed
+  // repo_files junction (Phase 3 dedup). Joined back to legacy `files` for
+  // the numeric id required by cross_repo_edges.target_file_id until that
+  // FK is rewritten in a follow-up PR.
   const allFiles = db
-    .prepare(`SELECT f.id AS file_id, f.repo_id, f.file_path FROM files f`)
-    .all() as { file_id: number; repo_id: number; file_path: string }[];
+    .prepare(
+      `SELECT f.id AS file_id, rf.repo_id, rf.file_path
+       FROM repo_files rf
+       JOIN files f ON f.repo_id = rf.repo_id AND f.file_path = rf.file_path
+       WHERE rf.provider = ? AND rf.model = ? AND rf.dimensions = ?`,
+    )
+    .all(provider, model, dimensions) as {
+    file_id: number;
+    repo_id: number;
+    file_path: string;
+  }[];
 
   const fileIndexByRepo = new Map<number, Map<string, RepoFile>>();
   for (const f of allFiles) {
