@@ -193,7 +193,7 @@ export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: 
     const { hits, misses } = ctx.dedupStats;
     const total = hits + misses;
     const pct = total > 0 ? ((hits / total) * 100).toFixed(1) : "0.0";
-    const projected = getProjectedCost(hits, hits * 3, config.embedding.model);
+    const projected = getProjectedCost(hits, 0, config.embedding.model);
     console.log(
       `Dedup:  ${hits} hits / ${misses} misses (${pct}% hit rate, ~$${projected.embeddingCost.toFixed(4)} saved)`,
     );
