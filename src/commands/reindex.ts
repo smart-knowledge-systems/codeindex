@@ -19,6 +19,7 @@ import {
   pruneStale,
   indexCommits,
   summarizeDirs,
+  processDependencyPackages,
 } from "../pipeline";
 import type { PipelineContext, SummaryProvider } from "../pipeline";
 
@@ -215,6 +216,27 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
   };
   await summarizeDirs(ctx, allFiles, nullSummaryProvider);
   console.log("Directory index complete.");
+
+  // Optional: pre-warm the global dedup cache by walking installed dependency
+  // packages (node_modules, vendor/...). Off by default; opt-in via
+  // `dedup.indexDependencies: true` in the global config.
+  if (ctx.globalStore && config.dedup?.indexDependencies) {
+    console.log("Pre-warming dependency packages...");
+    try {
+      const depStats = await processDependencyPackages(ctx);
+      const total = depStats.packageHits + depStats.packageMisses;
+      if (total > 0 || depStats.packagesScanned > 0) {
+        console.log(
+          `Dep packages: ${depStats.packageHits} hit / ${depStats.packageMisses} miss ` +
+            `(${depStats.blobsReused} blobs reused, ${depStats.blobsEmbedded} embedded)`,
+        );
+      }
+    } catch (err) {
+      process.stderr.write(
+        `[dedup] dependency walk failed (${err instanceof Error ? err.message : String(err)}); continuing\n`,
+      );
+    }
+  }
 
   logEvent({
     event: "infra.reindex",

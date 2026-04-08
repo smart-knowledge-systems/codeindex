@@ -111,6 +111,13 @@ export interface DedupConfig {
   backend: "pg" | "sqlite" | null;
   /** Override path for the SQLite global store (default: ~/.codeindex/global.db). */
   sqlitePath?: string;
+  /**
+   * Pre-warm the global store by walking installed dependency packages
+   * (`node_modules`, `vendor/`) in each reindex. Off by default — turning this
+   * on will embed dep-package code on first encounter, then deduplicate every
+   * subsequent reindex (local or cross-repo) at near-zero cost.
+   */
+  indexDependencies?: boolean;
 }
 
 export interface ScoringConfig {
