@@ -530,6 +530,16 @@ export async function ensureSqliteVecTables(repoRoot?: string): Promise<void> {
       embedding float[${dims}]
     )
   `);
+
+  // Phase 3 dedup: per-blob embeddings keyed by the surrogate file_blobs.blob_id
+  // (vec0 doesn't support composite keys, hence the surrogate column added in
+  // migration 0011_sqlite_blob_id.sqlite.sql).
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS file_blob_embeddings USING vec0(
+      blob_id integer PRIMARY KEY,
+      embedding float[${dims}]
+    )
+  `);
 }
 
 /**

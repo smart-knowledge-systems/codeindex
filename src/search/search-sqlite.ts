@@ -22,6 +22,68 @@ import {
 } from "./scoring";
 import { buildBM25Context, computeAvgTokenCount } from "./bm25-helpers";
 
+/**
+ * Pure: build the SQL + bind params for the junction-based file KNN query
+ * (`file_blob_embeddings` MATCH → `file_blobs` JOIN `repo_files`). Mirrors
+ * the PG buildBlobFileQuery in search-pg.ts. Exported for unit testing.
+ */
+export function buildBlobFileQuerySqlite(args: {
+  repoIds: number[];
+  langExts: string[] | null;
+  dirFilters: string[] | null;
+  sinceIso: string | null;
+}): { sql: string; params: string[] } {
+  const { repoIds, langExts, dirFilters, sinceIso } = args;
+  for (const id of repoIds) {
+    if (typeof id !== "number" || !Number.isInteger(id)) {
+      throw new Error(`Invalid repo ID: ${String(id)}`);
+    }
+  }
+  const repoIdList = repoIds.join(",");
+  const params: string[] = [];
+  let filterSql = "";
+
+  if (langExts && langExts.length > 0) {
+    filterSql += ` AND fb.file_type IN (${langExts.map(() => "?").join(",")})`;
+    params.push(...langExts);
+  }
+  if (dirFilters && dirFilters.length > 0) {
+    const dirConds = dirFilters.map(() => "rf.file_path LIKE ?").join(" OR ");
+    filterSql += ` AND (${dirConds})`;
+    params.push(...dirFilters.map((d) => `${d.replace(/\/$/, "")}/%`));
+  }
+  if (sinceIso) {
+    // file_commits still references files.id during the dual-write window;
+    // resolve via the legacy files table to preserve identical semantics.
+    filterSql +=
+      ` AND EXISTS (SELECT 1 FROM files f` +
+      ` JOIN file_commits fc ON fc.file_id = f.id` +
+      ` JOIN commits c ON c.id = fc.commit_id` +
+      ` WHERE f.repo_id = rf.repo_id AND f.file_path = rf.file_path` +
+      ` AND c.authored_at >= ?)`;
+    params.push(sinceIso);
+  }
+
+  // KNN over file_blob_embeddings then JOIN to file_blobs (for skeleton/type)
+  // and repo_files (for repo_id/file_path scoping). The vec0 MATCH does not
+  // accept arbitrary WHERE clauses, so the lang/dir/since filters are applied
+  // post-KNN as part of the outer JOIN.
+  const sql =
+    `SELECT rf.repo_id, rf.file_path, fb.skeleton, fb.file_type,` +
+    ` fbe.distance, fb.blob_id` +
+    ` FROM file_blob_embeddings fbe` +
+    ` JOIN file_blobs fb ON fb.blob_id = fbe.blob_id` +
+    ` JOIN repo_files rf` +
+    `   ON rf.content_hash = fb.content_hash` +
+    `  AND rf.provider     = fb.provider` +
+    `  AND rf.model        = fb.model` +
+    `  AND rf.dimensions   = fb.dimensions` +
+    ` WHERE fbe.embedding MATCH ? AND fbe.k = ?` +
+    `   AND rf.repo_id IN (${repoIdList})${filterSql}`;
+
+  return { sql, params };
+}
+
 export async function searchSqlite(
   repoIds: number[],
   currentRepoId: number,
@@ -31,6 +93,7 @@ export async function searchSqlite(
   options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
+  useBlobSchema: boolean = false,
 ): Promise<SearchResult[]> {
   const db = await getSqlite(repoRoot);
   const embBuf = serializeEmbedding(queryEmbedding);
@@ -72,16 +135,68 @@ export async function searchSqlite(
     fileFilterParams.push(sinceDate.toISOString());
   }
 
-  const fileRows = db
-    .prepare(
-      `SELECT f.id, f.repo_id, f.file_path, f.skeleton, f.file_type,
-              fe.distance
-       FROM file_embeddings fe
-       JOIN files f ON f.id = fe.file_id
-       WHERE fe.embedding MATCH ? AND fe.k = ?
-         AND f.repo_id IN (${repoIdList})${fileFilterSql}`,
-    )
-    .all(embBuf, knnLimit, ...fileFilterParams) as SqliteFileRow[];
+  let fileRows: SqliteFileRow[];
+  if (useBlobSchema) {
+    const built = buildBlobFileQuerySqlite({
+      repoIds,
+      langExts,
+      dirFilters,
+      sinceIso: sinceDate ? sinceDate.toISOString() : null,
+    });
+    const junctionRows = db.prepare(built.sql).all(embBuf, knnLimit, ...built.params) as Array<{
+      repo_id: number;
+      file_path: string;
+      skeleton: string | null;
+      file_type: string;
+      distance: number;
+      blob_id: number;
+    }>;
+
+    // file_commits still references files.id during the dual-write window;
+    // resolve a legacy id per (repo_id, file_path) so BM25 keying and the
+    // commit-link join below keep working unchanged.
+    const idMap = new Map<string, number>();
+    if (junctionRows.length > 0) {
+      const repoIdSet = [...new Set(junctionRows.map((r) => r.repo_id))];
+      const pathSet = [...new Set(junctionRows.map((r) => r.file_path))];
+      const idRows = db
+        .prepare(
+          `SELECT id, repo_id, file_path FROM files
+           WHERE repo_id IN (${repoIdSet.join(",")})
+             AND file_path IN (${pathSet.map(() => "?").join(",")})`,
+        )
+        .all(...pathSet) as { id: number; repo_id: number; file_path: string }[];
+      for (const r of idRows) {
+        idMap.set(`${r.repo_id}:${r.file_path}`, r.id);
+      }
+    }
+
+    // Synthetic id fallback for blob-only rows with no legacy files.id —
+    // negative space avoids collisions with real ids.
+    let syntheticId = -1;
+    fileRows = junctionRows.map((r) => {
+      const id = idMap.get(`${r.repo_id}:${r.file_path}`) ?? syntheticId--;
+      return {
+        id,
+        repo_id: r.repo_id,
+        file_path: r.file_path,
+        skeleton: r.skeleton,
+        file_type: r.file_type,
+        distance: r.distance,
+      };
+    });
+  } else {
+    fileRows = db
+      .prepare(
+        `SELECT f.id, f.repo_id, f.file_path, f.skeleton, f.file_type,
+                fe.distance
+         FROM file_embeddings fe
+         JOIN files f ON f.id = fe.file_id
+         WHERE fe.embedding MATCH ? AND fe.k = ?
+           AND f.repo_id IN (${repoIdList})${fileFilterSql}`,
+      )
+      .all(embBuf, knnLimit, ...fileFilterParams) as SqliteFileRow[];
+  }
 
   // --- Directories (KNN via vec0 MATCH for concat, then point lookup for summary) ---
   let dirFilterSql = "";

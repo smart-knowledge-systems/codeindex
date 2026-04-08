@@ -194,11 +194,21 @@ export const storeFiles: StoreFilesStage = async (
       `INSERT INTO file_imports (source_file_id, imported_module, resolved_file_id, language)
        VALUES (?, ?, ?, ?)`,
     );
+    // Upsert returning blob_id: ON CONFLICT DO UPDATE (no-op self-assignment)
+    // is the SQLite idiom that always RETURNS the row, including on conflict.
     const insertBlob = db.prepare(
       `INSERT INTO file_blobs
          (content_hash, provider, model, dimensions, skeleton, skeleton_entries, file_type)
        VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (content_hash, provider, model, dimensions) DO NOTHING`,
+       ON CONFLICT (content_hash, provider, model, dimensions) DO UPDATE SET
+         skeleton = excluded.skeleton,
+         skeleton_entries = excluded.skeleton_entries,
+         file_type = excluded.file_type
+       RETURNING blob_id`,
+    );
+    const deleteBlobEmb = db.prepare(`DELETE FROM file_blob_embeddings WHERE blob_id = ?`);
+    const insertBlobEmb = db.prepare(
+      `INSERT INTO file_blob_embeddings (blob_id, embedding) VALUES (?, ?)`,
     );
     const upsertRepoFile = db.prepare(
       `INSERT INTO repo_files
@@ -239,11 +249,11 @@ export const storeFiles: StoreFilesStage = async (
         insertEmb.run(row.id, serializeEmbedding(f.embedding));
         fileIdMap.set(f.relPath, row.id);
 
-        // Phase 3 dual-write (SQLite): scalar tables only — vec0 virtual
-        // table for blobs lands in a later commit. Best-effort: failures log
-        // and continue.
+        // Phase 3 dual-write (SQLite): scalar file_blobs + repo_files plus
+        // the file_blob_embeddings vec0 table keyed on the surrogate blob_id.
+        // Best-effort: failures log and continue.
         try {
-          insertBlob.run(
+          const blobRow = insertBlob.get(
             f.contentHash,
             provider,
             model,
@@ -251,7 +261,11 @@ export const storeFiles: StoreFilesStage = async (
             f.skeleton,
             f.skeletonEntries,
             f.fileType,
-          );
+          ) as { blob_id: number } | undefined;
+          if (blobRow) {
+            deleteBlobEmb.run(blobRow.blob_id);
+            insertBlobEmb.run(blobRow.blob_id, serializeEmbedding(f.embedding));
+          }
           upsertRepoFile.run(repoId, f.relPath, f.contentHash, provider, model, dimensions);
         } catch (err) {
           logEvent({
