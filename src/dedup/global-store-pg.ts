@@ -1,8 +1,14 @@
 /**
  * Postgres backend for GlobalDedupStore. Reuses the per-repo pg connection
- * pool from src/db/pg.ts but writes to the dedicated global-dedup tables
- * (content_blobs / packages / package_files / repo_packages). Versioned
- * separately via global_schema_version (see migrations/global/0001*).
+ * pool from src/db/pg.ts. Blob storage now lives on the unified file_blobs
+ * table (per-repo migration 0010); packages / package_files / repo_packages
+ * still live in the global namespace and are versioned separately via
+ * global_schema_version (see migrations/global/*).
+ *
+ * The legacy content_blobs table (migrations/global/0001) is no longer read
+ * or written here; migrations/global/0002 drops it on existing deployments.
+ * The blob ref_count semantic is gone — file_blobs lifetime is governed by
+ * the existence of repo_files / package_files entries.
  */
 
 import { getPg } from "../db/pg";
@@ -32,7 +38,7 @@ class PgGlobalStore implements GlobalDedupStore {
     const pg = await getPg();
     const rows = (await pg.unsafe(
       `SELECT skeleton, skeleton_entries, embedding::text AS embedding
-       FROM content_blobs
+       FROM file_blobs
        WHERE content_hash = $1 AND provider = $2 AND model = $3 AND dimensions = $4`,
       [key.contentHash, key.provider, key.model, key.dimensions],
     )) as Array<{
@@ -60,7 +66,7 @@ class PgGlobalStore implements GlobalDedupStore {
     const pg = await getPg();
     const rows = (await pg.unsafe(
       `SELECT content_hash, skeleton, skeleton_entries, embedding::text AS embedding
-       FROM content_blobs
+       FROM file_blobs
        WHERE provider = $1 AND model = $2 AND dimensions = $3
          AND content_hash = ANY($4::text[])`,
       [provider, model, dimensions, hashes],
@@ -83,12 +89,14 @@ class PgGlobalStore implements GlobalDedupStore {
 
   async writeBlob(key: BlobKey, record: BlobRecord): Promise<void> {
     const pg = await getPg();
+    // file_blobs is immutable by composite key — DO NOTHING on conflict.
+    // The legacy ref_count column is gone; lifetime is governed by the
+    // existence of repo_files / package_files entries (see dedup gc).
     await pg.unsafe(
-      `INSERT INTO content_blobs
+      `INSERT INTO file_blobs
          (content_hash, provider, model, dimensions, skeleton, skeleton_entries, embedding)
        VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
-       ON CONFLICT (content_hash, provider, model, dimensions) DO UPDATE SET
-         ref_count = content_blobs.ref_count + 1`,
+       ON CONFLICT (content_hash, provider, model, dimensions) DO NOTHING`,
       [
         key.contentHash,
         key.provider,
@@ -171,7 +179,7 @@ class PgGlobalStore implements GlobalDedupStore {
 
   async stats(): Promise<DedupStats> {
     const pg = await getPg();
-    const blobRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM content_blobs`)) as Array<{
+    const blobRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM file_blobs`)) as Array<{
       n: number;
     }>;
     const pkgRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM packages`)) as Array<{
@@ -185,7 +193,7 @@ class PgGlobalStore implements GlobalDedupStore {
     )) as Array<{ ecosystem: string; n: number }>;
     const provRows = (await pg.unsafe(
       `SELECT provider, model, dimensions, COUNT(*)::int AS n
-       FROM content_blobs
+       FROM file_blobs
        GROUP BY provider, model, dimensions
        ORDER BY n DESC`,
     )) as Array<{ provider: string; model: string; dimensions: number; n: number }>;
@@ -246,15 +254,33 @@ class PgGlobalStore implements GlobalDedupStore {
 
   async countBlobsExcept(liveHashes: Set<string>): Promise<number> {
     const pg = await getPg();
+    // file_blobs rows referenced by repo_files cannot be GC'd here without
+    // an FK violation; exclude them from the candidate set. The simplified
+    // NOT EXISTS sweep that supersedes this lives in `codeindex dedup gc`
+    // (task 7).
     if (liveHashes.size === 0) {
-      const rows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM content_blobs`)) as Array<{
-        n: number;
-      }>;
+      const rows = (await pg.unsafe(
+        `SELECT COUNT(*)::int AS n FROM file_blobs fb
+         WHERE NOT EXISTS (
+           SELECT 1 FROM repo_files rf
+           WHERE rf.content_hash = fb.content_hash
+             AND rf.provider     = fb.provider
+             AND rf.model        = fb.model
+             AND rf.dimensions   = fb.dimensions
+         )`,
+      )) as Array<{ n: number }>;
       return rows[0]?.n ?? 0;
     }
     const rows = (await pg.unsafe(
-      `SELECT COUNT(*)::int AS n FROM content_blobs
-       WHERE NOT (content_hash = ANY($1::text[]))`,
+      `SELECT COUNT(*)::int AS n FROM file_blobs fb
+       WHERE NOT (fb.content_hash = ANY($1::text[]))
+         AND NOT EXISTS (
+           SELECT 1 FROM repo_files rf
+           WHERE rf.content_hash = fb.content_hash
+             AND rf.provider     = fb.provider
+             AND rf.model        = fb.model
+             AND rf.dimensions   = fb.dimensions
+         )`,
       [Array.from(liveHashes)],
     )) as Array<{ n: number }>;
     return rows[0]?.n ?? 0;
@@ -263,14 +289,29 @@ class PgGlobalStore implements GlobalDedupStore {
   async deleteBlobsExcept(liveHashes: Set<string>): Promise<number> {
     const pg = await getPg();
     if (liveHashes.size === 0) {
-      const rows = (await pg.unsafe(`DELETE FROM content_blobs RETURNING content_hash`)) as Array<{
-        content_hash: string;
-      }>;
+      const rows = (await pg.unsafe(
+        `DELETE FROM file_blobs fb
+         WHERE NOT EXISTS (
+           SELECT 1 FROM repo_files rf
+           WHERE rf.content_hash = fb.content_hash
+             AND rf.provider     = fb.provider
+             AND rf.model        = fb.model
+             AND rf.dimensions   = fb.dimensions
+         )
+         RETURNING content_hash`,
+      )) as Array<{ content_hash: string }>;
       return rows.length;
     }
     const rows = (await pg.unsafe(
-      `DELETE FROM content_blobs
-       WHERE NOT (content_hash = ANY($1::text[]))
+      `DELETE FROM file_blobs fb
+       WHERE NOT (fb.content_hash = ANY($1::text[]))
+         AND NOT EXISTS (
+           SELECT 1 FROM repo_files rf
+           WHERE rf.content_hash = fb.content_hash
+             AND rf.provider     = fb.provider
+             AND rf.model        = fb.model
+             AND rf.dimensions   = fb.dimensions
+         )
        RETURNING content_hash`,
       [Array.from(liveHashes)],
     )) as Array<{ content_hash: string }>;
