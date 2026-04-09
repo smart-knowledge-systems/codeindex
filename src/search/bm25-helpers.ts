@@ -2,7 +2,7 @@
 // BM25 index helpers — pure data prep
 // ---------------------------------------------------------------------------
 
-import { buildIndex as buildBM25Index, score as scoreBM25 } from "./bm25";
+import { buildIndex as buildBM25Index, score as scoreBM25 } from "@easier-idx/core/search/bm25";
 
 export interface BM25Context {
   readonly scores: Map<string, number>;
