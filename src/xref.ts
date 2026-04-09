@@ -78,7 +78,11 @@ function groupByRepo(matches: XrefMatch[]): Record<string, XrefMatch[]> {
 export async function xrefSymbol(repoRoot: string, symbol: string): Promise<XrefResult> {
   const config = await loadConfig(repoRoot);
 
-  const matches = config.store === "pg" ? await xrefPg(symbol) : await xrefSqlite(repoRoot, symbol);
+  const { provider, model, dimensions } = config.embedding;
+  const matches =
+    config.store === "pg"
+      ? await xrefPg(symbol, provider, model, dimensions)
+      : await xrefSqlite(repoRoot, symbol, provider, model, dimensions);
 
   const byRepo = groupByRepo(matches);
   return { symbol, matches, byRepo };
@@ -88,12 +92,17 @@ export async function xrefSymbol(repoRoot: string, symbol: string): Promise<Xref
 // PostgreSQL xref
 // ---------------------------------------------------------------------------
 
-async function xrefPg(symbol: string): Promise<XrefMatch[]> {
+async function xrefPg(
+  symbol: string,
+  provider: string,
+  model: string,
+  dimensions: number,
+): Promise<XrefMatch[]> {
   const pg = await getPg();
 
   // 1. Search skeletons for symbol using BM25 (pre-filter to avoid full table scan)
   const skeletonRows = await pg`
-    SELECT f.id, f.file_path, f.skeleton, f.repo_id, r.name as repo_name
+    SELECT f.id, f.file_path, f.skeleton, f.repo_id, f.content_hash, r.name as repo_name
     FROM files f
     JOIN repos r ON f.repo_id = r.id
     WHERE f.skeleton IS NOT NULL
@@ -124,6 +133,51 @@ async function xrefPg(symbol: string): Promise<XrefMatch[]> {
 
   if (definitionFileIds.size === 0) return definitionMatches;
 
+  // 1b. Cross-repo attribution: fan out each definition match across every
+  // repo that holds the same content_hash via the dedup junction. A file
+  // shared across repos resolves to a single content blob, so xref must
+  // surface the definition in every repo that contains that blob.
+  const definitionHashes = [...definitionFileIds]
+    .map((id) => {
+      const row = rowById.get(id);
+      return row ? String(row.content_hash) : null;
+    })
+    .filter((h): h is string => h !== null);
+  const dedupAttribution: XrefMatch[] = [];
+  if (definitionHashes.length > 0) {
+    const attribRows = await pg`
+      SELECT DISTINCT rf.content_hash, rf.file_path, rf.repo_id, r.name AS repo_name
+      FROM repo_files rf
+      JOIN repos r ON r.id = rf.repo_id
+      WHERE rf.content_hash = ANY(${definitionHashes})
+        AND rf.provider = ${provider}
+        AND rf.model = ${model}
+        AND rf.dimensions = ${dimensions}
+    `;
+    const seen = new Set(definitionMatches.map((m) => `${m.repoId}:${m.filePath}`));
+    const scoreByHash = new Map<string, number>();
+    for (const id of definitionFileIds) {
+      const row = rowById.get(id);
+      if (!row) continue;
+      const hash = String(row.content_hash);
+      const score = bm25Scores.get(String(id)) ?? 0;
+      const prev = scoreByHash.get(hash) ?? 0;
+      if (score > prev) scoreByHash.set(hash, score);
+    }
+    for (const r of attribRows as Array<Record<string, unknown>>) {
+      const key = `${Number(r.repo_id)}:${String(r.file_path)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupAttribution.push({
+        filePath: String(r.file_path),
+        repoName: String(r.repo_name),
+        repoId: Number(r.repo_id),
+        matchType: "definition",
+        score: scoreByHash.get(String(r.content_hash)) ?? 0,
+      });
+    }
+  }
+
   // 2. Follow import graph edges to find consumers
   const fileIdArray = [...definitionFileIds].map(Number);
   const consumers = await pg`
@@ -145,20 +199,26 @@ async function xrefPg(symbol: string): Promise<XrefMatch[]> {
   `;
   const crossEdgeMatches = buildConsumerMatches(crossEdges, 0.4);
 
-  return [...definitionMatches, ...consumerMatches, ...crossEdgeMatches];
+  return [...definitionMatches, ...dedupAttribution, ...consumerMatches, ...crossEdgeMatches];
 }
 
 // ---------------------------------------------------------------------------
 // SQLite xref
 // ---------------------------------------------------------------------------
 
-async function xrefSqlite(repoRoot: string, symbol: string): Promise<XrefMatch[]> {
+async function xrefSqlite(
+  repoRoot: string,
+  symbol: string,
+  provider: string,
+  model: string,
+  dimensions: number,
+): Promise<XrefMatch[]> {
   const db = await getSqlite(repoRoot);
 
   // 1. Search skeletons for symbol using BM25 (pre-filter to avoid full table scan)
   const skeletonRows = db
     .prepare(
-      `SELECT f.id, f.file_path, f.skeleton, f.repo_id, r.name as repo_name
+      `SELECT f.id, f.file_path, f.skeleton, f.repo_id, f.content_hash, r.name as repo_name
        FROM files f
        JOIN repos r ON f.repo_id = r.id
        WHERE f.skeleton IS NOT NULL
@@ -169,6 +229,7 @@ async function xrefSqlite(repoRoot: string, symbol: string): Promise<XrefMatch[]
     file_path: string;
     skeleton: string;
     repo_id: number;
+    content_hash: string;
     repo_name: string;
   }>;
 
@@ -189,6 +250,57 @@ async function xrefSqlite(repoRoot: string, symbol: string): Promise<XrefMatch[]
   );
 
   if (definitionFileIds.size === 0) return definitionMatches;
+
+  // 1b. Cross-repo attribution: fan out each definition match across every
+  // repo that holds the same content_hash via the dedup junction.
+  const definitionHashes = [...definitionFileIds]
+    .map((id) => {
+      const row = rowById.get(id);
+      return row ? String(row.content_hash) : null;
+    })
+    .filter((h): h is string => h !== null);
+  const dedupAttribution: XrefMatch[] = [];
+  if (definitionHashes.length > 0) {
+    const hashPlaceholders = definitionHashes.map(() => "?").join(",");
+    const attribRows = db
+      .prepare(
+        `SELECT DISTINCT rf.content_hash, rf.file_path, rf.repo_id, r.name AS repo_name
+         FROM repo_files rf
+         JOIN repos r ON r.id = rf.repo_id
+         WHERE rf.content_hash IN (${hashPlaceholders})
+           AND rf.provider = ?
+           AND rf.model = ?
+           AND rf.dimensions = ?`,
+      )
+      .all(...definitionHashes, provider, model, dimensions) as Array<{
+      content_hash: string;
+      file_path: string;
+      repo_id: number;
+      repo_name: string;
+    }>;
+    const seen = new Set(definitionMatches.map((m) => `${m.repoId}:${m.filePath}`));
+    const scoreByHash = new Map<string, number>();
+    for (const id of definitionFileIds) {
+      const row = rowById.get(id);
+      if (!row) continue;
+      const hash = String(row.content_hash);
+      const score = bm25Scores.get(String(id)) ?? 0;
+      const prev = scoreByHash.get(hash) ?? 0;
+      if (score > prev) scoreByHash.set(hash, score);
+    }
+    for (const r of attribRows) {
+      const key = `${r.repo_id}:${r.file_path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dedupAttribution.push({
+        filePath: r.file_path,
+        repoName: r.repo_name,
+        repoId: r.repo_id,
+        matchType: "definition",
+        score: scoreByHash.get(r.content_hash) ?? 0,
+      });
+    }
+  }
 
   // 2. Follow import graph edges to find consumers
   const fileIdArray = [...definitionFileIds].map(Number);
@@ -216,7 +328,7 @@ async function xrefSqlite(repoRoot: string, symbol: string): Promise<XrefMatch[]
     .all(...fileIdArray) as Array<Record<string, unknown>>;
   const crossEdgeMatches = buildConsumerMatches(crossEdges, 0.4);
 
-  return [...definitionMatches, ...consumerMatches, ...crossEdgeMatches];
+  return [...definitionMatches, ...dedupAttribution, ...consumerMatches, ...crossEdgeMatches];
 }
 
 // ---------------------------------------------------------------------------
