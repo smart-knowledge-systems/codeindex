@@ -138,7 +138,8 @@ Commands:
 Options:
   --path <dir>         Repo root (default: cwd)
   --read-only          Block write operations (init, reindex, update)
-  --version            Print version`;
+  --version            Print version
+  --llm                Print llm.txt-style usage doc for agents`;
 
 const WRITE_COMMANDS = new Set(["init", "reindex", "update", "install-hook"]);
 
@@ -185,6 +186,13 @@ async function main() {
     process.exit(0);
   }
 
+  // --llm: print llm.txt-style usage doc and exit
+  if (hasFlag(parsed, "llm") || parsed.command === "--llm") {
+    const llmDoc = await Bun.file(path.join(import.meta.dir, "../llm.txt")).text();
+    process.stdout.write(llmDoc);
+    process.exit(0);
+  }
+
   // Per-subcommand --help
   if (hasFlag(parsed, "help") && parsed.command && SUBCOMMAND_HELP[parsed.command]) {
     console.log(SUBCOMMAND_HELP[parsed.command]);
@@ -215,6 +223,7 @@ async function main() {
   const GLOBAL_FLAGS = [
     "help",
     "version",
+    "llm",
     "read-only",
     "json",
     "pretty",
@@ -709,7 +718,9 @@ async function main() {
         break;
 
       default:
-        console.error(`Unknown command: '${parsed.command}'. Run 'codeindex' for usage.`);
+        console.error(
+          `Unknown command: '${parsed.command}'. Run 'codeindex' for usage, or 'codeindex --llm' for the agent-oriented usage doc.`,
+        );
         process.exit(1);
     }
   } finally {

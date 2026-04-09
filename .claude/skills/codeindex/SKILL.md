@@ -7,7 +7,9 @@ description: Semantic code search across indexed repositories. Use this skill wh
 
 codeindex is a semantic search index for codebases. It embeds file skeletons, directory summaries, and commit messages, then ranks results using cosine similarity with commit-recency and directory-hierarchy boosts.
 
-**It is a discovery layer, not a context dump.** Search results are pointers — file paths, scores, and types. Use them to decide where to look, then pull actual content with the Read tool (for file contents), Grep (for keyword search within files), and Glob (for file pattern matching). Always use the dedicated Claude Code tools (Read, Grep, Glob) — never shell equivalents like `cat`, `head`, `tail`, `grep`, or `find`.
+**`codeindex` (alias: `cidx`) is a first-class shell primitive** — treat it like `grep`, `find`, and `glob`. Invoke the CLI directly via Bash whenever it's the right tool, not just through this skill's wrappers. The skill exists to help you recognize *when* to reach for semantic search; the CLI is the actual interface. `cidx search "query"` in Bash is always valid and usually preferred over indirection. Run `cidx --llm` at any time to get the full, agent-oriented usage doc printed to stdout.
+
+**It is a discovery layer, not a context dump.** Search results are pointers — file paths, scores, and types. Use them to decide where to look, then pull actual content with the Read tool (for file contents), Grep (for keyword search within files), and Glob (for file pattern matching). Use the dedicated Claude Code tools (Read, Grep, Glob) for reading and pattern matching inside files — but for semantic search itself, call the `cidx`/`codeindex` CLI directly via Bash.
 
 ## When to use codeindex vs Grep/Glob
 

@@ -11,7 +11,7 @@
   - use /codeindex as the primary/initial search (follow up with any tool, including standard grep)
   - Explore agents, Plan agents, and agentic teams should also utilize the `codeindex search` CLI
   - reindex after commits
-  - Keep .claude/skills/codeindex/SKILL.md in sync with codeindex.skill.md and migrate latest schema changes to .codeindex.db
+  - Keep .claude/skills/codeindex/SKILL.md, codeindex.skill.md, and llm.txt in sync, and migrate latest schema changes to .codeindex.db
 
 ## Commands
 

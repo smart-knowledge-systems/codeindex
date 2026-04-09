@@ -1,0 +1,186 @@
+# codeindex / cidx — llm.txt
+
+`codeindex` (alias: `cidx`) is a **first-class shell primitive for semantic code
+search**. Treat it like `grep`, `find`, and `glob` — a tool you reach for
+directly from the command line or from an agent shell. It is not a chatbot, not
+an AI wrapper, and not a service you call through an API key in code. It is
+pipe-friendly, exit-code clean, JSON-by-default, and composes with `jq`, `xargs`,
+`fzf`, and every other unix tool you already use.
+
+Mental model:
+- `grep "pattern"`         → find literal/regex matches in file content
+- `find . -name "*.ts"`    → find files by name/metadata
+- `cidx search "query"`    → find code by **meaning**
+
+If you don't know the right symbol, filename, or regex — but you know *what the
+code does* — use `cidx search`. Use it **before** broad grep/find sweeps.
+
+---
+
+## When to use codeindex vs grep/glob
+
+| Situation                                         | Tool                   |
+|---------------------------------------------------|------------------------|
+| You know a function/class/variable name           | `grep` / ripgrep       |
+| You know a file name or pattern                   | `find` / glob          |
+| You want to understand *where* something lives    | **`cidx search`**      |
+| Large/unfamiliar codebase, exploring blind        | **`cidx search`**      |
+| Search across multiple repos at once              | **`cidx search --scope all`** |
+| You already have paths and need file contents     | `cat` / your editor    |
+
+---
+
+## Search workflow — start coarse, drill in
+
+Escalate verbosity only as needed. Each step costs more tokens.
+
+```bash
+# 1. Discover relevant areas — paths + scores only
+cidx search "authentication middleware"
+
+# 2. Add directory-level summaries for context
+cidx search "authentication middleware" --include-summary
+
+# 3. Pull AST skeletons (imports, signatures)
+cidx search "authentication middleware" --include-skeleton
+
+# 4. Pull code snippets with line numbers
+cidx search "authentication middleware" --include-snippet
+
+# 5. Read the actual files with your editor / cat / bat
+# 6. Follow up with grep for keywords inside candidate files
+```
+
+Pipe into other tools:
+```bash
+cidx search "rate limiting" --format compact | cut -d: -f1 | sort -u
+cidx search "db connection pool" --format json | jq -r '.[].filePath'
+cidx search "parser" --top-n 5 --format compact | fzf
+```
+
+---
+
+## Search flags
+
+- `--min-score <f>`      Filter threshold (default 0.3). Raise to reduce noise.
+- `--top-n <n>`          Cap the number of results.
+- `--scope <s>`          `project` (default), `all`, or `repo1,repo2`.
+- `--lang <l>`           Filter by language: `ts,python,rust,go,java,c,cpp,cs`.
+- `--dir <d>`            Filter by directory prefix: `src/api,lib`.
+- `--since <t>`          Time filter: `30d`, `2w`, `3m`, or ISO date.
+- `--include-skeleton`   Attach AST skeletons.
+- `--include-summary`    Attach directory summaries.
+- `--include-snippet`    Attach source code snippets with line numbers.
+- `--explain`            Per-result score breakdown.
+- `--format <f>`         `json` (default), `pretty`, `compact` (`path:line:score`).
+- `--pretty`             Alias for `--format pretty`.
+
+---
+
+## Result shape (JSON, default)
+
+Each result:
+- `filePath`         — relative path (or commit hash for commit results)
+- `finalScore`       — overall relevance after boosting (higher is better)
+- `cosineSimilarity` — raw embedding similarity before boosts
+- `type`             — file extension (`.ts`, `.py`), `"dir"`, or `"commit"`
+- `inProject`        — `true` if from current repo, `false` if cross-repo
+- `repoId`           — present for cross-repo results
+- `lineStart`, `lineEnd`, `snippet` — present with `--include-snippet`
+
+Score interpretation:
+- `> 0.5`   — strong match
+- `0.3–0.5` — worth investigating
+- `< 0.3`   — filtered by default
+
+---
+
+## Other commands (condensed)
+
+```bash
+# Index management
+cidx reindex                    # Full reindex of current repo
+cidx update --files a.ts b.ts   # Incremental update (post-commit hook)
+cidx status [--cost]            # Index stats
+cidx install-hook               # Install git post-commit hook
+
+# Intent layer (directory-purpose map)
+cidx intent --out AGENTS.md
+cidx drift --threshold 0.3
+
+# Multi-repo (requires Postgres)
+cidx repo add /path/to/repo
+cidx repo list
+cidx repo status my-repo
+cidx repo remove my-repo
+
+# Cross-repo intelligence
+cidx xref UserDTO [--format json]
+cidx graph --format mermaid|dot|json
+
+# MCP server (for agent integration)
+cidx serve                      # stdio transport
+cidx serve --transport sse --port 3100
+cidx mcp-config                 # Print editor MCP config
+
+# Tuning
+cidx config                     # Show current config
+cidx config --gamma 0.15        # Set a scoring parameter
+
+# Diagnostics
+cidx doctor
+cidx check [--json]
+cidx manifest
+```
+
+Run `cidx --help <command>` for per-command details (e.g. `cidx --help search`).
+
+---
+
+## Scoring (for tuning)
+
+Hybrid semantic + BM25 keyword fusion with length normalization:
+
+```
+semanticScore = fileSim + alpha * commitBoost + beta * parentBoost - lengthPenalty
+finalScore    = (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
+```
+
+- BM25 operates on skeleton text for keyword-heavy queries.
+- Length normalization penalizes oversized skeletons (log-scale).
+- Directories get a child-to-parent boost when multiple children score highly.
+- Use `--explain` to see the breakdown.
+
+Tunables (via `cidx config --KEY VALUE`):
+- `--alpha`   Commit boost weight (default 0.15)
+- `--beta`    Parent directory boost weight (default 0.2)
+- `--gamma`   Child-to-parent boost weight (default 0.1)
+- `--decay`   Commit recency decay (default 0.2)
+- `--min-score` Global filter threshold (default 0.3)
+- `--parent-boost-multiplier` (default 0.3)
+
+---
+
+## Installing the Claude Code skill (optional)
+
+`--llm` output is sufficient on its own — an agent can use `cidx` without
+installing anything else. But if you're running Claude Code and want the
+skill auto-loaded with trigger descriptions, install `codeindex.skill.md`
+as a Claude Code skill:
+
+```bash
+mkdir -p ~/.claude/skills/codeindex
+
+# Option A — from a local clone of the codeindex repo:
+cp /path/to/codeindex/codeindex.skill.md ~/.claude/skills/codeindex/SKILL.md
+# or symlink so it stays fresh:
+ln -sf /path/to/codeindex/codeindex.skill.md ~/.claude/skills/codeindex/SKILL.md
+
+# Option B — from the public repo:
+curl -fsSL \
+  https://raw.githubusercontent.com/smart-knowledge-systems/codeindex/main/codeindex.skill.md \
+  -o ~/.claude/skills/codeindex/SKILL.md
+```
+
+The skill is optional. Agents that know about `--llm` can always self-serve
+by running `cidx --llm` at the start of a session.
