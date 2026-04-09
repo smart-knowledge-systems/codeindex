@@ -6,8 +6,8 @@
       "name": "code-index",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.78.0",
-        "@easier-idx/core": "^0.2.0",
-        "@easier-idx/embedding": "^0.2.0",
+        "@easier-idx/core": "^0.2.1",
+        "@easier-idx/embedding": "^0.2.1",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "ignore": "^7.0.5",
         "openai": "^6.27.0",
@@ -36,9 +36,9 @@
 
     "@easier-idx/clustering": ["@easier-idx/clustering@0.2.0", "", {}, "sha512-kkNE2lYIXyxzQs3iDol6QcTqz5OPgRhekorucNNCl74mHaCJGvbiR9PBW1lrWTjEoiEI0N3QSjAmyRqr3+BMuA=="],
 
-    "@easier-idx/core": ["@easier-idx/core@0.2.0", "", { "dependencies": { "@easier-idx/clustering": "0.2.0", "@easier-idx/logging": "0.1.0", "sqlite-vec": "^0.1.7" }, "optionalDependencies": { "better-sqlite3": "^11.10.0", "pg": "^8.16.3" } }, "sha512-68QXqGWoNJ4sJOwQiovfEO3EasnxUixtqUBN7Ch+aMS13NLbUeJOBhZ0T13O62KYCZnQjIau2oTHCRCetb12Bg=="],
+    "@easier-idx/core": ["@easier-idx/core@0.2.1", "", { "dependencies": { "@easier-idx/clustering": "0.2.0", "@easier-idx/logging": "0.1.0", "sqlite-vec": "^0.1.7" }, "optionalDependencies": { "better-sqlite3": "^11.10.0", "pg": "^8.16.3" } }, "sha512-riJWc5RYXQPUSTrGYFEWw34GUwYTN6uEiet2kypNXbiheul4Vhpsh5rM7p1j4zlef6LH1yoER8QP1j3dU+/gZA=="],
 
-    "@easier-idx/embedding": ["@easier-idx/embedding@0.2.0", "", { "dependencies": { "@easier-idx/core": "0.2.0", "@easier-idx/logging": "0.1.0" }, "optionalDependencies": { "openai": "^4.77.0" } }, "sha512-mtVA/Hm2MRbhcPZf9gToIF7aSQfMaCY631wYJGUB2Kj4EtGftCi1KTsJpYzhXYIBZlUJ3iE5/psbes1xhwXp9Q=="],
+    "@easier-idx/embedding": ["@easier-idx/embedding@0.2.1", "", { "dependencies": { "@easier-idx/core": "0.2.0", "@easier-idx/logging": "0.1.0" }, "optionalDependencies": { "openai": "^4.77.0" } }, "sha512-6jX0rJcqjP941TO7FvB6lh0RU/r2Rs7EAtwBpoDmbzlPJ8sVenANw4yPPlLCEBuVZuacQHoquesI3xz0AkgUpg=="],
 
     "@easier-idx/logging": ["@easier-idx/logging@0.1.0", "", {}, "sha512-pIdbbsx+1dt2GdCOgsH3hLVDclQnoYR7n/RW2lLtyJDWaUA+/01UAl0sZu+9FCOpr1wO0a/bT1OMJdyLM7cBjw=="],
 
@@ -544,6 +544,8 @@
 
     "@easier-idx/core/sqlite-vec": ["sqlite-vec@0.1.9", "", { "optionalDependencies": { "sqlite-vec-darwin-arm64": "0.1.9", "sqlite-vec-darwin-x64": "0.1.9", "sqlite-vec-linux-arm64": "0.1.9", "sqlite-vec-linux-x64": "0.1.9", "sqlite-vec-windows-x64": "0.1.9" } }, "sha512-L7XJWRIBNvR9O5+vh1FQ+IGkh/3D2AzVksW5gdtk28m78Hy8skFD0pqReKH1Yp0/BUKRGcffgKvyO/EON5JXpA=="],
 
+    "@easier-idx/embedding/@easier-idx/core": ["@easier-idx/core@0.2.0", "", { "dependencies": { "@easier-idx/clustering": "0.2.0", "@easier-idx/logging": "0.1.0", "sqlite-vec": "^0.1.7" }, "optionalDependencies": { "better-sqlite3": "^11.10.0", "pg": "^8.16.3" } }, "sha512-68QXqGWoNJ4sJOwQiovfEO3EasnxUixtqUBN7Ch+aMS13NLbUeJOBhZ0T13O62KYCZnQjIau2oTHCRCetb12Bg=="],
+
     "@easier-idx/embedding/openai": ["openai@4.104.0", "", { "dependencies": { "@types/node": "^18.11.18", "@types/node-fetch": "^2.6.4", "abort-controller": "^3.0.0", "agentkeepalive": "^4.2.1", "form-data-encoder": "1.7.2", "formdata-node": "^4.3.2", "node-fetch": "^2.6.7" }, "peerDependencies": { "ws": "^8.18.0", "zod": "^3.23.8" }, "optionalPeers": ["ws", "zod"], "bin": { "openai": "bin/cli" } }, "sha512-p99EFNsA/yX6UhVO93f5kJsDRLAg+CTA2RBqdHK4RtK8u5IJw32Hyb2dTGKbnnFmnuoBv5r7Z2CURI9sGZpSuA=="],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
@@ -566,6 +568,8 @@
 
     "@easier-idx/core/sqlite-vec/sqlite-vec-windows-x64": ["sqlite-vec-windows-x64@0.1.9", "", { "os": "win32", "cpu": "x64" }, "sha512-y3gEIyy/17bq2QFPQOWLE68TYWcRZkBQVA2XLrTPHNTOp55xJi/BBBmOm40tVMDMjtP+Elpk6UBUXdaq+46b0Q=="],
 
+    "@easier-idx/embedding/@easier-idx/core/sqlite-vec": ["sqlite-vec@0.1.9", "", { "optionalDependencies": { "sqlite-vec-darwin-arm64": "0.1.9", "sqlite-vec-darwin-x64": "0.1.9", "sqlite-vec-linux-arm64": "0.1.9", "sqlite-vec-linux-x64": "0.1.9", "sqlite-vec-windows-x64": "0.1.9" } }, "sha512-L7XJWRIBNvR9O5+vh1FQ+IGkh/3D2AzVksW5gdtk28m78Hy8skFD0pqReKH1Yp0/BUKRGcffgKvyO/EON5JXpA=="],
+
     "@easier-idx/embedding/openai/@types/node": ["@types/node@18.19.130", "", { "dependencies": { "undici-types": "~5.26.4" } }, "sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg=="],
 
     "@modelcontextprotocol/sdk/ajv/json-schema-traverse": ["json-schema-traverse@1.0.0", "", {}, "sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug=="],
@@ -573,6 +577,16 @@
     "ajv-formats/ajv/json-schema-traverse": ["json-schema-traverse@1.0.0", "", {}, "sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug=="],
 
     "form-data/mime-types/mime-db": ["mime-db@1.52.0", "", {}, "sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg=="],
+
+    "@easier-idx/embedding/@easier-idx/core/sqlite-vec/sqlite-vec-darwin-arm64": ["sqlite-vec-darwin-arm64@0.1.9", "", { "os": "darwin", "cpu": "arm64" }, "sha512-jSsZpE42OfBkGL/ItyJTVCUwl6o6Ka3U5rc4j+UBDIQzC1ulSSKMEhQLthsOnF/MdAf1MuAkYhkdKmmcjaIZQg=="],
+
+    "@easier-idx/embedding/@easier-idx/core/sqlite-vec/sqlite-vec-darwin-x64": ["sqlite-vec-darwin-x64@0.1.9", "", { "os": "darwin", "cpu": "x64" }, "sha512-KDlVyqQT7pnOhU1ymB9gs7dMbSoVmKHitT+k1/xkjarcX8bBqPxWrGlK/R+C5WmWkfvWwyq5FfXfiBYCBs6PlA=="],
+
+    "@easier-idx/embedding/@easier-idx/core/sqlite-vec/sqlite-vec-linux-arm64": ["sqlite-vec-linux-arm64@0.1.9", "", { "os": "linux", "cpu": "arm64" }, "sha512-5wXVJ9c9kR4CHm/wVqXb/R+XUHTdpZ4nWbPHlS+gc9qQFVHs92Km4bPnCKX4rtcPMzvNis+SIzMJR1SCEwpuUw=="],
+
+    "@easier-idx/embedding/@easier-idx/core/sqlite-vec/sqlite-vec-linux-x64": ["sqlite-vec-linux-x64@0.1.9", "", { "os": "linux", "cpu": "x64" }, "sha512-w3tCH8xK2finW8fQJ/m8uqKodXUZ9KAuAar2UIhz4BHILfpE0WM/MTGCRfa7RjYbrYim5Luk3guvMOGI7T7JQA=="],
+
+    "@easier-idx/embedding/@easier-idx/core/sqlite-vec/sqlite-vec-windows-x64": ["sqlite-vec-windows-x64@0.1.9", "", { "os": "win32", "cpu": "x64" }, "sha512-y3gEIyy/17bq2QFPQOWLE68TYWcRZkBQVA2XLrTPHNTOp55xJi/BBBmOm40tVMDMjtP+Elpk6UBUXdaq+46b0Q=="],
 
     "@easier-idx/embedding/openai/@types/node/undici-types": ["undici-types@5.26.5", "", {}, "sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA=="],
   }
