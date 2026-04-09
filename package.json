@@ -26,11 +26,10 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@easier-idx/core": "^0.2.1",
-    "@easier-idx/embedding": "^0.2.1",
+    "@easier-idx/embedding": "^0.2.2",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "ignore": "^7.0.5",
-    "openai": "^6.27.0",
-    "sqlite-vec": "^0.1.7-alpha.2",
+    "sqlite-vec": "^0.1.9",
     "tree-sitter-wasms": "0.1.13",
     "web-tree-sitter": "0.25.3"
   },
