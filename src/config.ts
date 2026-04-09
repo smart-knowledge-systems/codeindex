@@ -1,6 +1,12 @@
 import path from "path";
-import os from "os";
+import {
+  loadConfig as loadConfigCore,
+  getGlobalConfigPath as getGlobalConfigPathCore,
+  writeGlobalConfig as writeGlobalConfigCore,
+} from "@easier-idx/core/config";
 import type { CodeindexConfig } from "./search/types";
+
+const APP_NAME = "codeindex";
 
 const DEFAULTS: CodeindexConfig = {
   store: "pg",
@@ -56,50 +62,12 @@ const DEFAULTS: CodeindexConfig = {
   },
 };
 
-const GLOBAL_CONFIG_PATH = path.join(
-  process.env.HOME ?? os.homedir(),
-  ".config",
-  "codeindex",
-  "config.json",
-);
-const LOCAL_CONFIG_FILE = ".codeindex.json";
-
-async function loadJsonFile(filePath: string): Promise<Partial<CodeindexConfig>> {
-  try {
-    const file = Bun.file(filePath);
-    if (await file.exists()) {
-      return (await file.json()) as Partial<CodeindexConfig>;
-    }
-  } catch {
-    // ignore missing/invalid config
-  }
-  return {};
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function deepMerge(base: any, override: any): any {
-  return Object.keys(override).reduce(
-    (acc, key) => {
-      const val = override[key];
-      if (val !== undefined && val !== null && typeof val === "object" && !Array.isArray(val)) {
-        return { ...acc, [key]: deepMerge(acc[key] ?? {}, val) };
-      }
-      return val !== undefined ? { ...acc, [key]: val } : acc;
-    },
-    { ...base },
-  );
-}
-
+/**
+ * Load codeindex config by merging defaults → global (~/.config/codeindex/config.json)
+ * → local (.codeindex.json). Delegates to @easier-idx/core's generic loader.
+ */
 export async function loadConfig(repoRoot?: string): Promise<CodeindexConfig> {
-  const localPath = repoRoot ? path.join(repoRoot, LOCAL_CONFIG_FILE) : LOCAL_CONFIG_FILE;
-  const [global, local] = await Promise.all([
-    loadJsonFile(GLOBAL_CONFIG_PATH),
-    loadJsonFile(localPath),
-  ]);
-  return deepMerge(
-    deepMerge(DEFAULTS, global as Partial<CodeindexConfig>),
-    local as Partial<CodeindexConfig>,
-  );
+  return loadConfigCore<CodeindexConfig>(APP_NAME, DEFAULTS, repoRoot);
 }
 
 const FORMATTER_CHECKS: {
@@ -144,19 +112,15 @@ const FORMATTER_CHECKS: {
 ];
 
 export function getGlobalConfigPath(): string {
-  return GLOBAL_CONFIG_PATH;
+  return getGlobalConfigPathCore(APP_NAME);
 }
 
 export async function globalConfigExists(): Promise<boolean> {
-  return await Bun.file(GLOBAL_CONFIG_PATH).exists();
+  return await Bun.file(getGlobalConfigPath()).exists();
 }
 
 export async function writeGlobalConfig(config: Partial<CodeindexConfig>): Promise<string> {
-  const dir = path.dirname(GLOBAL_CONFIG_PATH);
-  const { mkdirSync } = await import("fs");
-  mkdirSync(dir, { recursive: true });
-  await Bun.write(GLOBAL_CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
-  return GLOBAL_CONFIG_PATH;
+  return writeGlobalConfigCore<CodeindexConfig>(APP_NAME, config);
 }
 
 export async function detectFormatter(repoRoot: string): Promise<string | null> {
