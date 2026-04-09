@@ -132,7 +132,7 @@ export async function cmdDoctor(repoRoot: string) {
 
   // 6. Ollama check (if configured)
   if (config && config.embedding.provider === "ollama") {
-    const { OllamaEmbeddingProvider } = await import("../index/providers/ollama");
+    const { OllamaEmbeddingProvider } = await import("@easier-idx/embedding/providers");
     const ollama = new OllamaEmbeddingProvider(
       config.embedding.model,
       config.embedding.dimensions,

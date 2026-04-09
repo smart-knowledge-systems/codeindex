@@ -25,6 +25,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@easier-idx/core": "^0.2.0",
+    "@easier-idx/embedding": "^0.2.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "ignore": "^7.0.5",
     "openai": "^6.27.0",
