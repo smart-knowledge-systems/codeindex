@@ -1,9 +1,10 @@
 import path from "path";
 import { createHash } from "crypto";
-import { embedSingle } from "./embedder";
+import { embedSingle } from "@easier-idx/embedding";
+import { getProvider } from "../embedding-provider";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
-import { serializeEmbedding } from "../db/util";
+import { serializeEmbedding } from "@easier-idx/core/db";
 import { loadConfig } from "../config";
 import { recordCost } from "../cost";
 import { generateSummary as anthropicGenerateSummary } from "./providers/anthropic";
@@ -187,7 +188,7 @@ async function processDirectory(
   // Embed the concat skeleton
   let concatEmbedding: number[] | null = null;
   if (concatSkeleton.length > 0 && !cacheHit) {
-    concatEmbedding = await embedSingle(concatSkeleton.slice(0, 4000));
+    concatEmbedding = await embedSingle(getProvider(config), concatSkeleton.slice(0, 4000));
   }
 
   // Generate summary (skip on cache hit)
@@ -202,7 +203,7 @@ async function processDirectory(
   // Embed the summary (skip on cache hit)
   let summaryEmbedding: number[] | null = null;
   if (summary && !cacheHit) {
-    summaryEmbedding = await embedSingle(summary);
+    summaryEmbedding = await embedSingle(getProvider(config), summary);
   }
 
   // Skip upsert entirely on cache hit — existing data is still valid
@@ -397,7 +398,7 @@ export async function updateAffectedDirectories(
   let allFilePaths: string[];
   if (config.store === "pg") {
     const allFiles = await pgUnsafe("SELECT file_path FROM files WHERE repo_id = $1", [repoId]);
-    allFilePaths = allFiles.map((r: { file_path: string }) => r.file_path);
+    allFilePaths = (allFiles as { file_path: string }[]).map((r) => r.file_path);
   } else {
     const db = await getSqlite(repoRoot);
     const allFiles = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
@@ -417,7 +418,7 @@ export async function updateAffectedDirectories(
       "SELECT dir_path, summary FROM directories WHERE repo_id = $1",
       [repoId],
     );
-    for (const d of existingDirs) {
+    for (const d of existingDirs as { dir_path: string; summary: string | null }[]) {
       if (!affectedDirs.has(d.dir_path) && d.summary) {
         summaryCache.set(d.dir_path, d.summary);
       }

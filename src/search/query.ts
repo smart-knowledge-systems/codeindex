@@ -1,5 +1,6 @@
 import { loadConfig } from "../config";
-import { embedSingle } from "../index/embedder";
+import { embedSingle } from "@easier-idx/embedding";
+import { getProvider } from "../embedding-provider";
 import { pgUnsafe } from "../db/pg";
 import { withRepoScope } from "../db/rls";
 import { getSqlite } from "../db/sqlite";
@@ -365,7 +366,7 @@ export async function search(
   if (cached) {
     queryEmbedding = cached;
   } else {
-    queryEmbedding = await embedSingle(effectiveQuery);
+    queryEmbedding = await embedSingle(getProvider(config), effectiveQuery);
     options?.embeddingCache?.set(effectiveQuery, queryEmbedding);
   }
   const resolved = await resolveRepoIds(repoRoot, resolvedOptions.scope, config);

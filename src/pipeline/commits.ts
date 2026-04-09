@@ -1,7 +1,8 @@
 import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
-import { serializeEmbedding } from "../db/util";
-import { embedSingle } from "../index/embedder";
+import { serializeEmbedding } from "@easier-idx/core/db";
+import { embedSingle } from "@easier-idx/embedding";
+import { getProvider } from "../embedding-provider";
 import { getFileCommits } from "../index/commits";
 import type { PipelineContext, IndexCommitsStage } from "./types";
 
@@ -56,7 +57,7 @@ export const indexCommits: IndexCommitsStage = async (
 
       if (!seenHashes.has(c.hash)) {
         if (!existingHashes.has(c.hash)) {
-          embedding = await embedSingle(c.message);
+          embedding = await embedSingle(getProvider(config), c.message);
         }
         seenHashes.add(c.hash);
       }

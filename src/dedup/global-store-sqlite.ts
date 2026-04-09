@@ -10,7 +10,7 @@ import path from "path";
 import os from "os";
 import { existsSync, mkdirSync } from "fs";
 import { applyGlobalSqliteMigrations, ensureGlobalSqliteVecTables } from "../db/migrate";
-import { serializeEmbedding, deserializeEmbedding } from "../db/util";
+import { serializeEmbedding, deserializeEmbedding } from "@easier-idx/core/db";
 import type { CodeindexConfig } from "../search/types";
 import type {
   GlobalDedupStore,

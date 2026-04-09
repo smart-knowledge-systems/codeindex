@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { search, searchChanged } from "../../search/query";
-import { embed } from "../../index/embedder";
+import { embed } from "@easier-idx/embedding";
+import { getProvider } from "../../embedding-provider";
+import { loadConfig } from "../../config";
 import { validateRepoScope } from "../auth";
 import { recordEvent } from "../../telemetry";
 import { logEvent, getSessionId } from "../../logging";
@@ -96,7 +98,7 @@ export function registerSearchTools(ctx: McpToolContext): void {
         const uncached = uniqueQueries.filter((q) => !embeddingCache.get(q));
 
         if (uncached.length > 0) {
-          const embeddings = await embed(uncached);
+          const embeddings = await embed(getProvider(await loadConfig(repoRoot)), uncached);
           if (embeddings.length < uncached.length) {
             logEvent({
               event: "infra.embedding.mismatch",

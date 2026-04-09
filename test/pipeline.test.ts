@@ -28,12 +28,15 @@ function fakeVector(seed: number): number[] {
   return Array.from({ length: EMBED_DIM }, (_, j) => ((seed + j) % 100) * 0.001);
 }
 
-mock.module("../src/index/embedder", () => ({
-  embed: async (texts: string | string[]) => {
+mock.module("@easier-idx/embedding", () => ({
+  embed: async (_provider: unknown, texts: string | string[]) => {
     const arr = Array.isArray(texts) ? texts : [texts];
     return arr.map((_, i) => fakeVector(i));
   },
-  embedSingle: async (_text: string) => fakeVector(0),
+  embedSingle: async (_provider: unknown, _text: string) => fakeVector(0),
+}));
+
+mock.module("../src/embedding-provider", () => ({
   getProvider: () => ({}),
   resetProvider: () => {},
 }));

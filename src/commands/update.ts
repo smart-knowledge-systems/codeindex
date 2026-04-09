@@ -2,12 +2,13 @@ import path from "path";
 import { loadConfig, detectFormatter } from "../config";
 import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
-import { serializeEmbedding } from "../db/util";
+import { serializeEmbedding } from "@easier-idx/core/db";
 import { getChangedFiles } from "../index/commits";
 import { updateAffectedDirectories } from "../index/directories";
 import { initParser } from "../index/skeleton";
+import { embedSingle } from "@easier-idx/embedding";
+import { getProvider } from "../embedding-provider";
 import { checkRepoVisibility } from "../index/public-repo";
-import { embedSingle } from "../index/embedder";
 import { setCurrentRepo } from "../cost";
 import { setCorrelationContext } from "../logging";
 import { ensureRepo, collectChangedFiles, getCommitMessage } from "./helpers";
@@ -111,7 +112,7 @@ export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: 
   if (commitHash) {
     const commitMsg = await getCommitMessage(repoRoot, commitHash);
     if (commitMsg) {
-      const commitEmbedding = await embedSingle(commitMsg);
+      const commitEmbedding = await embedSingle(getProvider(config), commitMsg);
       if (config.store === "pg") {
         const pg = await getPg();
         await pg.begin(async (tx) => {

@@ -27,7 +27,8 @@ import { stat } from "fs/promises";
 import { walkDependencies } from "../index/walker";
 import { INDEXABLE_EXTENSIONS, MAX_FILE_SIZE } from "../index/walker";
 import { extractSkeletonWithEntries } from "../index/skeleton";
-import { embed } from "../index/embedder";
+import { embed } from "@easier-idx/embedding";
+import { getProvider } from "../embedding-provider";
 import { treeHash } from "../dedup/tree-hash";
 import { logEvent } from "../logging";
 import type { PipelineContext } from "./types";
@@ -147,8 +148,8 @@ async function embedPackageMissedFiles(
   if (toEmbed.length === 0) return { reused, embedded: 0 };
 
   const vectors = await embed(
+    getProvider(ctx.config),
     toEmbed.map((t) => t.skeleton),
-    ctx.config,
   );
 
   let embedded = 0;

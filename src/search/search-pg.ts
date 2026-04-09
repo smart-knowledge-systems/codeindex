@@ -4,6 +4,7 @@
 
 import path from "path";
 import { withRepoScope } from "../db/rls";
+import type { PgTx } from "../db/pg";
 import type { SearchOptions, SearchResult, ScoringConfig } from "./types";
 import type { PgFileRow, PgDirRow, PgCommitRow, PgFileLinkRow, PgRepoRow } from "./types-internal";
 import { resolveLangExtensions, parseSince } from "./scope";
@@ -105,7 +106,7 @@ export function buildBlobFileQuery(args: {
 }
 
 export async function searchPgInTransaction(
-  pg: InstanceType<typeof import("bun").SQL>,
+  pg: PgTx,
   repoIds: number[],
   currentRepoId: number,
   queryEmbedding: number[],

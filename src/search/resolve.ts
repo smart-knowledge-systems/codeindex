@@ -45,7 +45,9 @@ export async function resolveRepoIds(
   config: Awaited<ReturnType<typeof loadConfig>>,
 ): Promise<{ repoIds: number[]; currentRepoId: number }> {
   if (config.store === "pg") {
-    const repos = (await pgUnsafe(`SELECT id, root_path, name FROM repos`)) as PgRepoRow[];
+    const repos = (await pgUnsafe(
+      `SELECT id, root_path, name FROM repos`,
+    )) as unknown as PgRepoRow[];
 
     const currentRepo = repos.find((r) => r.root_path === repoRoot);
     const currentRepoId = currentRepo ? parseInt(currentRepo.id) : -1;

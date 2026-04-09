@@ -4,7 +4,7 @@
 
 import path from "path";
 import { getSqlite } from "../db/sqlite";
-import { serializeEmbedding } from "../db/util";
+import { serializeEmbedding } from "@easier-idx/core/db";
 import type { SearchOptions, SearchResult, ScoringConfig } from "./types";
 import type {
   SqliteFileRow,

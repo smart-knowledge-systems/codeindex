@@ -35,15 +35,10 @@ interface ListRow {
 // Store abstraction — eliminates repeated pg/sqlite branching
 // ---------------------------------------------------------------------------
 
-export interface StoreOps {
-  query: <T>(sql: string, params?: unknown[]) => Promise<T[]>;
-  run: (sql: string, params?: unknown[]) => Promise<void>;
-}
+import type { StoreOps } from "@easier-idx/core";
+import { pgToSqlite } from "@easier-idx/core/db/store";
 
-/** Convert pg-style `$1, $2, ...` placeholders to sqlite-style `?`. */
-function pgToSqlite(sql: string): string {
-  return sql.replace(/\$\d+/g, "?");
-}
+export type { StoreOps };
 
 /**
  * Create a store-agnostic query interface based on configuration.

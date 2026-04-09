@@ -1,7 +1,7 @@
 import { loadConfig } from "./config";
 import { getPg } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
-import { buildIndex as buildBM25Index, score as scoreBM25 } from "@easier-idx/core/search/bm25";
+import { buildIndex as buildBM25Index, bm25Score as scoreBM25 } from "@easier-idx/core";
 
 // ---------------------------------------------------------------------------
 // Types

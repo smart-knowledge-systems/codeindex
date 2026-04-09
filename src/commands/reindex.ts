@@ -2,7 +2,7 @@ import path from "path";
 import { loadConfig, detectFormatter } from "../config";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
-import { getProvider } from "../index/embedder";
+import { getProvider } from "../embedding-provider";
 import { walkRepo, MAX_FILE_SIZE } from "../index/walker";
 import { initParser } from "../index/skeleton";
 import { setCurrentRepo, getProjectedCost } from "../cost";
