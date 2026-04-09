@@ -8,7 +8,7 @@ import { getScopedRepoIds } from "../auth/tokens";
 import { logEvent, getSessionId } from "../logging";
 import { recordEvent, hashQuery } from "../telemetry";
 import { rerank } from "./rerank";
-import { expandQuery } from "./query-expansion";
+import { expandQuery } from "@easier-idx/core";
 import { searchPg } from "./search-pg";
 import { searchSqlite } from "./search-sqlite";
 import { resolveRepoIds, resolveSearchOptions, resolveScoring } from "./resolve";

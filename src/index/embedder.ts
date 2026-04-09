@@ -1,8 +1,10 @@
-import type { EmbeddingProvider } from "./embedding-provider";
+import type { EmbeddingProvider } from "@easier-idx/embedding";
+import {
+  OpenAIEmbeddingProvider,
+  OllamaEmbeddingProvider,
+  RemoteEmbeddingProvider,
+} from "@easier-idx/embedding/providers";
 import type { CodeindexConfig } from "../search/types";
-import { OpenAIEmbeddingProvider } from "./providers/openai";
-import { OllamaEmbeddingProvider } from "./providers/ollama";
-import { RemoteEmbeddingProvider } from "./providers/remote";
 import { logEvent } from "../logging";
 
 const MAX_EMBED_CHARS = 4_000; // ~8000 tokens max; code averages ~2 tokens/char
