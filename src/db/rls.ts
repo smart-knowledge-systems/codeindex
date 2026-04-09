@@ -1,6 +1,5 @@
 import { getPg } from "./pg";
-
-type PgTransaction = import("bun").TransactionSQL;
+import type { PgTx } from "./pg";
 
 function assertIntegerIds(repoIds: number[]): void {
   for (const id of repoIds) {
@@ -18,7 +17,7 @@ function assertIntegerIds(repoIds: number[]): void {
  */
 export async function withRepoScope<T>(
   repoIds: number[],
-  fn: (tx: PgTransaction) => Promise<T>,
+  fn: (tx: PgTx) => Promise<T>,
 ): Promise<T> {
   if (process.env.CODEINDEX_RLS_DISABLED === "1") {
     const pg = await getPg();

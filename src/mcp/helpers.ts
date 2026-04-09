@@ -8,7 +8,7 @@ import { getCostSummary } from "../cost";
 import { CodeindexError, formatError } from "../errors";
 import type { AuthSession } from "./auth";
 import type { SearchResult } from "../search/types";
-import type { TransactionSQL } from "bun";
+import type { PgTx } from "../db/pg";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { EmbeddingCache } from "./cache";
 
@@ -74,7 +74,7 @@ async function fetchAllRepoIds(): Promise<number[]> {
  */
 export async function withMcpScope<T>(
   session: AuthSession | undefined,
-  fn: (tx: TransactionSQL) => Promise<T>,
+  fn: (tx: PgTx) => Promise<T>,
 ): Promise<T> {
   if (session?.repoIds) {
     return withRepoScope(session.repoIds, fn);
@@ -233,7 +233,7 @@ async function fetchRepoCounts(
       files: Number(fileCount[0].cnt),
       directories: Number(dirCount[0].cnt),
       commits: Number(commitCount[0].cnt),
-      lastIndexed: lastIndexed[0].last ?? null,
+      lastIndexed: (lastIndexed[0].last as string) ?? null,
     };
   }
 
@@ -277,7 +277,7 @@ async function fetchRepoRow(repoRoot: string, store: string): Promise<RepoRow> {
   if (store === "pg") {
     const repos = await pgUnsafe("SELECT * FROM repos WHERE root_path = $1", [repoRoot]);
     if (repos.length === 0) throw new Error("Not indexed yet. Run: codeindex reindex");
-    return repos[0] as RepoRow;
+    return repos[0] as unknown as RepoRow;
   }
   const db = await getSqlite(repoRoot);
   const repo = db.prepare("SELECT * FROM repos WHERE root_path = ?").get(repoRoot) as
@@ -394,7 +394,7 @@ export async function fetchHealthCounts(
     return {
       repoCount: repos.length,
       fileCount: Number(files[0].cnt),
-      lastReindexAt: lastIdx[0].last ?? null,
+      lastReindexAt: (lastIdx[0].last as string) ?? null,
     };
   }
   const db = await getSqlite(repoRoot);

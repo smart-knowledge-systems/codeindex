@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { SqliteDatabase } from "../db/sqlite";
 import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { logEvent } from "../logging";
@@ -38,7 +38,7 @@ async function prunePg(repoId: number, stalePaths: string[]): Promise<void> {
 /**
  * Delete stale files from SQLite within a transaction.
  */
-function pruneSqlite(db: Database, repoId: number, stalePaths: string[]): void {
+function pruneSqlite(db: SqliteDatabase, repoId: number, stalePaths: string[]): void {
   const selectId = db.prepare("SELECT id FROM files WHERE repo_id = ? AND file_path = ?");
   const delImports = db.prepare("DELETE FROM file_imports WHERE source_file_id = ?");
   const delEmbeddings = db.prepare("DELETE FROM file_embeddings WHERE file_id = ?");

@@ -1,6 +1,6 @@
 import { getPg } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
-import { serializeEmbedding } from "../db/util";
+import { serializeEmbedding } from "@easier-idx/core/db";
 import { resolveImport } from "../index/imports";
 import { logEvent } from "../logging";
 import type { PipelineContext, EmbeddedFile, StoreFilesStage } from "./types";

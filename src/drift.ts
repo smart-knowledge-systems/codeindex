@@ -1,10 +1,12 @@
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { loadConfig } from "./config";
-import { cosineSimilarity, deserializeEmbedding } from "./db/util";
+import { cosineSimilarity, deserializeEmbedding } from "@easier-idx/core/db";
 import { requireRepoId } from "./db/repo-lookup";
 import { pgUnsafe } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
-import { embed } from "./index/embedder";
+import { embed } from "@easier-idx/embedding";
+import type { EmbeddingProvider } from "@easier-idx/embedding";
+import { getProvider } from "./embedding-provider";
 import { logEvent } from "./logging";
 
 // ---------------------------------------------------------------------------
@@ -155,11 +157,17 @@ async function computeDriftResults(
   store: string,
   repoRoot: string,
   threshold: number,
+  provider: EmbeddingProvider,
 ): Promise<DriftResult[]> {
   // Batch embed all non-empty sections in a single API call
   const sectionsWithContent = sections.filter((s) => s.content.length > 0);
   const sectionEmbeddings =
-    sectionsWithContent.length > 0 ? await embed(sectionsWithContent.map((s) => s.content)) : [];
+    sectionsWithContent.length > 0
+      ? await embed(
+          provider,
+          sectionsWithContent.map((s) => s.content),
+        )
+      : [];
   const embeddingMap = buildEmbeddingMap(sectionsWithContent, sectionEmbeddings);
 
   // Batch-fetch all DB embeddings in one query instead of N+1
@@ -216,7 +224,14 @@ export async function detectDrift(
   const content = readFileSync(agentsMdPath, "utf-8");
   const sections = parseAgentsMd(content);
 
-  const results = await computeDriftResults(sections, repoId, store, repoRoot, effectiveThreshold);
+  const results = await computeDriftResults(
+    sections,
+    repoId,
+    store,
+    repoRoot,
+    effectiveThreshold,
+    getProvider(config),
+  );
 
   const staleCount = results.filter((r) => r.status === "stale").length;
   const missingCount = results.filter((r) => r.status === "missing").length;

@@ -28,6 +28,19 @@ function fakeVector(seed: number): number[] {
   return Array.from({ length: EMBED_DIM }, (_, j) => ((seed + j) % 100) * 0.001);
 }
 
+mock.module("@easier-idx/embedding", () => {
+  return {
+    embed: async (_provider: unknown, texts: string | string[]) => {
+      const arr = Array.isArray(texts) ? texts : [texts];
+      return arr.map((_, i) => fakeVector(i));
+    },
+    embedSingle: async (_provider: unknown, _text: string) => fakeVector(0),
+    getProvider: () => ({}),
+    resetProvider: () => {},
+  };
+});
+
+// Keep the old mock path for backward compat with any leftover direct imports
 mock.module("../src/index/embedder", () => ({
   embed: async (texts: string | string[]) => {
     const arr = Array.isArray(texts) ? texts : [texts];

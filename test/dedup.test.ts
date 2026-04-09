@@ -48,14 +48,17 @@ function fakeVector(seed: number): number[] {
   return Array.from({ length: EMBED_DIM }, (_, j) => ((seed + j) % 100) * 0.001);
 }
 
-mock.module("../src/index/embedder", () => ({
-  embed: async (texts: string | string[]) => {
+mock.module("@easier-idx/embedding", () => ({
+  embed: async (_provider: unknown, texts: string | string[]) => {
     const arr = Array.isArray(texts) ? texts : [texts];
     embedCallCount++;
     totalEmbeddings += arr.length;
     return arr.map((_, i) => fakeVector(i));
   },
   embedSingle: async () => fakeVector(0),
+}));
+
+mock.module("../src/embedding-provider", () => ({
   getProvider: () => ({}),
   resetProvider: () => {},
 }));

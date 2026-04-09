@@ -1,30 +1,16 @@
-import { Database } from "bun:sqlite";
-import * as sqliteVec from "sqlite-vec";
+import {
+  getSqlite as easierGetSqlite,
+  closeSqlite as easierCloseSqlite,
+} from "@easier-idx/core/db/sqlite";
+import type { SqliteDatabase } from "@easier-idx/core/db/sqlite";
 import { loadConfig } from "../config";
-import path from "path";
-import { existsSync } from "fs";
 
-// Use Homebrew SQLite on macOS if available (supports dynamic extensions)
-const HOMEBREW_SQLITE = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
-if (process.platform === "darwin" && existsSync(HOMEBREW_SQLITE)) {
-  Database.setCustomSQLite(HOMEBREW_SQLITE);
-}
-
-// Singleton — module-level mutable state for the database connection.
-// This is an intentional impure boundary; all database I/O flows through here.
-let _db: Database | null = null;
+export type { SqliteDatabase };
 
 /** @impure Opens (or returns cached) SQLite connection. */
-export async function getSqlite(repoRoot?: string): Promise<Database> {
-  if (_db) return _db;
+export async function getSqlite(repoRoot?: string): Promise<SqliteDatabase> {
   const config = await loadConfig(repoRoot);
-  const dbPath = path.isAbsolute(config.sqlite.path)
-    ? config.sqlite.path
-    : path.join(repoRoot ?? process.cwd(), config.sqlite.path);
-  _db = new Database(dbPath);
-  _db.exec("PRAGMA journal_mode=WAL");
-  sqliteVec.load(_db);
-  return _db;
+  return easierGetSqlite(config.sqlite, repoRoot);
 }
 
 export async function sqliteUnsafe(sql: string, params: unknown[] = []) {
@@ -35,8 +21,5 @@ export async function sqliteUnsafe(sql: string, params: unknown[] = []) {
 }
 
 export async function closeSqlite() {
-  if (_db) {
-    _db.close();
-    _db = null;
-  }
+  easierCloseSqlite();
 }

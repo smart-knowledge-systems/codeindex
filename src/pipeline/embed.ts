@@ -1,6 +1,7 @@
-import { embed } from "../index/embedder";
+import { embed } from "@easier-idx/embedding";
 import { logEvent } from "../logging";
 import { checkCostCap } from "../cost";
+import { getProvider } from "../embedding-provider";
 import type { PipelineContext, CollectedFile, EmbeddedFile, EmbedStage } from "./types";
 
 /**
@@ -44,8 +45,9 @@ async function checkAndLogCostCap(
 
 /**
  * Batch-embed the skeletons of all collected files.
+ * Partitions dedup-cache hits from misses so cached files skip the embedder entirely.
  * Checks the cost cap after embedding and sets costExceeded on the result.
- * Returns EmbeddedFile[] — one per input CollectedFile.
+ * Returns EmbeddedFile[] — one per input CollectedFile (failed embeds are dropped).
  */
 export const embedFiles: EmbedStage = async (
   ctx: PipelineContext,
@@ -79,8 +81,8 @@ export const embedFiles: EmbedStage = async (
   let skipped = 0;
   if (needEmbed.length > 0) {
     const embeddings = await embed(
+      getProvider(config),
       needEmbed.map((e) => e.file.skeleton),
-      config,
     );
 
     logEvent({
