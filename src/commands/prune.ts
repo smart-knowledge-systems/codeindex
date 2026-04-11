@@ -68,6 +68,8 @@ async function countOrphans(
     return Number(rows[0].count);
   };
 
+  const deadIds = deadRepos.map((r) => r.id);
+
   // Rows in tables that lack ON DELETE CASCADE from repos
   const files = await count(
     `SELECT COUNT(*) AS count FROM files WHERE repo_id NOT IN (SELECT id FROM repos)`,
@@ -86,12 +88,28 @@ async function countOrphans(
   const fileCommits = await count(
     `SELECT COUNT(*) AS count FROM file_commits WHERE file_id NOT IN (SELECT id FROM files) OR commit_id NOT IN (SELECT id FROM commits)`,
   );
-  const fileImports = await count(
+
+  // file_imports / cross_repo_edges that are already orphaned
+  let fileImports = await count(
     `SELECT COUNT(*) AS count FROM file_imports WHERE source_file_id NOT IN (SELECT id FROM files)`,
   );
-  const crossRepoEdges = await count(
+  let crossRepoEdges = await count(
     `SELECT COUNT(*) AS count FROM cross_repo_edges WHERE source_repo_id NOT IN (SELECT id FROM repos) OR target_repo_id NOT IN (SELECT id FROM repos)`,
   );
+
+  // Also count rows that will become orphaned after phase 1 removes dead repos.
+  // Without this, --dry-run undercounts because the parent rows still exist.
+  if (deadIds.length > 0) {
+    const idList = deadIds.join(",");
+    fileImports += await count(
+      `SELECT COUNT(*) AS count FROM file_imports
+       WHERE source_file_id IN (SELECT id FROM files WHERE repo_id IN (${idList}))`,
+    );
+    crossRepoEdges += await count(
+      `SELECT COUNT(*) AS count FROM cross_repo_edges
+       WHERE source_repo_id IN (${idList}) OR target_repo_id IN (${idList})`,
+    );
+  }
 
   return {
     repos: deadRepos.length,
@@ -126,6 +144,11 @@ async function deleteOrphans(
   }
 
   // Phase 2: sweep any remaining dangling rows (from prior partial deletes)
+  // NOTE: vec0 embedding tables (file_embeddings, dir_concat_embeddings,
+  // dir_summary_embeddings, commit_embeddings) are NOT swept here because
+  // sqlite-vec doesn't support NOT IN subqueries. Phase 1's repoRemove()
+  // handles embeddings for dead repos; stale rows from earlier partial
+  // deletes may accumulate in SQLite stores. See: TODO(prune-vec0-orphans)
   await ops.run(
     `DELETE FROM file_commits WHERE file_id NOT IN (SELECT id FROM files) OR commit_id NOT IN (SELECT id FROM commits)`,
   );
@@ -212,6 +235,7 @@ export async function cmdPrune(repoRoot: string, opts: CmdOptions = {}): Promise
 
   logEvent({
     event: "infra.prune.orphans",
+    dead_repo_names: deadRepos.map((r) => r.name),
     dead_repos: plan.repos,
     orphaned_files: plan.files,
     orphaned_commits: plan.commits,
