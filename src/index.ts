@@ -42,6 +42,7 @@ import { cmdDoctor } from "./commands/doctor";
 import { cmdGraph } from "./commands/graph";
 import { cmdMcpConfig } from "./commands/mcp-config";
 import { cmdDedupStats, cmdDedupGc } from "./commands/dedup";
+import { cmdPrune } from "./commands/prune";
 
 // ---------------------------------------------------------------------------
 // CLI dispatch
@@ -128,6 +129,9 @@ Commands:
   cache <sub>          Manage git clone cache
     list               Show cached repos
     clear              Evict cached repos
+  prune                Remove orphaned rows (dead repos, dangling FKs)
+    --dry-run          Show what would be deleted without deleting
+    --json             Emit machine-readable JSON
   dedup <sub>          Manage the global dedup store
     stats              Show blob/package counts and breakdowns
       --json           Emit machine-readable JSON
@@ -138,7 +142,8 @@ Commands:
 Options:
   --path <dir>         Repo root (default: cwd)
   --read-only          Block write operations (init, reindex, update)
-  --version            Print version`;
+  --version            Print version
+  --llm                Print llm.txt-style usage doc for agents`;
 
 const WRITE_COMMANDS = new Set(["init", "reindex", "update", "install-hook"]);
 
@@ -172,6 +177,8 @@ const SUBCOMMAND_HELP: Record<string, string> = {
     "Usage: codeindex config [--list | --key value ...]\n\nOptions:\n  --list                Show all config values with sources",
   export:
     "Usage: codeindex export [options]\n\nOptions:\n  --out <path>              Output path (default .codeindex.db)\n  --include-embeddings      Include embedding vectors (redacted by default)\n  --redact-commits          Exclude commit data from export\n  --exclude <globs>         Comma-separated glob patterns to exclude files",
+  prune:
+    "Usage: codeindex prune [options]\n\nRemove orphaned rows from the index: dead repos (root_path missing\nfrom disk), and dangling files/commits/directories that reference\nnon-existent repos.\n\nOptions:\n  --dry-run             Show what would be deleted without deleting\n  --json                Emit machine-readable JSON",
 };
 
 async function main() {
@@ -182,6 +189,13 @@ async function main() {
   if (hasFlag(parsed, "version")) {
     const pkg = await Bun.file(path.join(import.meta.dir, "../package.json")).json();
     console.log(pkg.version);
+    process.exit(0);
+  }
+
+  // --llm: print llm.txt-style usage doc and exit
+  if (hasFlag(parsed, "llm") || parsed.command === "--llm") {
+    const llmDoc = await Bun.file(path.join(import.meta.dir, "../llm.txt")).text();
+    process.stdout.write(llmDoc);
     process.exit(0);
   }
 
@@ -215,6 +229,7 @@ async function main() {
   const GLOBAL_FLAGS = [
     "help",
     "version",
+    "llm",
     "read-only",
     "json",
     "pretty",
@@ -682,6 +697,14 @@ async function main() {
         break;
       }
 
+      case "prune": {
+        await cmdPrune(repoRoot, {
+          json: hasFlag(parsed, "json"),
+          dryRun: hasFlag(parsed, "dry-run"),
+        });
+        break;
+      }
+
       case "dedup": {
         const sub = parsed.positional[0];
         switch (sub) {
@@ -709,7 +732,9 @@ async function main() {
         break;
 
       default:
-        console.error(`Unknown command: '${parsed.command}'. Run 'codeindex' for usage.`);
+        console.error(
+          `Unknown command: '${parsed.command}'. Run 'codeindex' for usage, or 'codeindex --llm' for the agent-oriented usage doc.`,
+        );
         process.exit(1);
     }
   } finally {

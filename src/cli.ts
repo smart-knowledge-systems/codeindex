@@ -87,9 +87,14 @@ export function hasFlag(parsed: ParsedArgs, name: string): boolean {
  */
 export function warnUnknownFlags(parsed: ParsedArgs, knownFlags: string[]): void {
   const known = new Set(knownFlags);
+  let warned = false;
   for (const key of Object.keys(parsed.flags)) {
     if (!known.has(key)) {
       console.error(`Warning: unknown flag --${key}`);
+      warned = true;
     }
+  }
+  if (warned) {
+    console.error(`Hint: run 'codeindex --llm' for the full agent-oriented usage doc.`);
   }
 }
