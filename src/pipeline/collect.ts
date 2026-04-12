@@ -26,6 +26,17 @@ async function processFile(
   ctx: PipelineContext,
   gitBlobOid?: string,
 ): Promise<CollectedFile | null> {
+  const ext = path.extname(file.relPath).toLowerCase() || ".txt";
+  // Git fast path: when a blob OID is available we use it directly as the
+  // content hash, skipping the formatter SHA-256. The blob OID is git's own
+  // content addressing — a value identical for byte-identical files across
+  // every clean repo on this machine.
+  const hash = gitBlobOid ?? (await formatAndHash(file.content, ctx.formatter)).hash;
+
+  // Skip if hash matches existing DB record (dedup) — checked before secret
+  // scanning so already-indexed files never pay the scan/override cost.
+  if (!ctx.force && existingHashes.get(file.relPath) === hash) return null;
+
   const scan = scanForSecrets(file.content);
   if (scan.hasSecrets) {
     if (ctx.repoVisibility === "public" && (await isPublishedContent(ctx.repoRoot, file.relPath))) {
@@ -48,16 +59,6 @@ async function processFile(
       return null;
     }
   }
-
-  const ext = path.extname(file.relPath).toLowerCase() || ".txt";
-  // Git fast path: when a blob OID is available we use it directly as the
-  // content hash, skipping the formatter SHA-256. The blob OID is git's own
-  // content addressing — a value identical for byte-identical files across
-  // every clean repo on this machine.
-  const hash = gitBlobOid ?? (await formatAndHash(file.content, ctx.formatter)).hash;
-
-  // Skip if hash matches existing DB record (dedup)
-  if (!ctx.force && existingHashes.get(file.relPath) === hash) return null;
 
   // Global dedup-store hit: reuse skeleton + embedding verbatim, no parse, no embed.
   const cached = await lookupGlobalBlob(ctx, hash);
