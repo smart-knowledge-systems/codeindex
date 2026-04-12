@@ -94,7 +94,7 @@ async function countOrphans(
     `SELECT COUNT(*) AS count FROM file_imports WHERE source_file_id NOT IN (SELECT id FROM files)`,
   );
   let crossRepoEdges = await count(
-    `SELECT COUNT(*) AS count FROM cross_repo_edges WHERE source_repo_id NOT IN (SELECT id FROM repos) OR target_repo_id NOT IN (SELECT id FROM repos)`,
+    `SELECT COUNT(*) AS count FROM cross_repo_edges WHERE source_repo_id NOT IN (SELECT id FROM repos) OR target_repo_id NOT IN (SELECT id FROM repos) OR source_file_id NOT IN (SELECT id FROM files)`,
   );
 
   // Also count rows that will become orphaned after phase 1 removes dead repos.
@@ -154,7 +154,7 @@ async function deleteOrphans(
   );
   await ops.run(`DELETE FROM file_imports WHERE source_file_id NOT IN (SELECT id FROM files)`);
   await ops.run(
-    `DELETE FROM cross_repo_edges WHERE source_repo_id NOT IN (SELECT id FROM repos) OR target_repo_id NOT IN (SELECT id FROM repos)`,
+    `DELETE FROM cross_repo_edges WHERE source_repo_id NOT IN (SELECT id FROM repos) OR target_repo_id NOT IN (SELECT id FROM repos) OR source_file_id NOT IN (SELECT id FROM files)`,
   );
   await ops.run(`DELETE FROM cost_events WHERE repo_id NOT IN (SELECT id FROM repos)`);
   await ops.run(`DELETE FROM files WHERE repo_id NOT IN (SELECT id FROM repos)`);
