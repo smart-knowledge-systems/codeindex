@@ -94,7 +94,7 @@ async function withSnippets(
   // Key by repo_id:file_path to avoid collisions across repos with identical relative paths
   const entriesMap = new Map<string, string>();
 
-  if (filePaths.length > 0) {
+  if (filePaths.length > 0 && resultRepoIds.length > 0) {
     if (config.store === "pg") {
       // Avoid ANY($n) with array params — Bun.SQL misserialises nested
       // arrays. Use IN-list for validated integer repo IDs, placeholders
