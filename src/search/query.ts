@@ -96,12 +96,20 @@ async function withSnippets(
 
   if (filePaths.length > 0) {
     if (config.store === "pg") {
+      // Avoid ANY($n) with array params — Bun.SQL misserialises nested
+      // arrays. Use IN-list for validated integer repo IDs, placeholders
+      // for file paths.
+      for (const id of resultRepoIds) {
+        if (typeof id !== "number" || !Number.isInteger(id))
+          throw new Error(`Invalid repo ID: ${String(id)}`);
+      }
+      const pathPh = filePaths.map((_, i) => `$${i + 1}`).join(",");
       const rows = await withRepoScope(resultRepoIds, async (tx) => {
         return (await tx.unsafe(
           `SELECT repo_id, file_path, skeleton_entries FROM files
-           WHERE repo_id = ANY($1)
-           AND file_path = ANY($2)`,
-          [resultRepoIds, filePaths],
+           WHERE repo_id IN (${resultRepoIds.join(",")})
+           AND file_path IN (${pathPh})`,
+          filePaths as never[],
         )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
       });
       for (const row of rows) {
