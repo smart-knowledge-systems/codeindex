@@ -94,8 +94,10 @@ async function withSnippets(
   // Key by repo_id:file_path to avoid collisions across repos with identical relative paths
   const entriesMap = new Map<string, string>();
 
-  if (filePaths.length > 0) {
+  if (filePaths.length > 0 && resultRepoIds.length > 0) {
     if (config.store === "pg") {
+      // Avoid ANY($n) with array params — Bun.SQL misserialises nested
+      // arrays. Use IN ($1,$2,...) with positional placeholders instead.
       const rows = await withRepoScope(resultRepoIds, async (tx) => {
         const repoPlaceholders = resultRepoIds.map((_, i) => `$${i + 1}`).join(",");
         const pathPlaceholders = filePaths

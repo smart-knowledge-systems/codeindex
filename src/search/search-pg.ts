@@ -196,6 +196,9 @@ export async function searchPgInTransaction(
     if (junctionRows.length > 0) {
       const repoIdArr = [...new Set(junctionRows.map((r) => parseInt(r.repo_id)))];
       const pathArr = [...new Set(junctionRows.map((r) => r.file_path))];
+      // Avoid ANY($n) with array params — Bun.SQL misserialises nested
+      // arrays, causing "number of array dimensions (N) exceeds maximum".
+      // Use IN ($1,$2,...) with positional placeholders instead.
       const repoPlaceholders = repoIdArr.map((_, i) => `$${i + 1}`).join(",");
       const pathPlaceholders = pathArr.map((_, i) => `$${repoIdArr.length + i + 1}`).join(",");
       const idRows = (await pg.unsafe(
