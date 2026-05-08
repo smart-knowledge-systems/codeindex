@@ -97,11 +97,15 @@ async function withSnippets(
   if (filePaths.length > 0) {
     if (config.store === "pg") {
       const rows = await withRepoScope(resultRepoIds, async (tx) => {
+        const repoPlaceholders = resultRepoIds.map((_, i) => `$${i + 1}`).join(",");
+        const pathPlaceholders = filePaths
+          .map((_, i) => `$${resultRepoIds.length + i + 1}`)
+          .join(",");
         return (await tx.unsafe(
           `SELECT repo_id, file_path, skeleton_entries FROM files
-           WHERE repo_id = ANY($1)
-           AND file_path = ANY($2)`,
-          [resultRepoIds, filePaths],
+           WHERE repo_id IN (${repoPlaceholders})
+           AND file_path IN (${pathPlaceholders})`,
+          [...resultRepoIds, ...filePaths],
         )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
       });
       for (const row of rows) {
