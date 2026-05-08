@@ -149,7 +149,7 @@ async function xrefPg(
       SELECT DISTINCT rf.content_hash, rf.file_path, rf.repo_id, r.name AS repo_name
       FROM repo_files rf
       JOIN repos r ON r.id = rf.repo_id
-      WHERE rf.content_hash = ANY(${definitionHashes})
+      WHERE rf.content_hash IN ${pg(definitionHashes)}
         AND rf.provider = ${provider}
         AND rf.model = ${model}
         AND rf.dimensions = ${dimensions}
@@ -185,7 +185,7 @@ async function xrefPg(
     FROM file_imports fi
     JOIN files f ON fi.source_file_id = f.id
     JOIN repos r ON f.repo_id = r.id
-    WHERE fi.resolved_file_id = ANY(${fileIdArray})
+    WHERE fi.resolved_file_id IN ${pg(fileIdArray)}
   `;
   const consumerMatches = buildConsumerMatches(consumers, 0.5);
 
@@ -195,7 +195,7 @@ async function xrefPg(
     FROM cross_repo_edges cre
     JOIN files f ON cre.source_file_id = f.id
     JOIN repos r ON f.repo_id = r.id
-    WHERE cre.target_file_id = ANY(${fileIdArray})
+    WHERE cre.target_file_id IN ${pg(fileIdArray)}
   `;
   const crossEdgeMatches = buildConsumerMatches(crossEdges, 0.4);
 

@@ -97,19 +97,17 @@ async function withSnippets(
   if (filePaths.length > 0 && resultRepoIds.length > 0) {
     if (config.store === "pg") {
       // Avoid ANY($n) with array params — Bun.SQL misserialises nested
-      // arrays. Use IN-list for validated integer repo IDs, placeholders
-      // for file paths.
-      for (const id of resultRepoIds) {
-        if (typeof id !== "number" || !Number.isInteger(id))
-          throw new Error(`Invalid repo ID: ${String(id)}`);
-      }
-      const pathPh = filePaths.map((_, i) => `$${i + 1}`).join(",");
+      // arrays. Use IN ($1,$2,...) with positional placeholders instead.
       const rows = await withRepoScope(resultRepoIds, async (tx) => {
+        const repoPlaceholders = resultRepoIds.map((_, i) => `$${i + 1}`).join(",");
+        const pathPlaceholders = filePaths
+          .map((_, i) => `$${resultRepoIds.length + i + 1}`)
+          .join(",");
         return (await tx.unsafe(
           `SELECT repo_id, file_path, skeleton_entries FROM files
-           WHERE repo_id IN (${resultRepoIds.join(",")})
-           AND file_path IN (${pathPh})`,
-          filePaths as never[],
+           WHERE repo_id IN (${repoPlaceholders})
+           AND file_path IN (${pathPlaceholders})`,
+          [...resultRepoIds, ...filePaths],
         )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
       });
       for (const row of rows) {
@@ -228,12 +226,11 @@ async function withCrossRepoEdges(
     let edgeQuery = `SELECT DISTINCT source_repo_id, target_repo_id FROM cross_repo_edges`;
     const edgeParams: unknown[] = [];
     if (scopedRepoIds !== null && scopedRepoIds.length > 0) {
+      // Reuse the same $1..$N placeholders for both IN clauses (PG's wire
+      // protocol allows it) so we only bind the repo-id list once.
       const placeholders = scopedRepoIds.map((_, i) => `$${i + 1}`).join(",");
-      const placeholders2 = scopedRepoIds
-        .map((_, i) => `$${i + 1 + scopedRepoIds.length}`)
-        .join(",");
-      edgeQuery += ` WHERE (source_repo_id IN (${placeholders}) OR target_repo_id IN (${placeholders2}))`;
-      edgeParams.push(...scopedRepoIds, ...scopedRepoIds);
+      edgeQuery += ` WHERE (source_repo_id IN (${placeholders}) OR target_repo_id IN (${placeholders}))`;
+      edgeParams.push(...scopedRepoIds);
     }
     const allEdges = await withRepoScope(edgeRepoIds, async (tx) => {
       return (await tx.unsafe(edgeQuery, edgeParams)) as {

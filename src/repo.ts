@@ -1,7 +1,7 @@
 import path from "path";
 import { existsSync } from "fs";
 import { loadConfig } from "./config";
-import { getPg, pgUnsafe } from "./db/pg";
+import { getPg } from "./db/pg";
 import { getSqlite } from "./db/sqlite";
 import { ensurePgSchema, ensureSqliteSchema } from "./db/schema";
 import { getRepoOrigin, getRepoName } from "./index/commits";
@@ -36,7 +36,7 @@ interface ListRow {
 // ---------------------------------------------------------------------------
 
 import type { StoreOps } from "@easier-idx/core";
-import { pgToSqlite } from "@easier-idx/core/db/store";
+import { createPgStoreOps, createSqliteStoreOps } from "@easier-idx/core/db/store";
 
 export type { StoreOps };
 
@@ -49,29 +49,12 @@ export async function getStoreOps(repoRoot: string): Promise<{ store: string; op
   const config = await loadConfig(repoRoot);
 
   if (config.store === "pg") {
-    return {
-      store: "pg",
-      ops: {
-        query: async <T>(sql: string, params?: unknown[]) => (await pgUnsafe(sql, params)) as T[],
-        run: async (sql: string, params?: unknown[]) => {
-          await pgUnsafe(sql, params);
-        },
-      },
-    };
+    const pg = await getPg();
+    return { store: "pg", ops: createPgStoreOps(pg) };
   }
 
   const db = await getSqlite(repoRoot);
-  type SqlBindings = (string | number | bigint | boolean | null | Uint8Array)[];
-  return {
-    store: "sqlite",
-    ops: {
-      query: async <T>(sql: string, params?: unknown[]) =>
-        db.prepare(pgToSqlite(sql)).all(...((params ?? []) as SqlBindings)) as T[],
-      run: async (sql: string, params?: unknown[]) => {
-        db.prepare(pgToSqlite(sql)).run(...((params ?? []) as SqlBindings));
-      },
-    },
-  };
+  return { store: "sqlite", ops: createSqliteStoreOps(db) };
 }
 
 // ---------------------------------------------------------------------------

@@ -198,17 +198,13 @@ export async function searchPgInTransaction(
       const pathArr = [...new Set(junctionRows.map((r) => r.file_path))];
       // Avoid ANY($n) with array params — Bun.SQL misserialises nested
       // arrays, causing "number of array dimensions (N) exceeds maximum".
-      // Use IN-list interpolation for validated integer repo IDs and
-      // parameterised placeholders for file paths instead.
-      for (const id of repoIdArr) {
-        if (typeof id !== "number" || !Number.isInteger(id))
-          throw new Error(`Invalid repo ID: ${String(id)}`);
-      }
-      const pathPlaceholders = pathArr.map((_, i) => `$${i + 1}`).join(",");
+      // Use IN ($1,$2,...) with positional placeholders instead.
+      const repoPlaceholders = repoIdArr.map((_, i) => `$${i + 1}`).join(",");
+      const pathPlaceholders = pathArr.map((_, i) => `$${repoIdArr.length + i + 1}`).join(",");
       const idRows = (await pg.unsafe(
         `SELECT id, repo_id, file_path FROM files
-         WHERE repo_id IN (${repoIdArr.join(",")}) AND file_path IN (${pathPlaceholders})`,
-        pathArr as never[],
+         WHERE repo_id IN (${repoPlaceholders}) AND file_path IN (${pathPlaceholders})`,
+        [...repoIdArr, ...pathArr] as never[],
       )) as { id: string; repo_id: string; file_path: string }[];
       for (const r of idRows) {
         idMap.set(`${r.repo_id}:${r.file_path}`, r.id);

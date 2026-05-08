@@ -146,9 +146,18 @@ export function registerFileTools(ctx: McpToolContext): void {
       const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
-        const repoFilter = scopedRepoIds ? `AND nf.repo_id = ANY($4::int[])` : "";
+        // Bun 1.3.13's bun:sql cannot encode JS arrays for ANY($N) on PG18
+        // (Bun PR #29552); expand into numbered IN placeholders instead.
+        // An empty scoped list is a valid "no access" signal — preserve the
+        // original ANY-on-empty semantics by short-circuiting to no rows.
+        if (scopedRepoIds && scopedRepoIds.length === 0) return mcpSuccess([]);
         const params: unknown[] = [repoRoot, filePath, depth];
-        if (scopedRepoIds) params.push(scopedRepoIds);
+        let repoFilter = "";
+        if (scopedRepoIds) {
+          const placeholders = scopedRepoIds.map((_, i) => `$${params.length + i + 1}`).join(",");
+          repoFilter = `AND nf.repo_id IN (${placeholders})`;
+          params.push(...scopedRepoIds);
+        }
         const query =
           dir === "dependencies"
             ? `WITH RECURSIVE chain AS (
@@ -265,8 +274,16 @@ export function registerFileTools(ctx: McpToolContext): void {
       const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
-        const query = scopedRepoIds
-          ? `SELECT sr.name AS source_repo, tr.name AS target_repo,
+        // Bun 1.3.13's bun:sql cannot encode JS arrays for ANY($N) on PG18
+        // (Bun PR #29552); expand into numbered IN placeholders instead.
+        // An empty scoped list is a valid "no access" signal — preserve the
+        // original ANY-on-empty semantics by short-circuiting to no rows.
+        if (scopedRepoIds && scopedRepoIds.length === 0) return mcpSuccess([]);
+        let query: string;
+        let params: unknown[];
+        if (scopedRepoIds) {
+          const placeholders = scopedRepoIds.map((_, i) => `$${i + 1}`).join(",");
+          query = `SELECT sr.name AS source_repo, tr.name AS target_repo,
                     sf.file_path AS source_file, tf.file_path AS target_file,
                     e.imported_module
              FROM cross_repo_edges e
@@ -274,9 +291,11 @@ export function registerFileTools(ctx: McpToolContext): void {
              JOIN repos tr ON tr.id = e.target_repo_id
              JOIN files sf ON sf.id = e.source_file_id
              JOIN files tf ON tf.id = e.target_file_id
-             WHERE (e.source_repo_id = ANY($1::int[]) OR e.target_repo_id = ANY($1::int[]))
-             ORDER BY sr.name, tr.name`
-          : `SELECT sr.name AS source_repo, tr.name AS target_repo,
+             WHERE (e.source_repo_id IN (${placeholders}) OR e.target_repo_id IN (${placeholders}))
+             ORDER BY sr.name, tr.name`;
+          params = [...scopedRepoIds];
+        } else {
+          query = `SELECT sr.name AS source_repo, tr.name AS target_repo,
                     sf.file_path AS source_file, tf.file_path AS target_file,
                     e.imported_module
              FROM cross_repo_edges e
@@ -285,7 +304,8 @@ export function registerFileTools(ctx: McpToolContext): void {
              JOIN files sf ON sf.id = e.source_file_id
              JOIN files tf ON tf.id = e.target_file_id
              ORDER BY sr.name, tr.name`;
-        const params = scopedRepoIds ? [scopedRepoIds] : [];
+          params = [];
+        }
         const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
         return mcpSuccess(rows);
       } else {
@@ -352,23 +372,34 @@ export function registerFileTools(ctx: McpToolContext): void {
       const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
-        const query = scopedRepoIds
-          ? `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
+        // Bun 1.3.13's bun:sql cannot encode JS arrays for ANY($N) on PG18
+        // (Bun PR #29552); expand into numbered IN placeholders instead.
+        // An empty scoped list is a valid "no access" signal — preserve the
+        // original ANY-on-empty semantics by short-circuiting to no rows.
+        if (scopedRepoIds && scopedRepoIds.length === 0) return mcpSuccess([]);
+        let query: string;
+        let params: unknown[];
+        if (scopedRepoIds) {
+          const placeholders = scopedRepoIds.map((_, i) => `$${i + 2}`).join(",");
+          query = `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
              FROM files f
              JOIN repos r ON r.id = f.repo_id
              WHERE f.skeleton LIKE $1 ESCAPE '\\'
                AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
                     OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
-               AND r.id = ANY($2::int[])
-             LIMIT 100`
-          : `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
+               AND r.id IN (${placeholders})
+             LIMIT 100`;
+          params = [pattern, ...scopedRepoIds];
+        } else {
+          query = `SELECT f.file_path, f.skeleton_entries, r.name AS repo_name
              FROM files f
              JOIN repos r ON r.id = f.repo_id
              WHERE f.skeleton LIKE $1 ESCAPE '\\'
                AND (f.skeleton LIKE '%implements%' OR f.skeleton LIKE '%extends%'
                     OR f.skeleton LIKE '%: %' OR f.skeleton LIKE '%conform%')
              LIMIT 100`;
-        const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
+          params = [pattern];
+        }
         const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
         return mcpSuccess(rows);
       } else {
@@ -420,23 +451,34 @@ export function registerFileTools(ctx: McpToolContext): void {
       const scopedRepoIds = session?.repoIds ?? null;
 
       if (config.store === "pg") {
-        const query = scopedRepoIds
-          ? `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
+        // Bun 1.3.13's bun:sql cannot encode JS arrays for ANY($N) on PG18
+        // (Bun PR #29552); expand into numbered IN placeholders instead.
+        // An empty scoped list is a valid "no access" signal — preserve the
+        // original ANY-on-empty semantics by short-circuiting to no rows.
+        if (scopedRepoIds && scopedRepoIds.length === 0) return mcpSuccess([]);
+        let query: string;
+        let params: unknown[];
+        if (scopedRepoIds) {
+          const placeholders = scopedRepoIds.map((_, i) => `$${i + 2}`).join(",");
+          query = `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              JOIN repos r ON r.id = sf.repo_id
              WHERE fi.imported_module LIKE $1 ESCAPE '\\'
-               AND r.id = ANY($2::int[])
+               AND r.id IN (${placeholders})
              ORDER BY r.name, sf.file_path
-             LIMIT 100`
-          : `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
+             LIMIT 100`;
+          params = [pattern, ...scopedRepoIds];
+        } else {
+          query = `SELECT DISTINCT sf.file_path, r.name AS repo_name, fi.imported_module
              FROM file_imports fi
              JOIN files sf ON sf.id = fi.source_file_id
              JOIN repos r ON r.id = sf.repo_id
              WHERE fi.imported_module LIKE $1 ESCAPE '\\'
              ORDER BY r.name, sf.file_path
              LIMIT 100`;
-        const params = scopedRepoIds ? [pattern, scopedRepoIds] : [pattern];
+          params = [pattern];
+        }
         const rows = await withMcpScope(session, async (tx) => tx.unsafe(query, params));
         return mcpSuccess(rows);
       } else {

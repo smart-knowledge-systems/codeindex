@@ -12,6 +12,7 @@
  */
 
 import { getPg } from "../db/pg";
+import type { PgTx } from "../db/pg";
 import { applyGlobalPgMigrations } from "../db/migrate";
 import type { CodeindexConfig } from "../search/types";
 import type {
@@ -64,12 +65,13 @@ class PgGlobalStore implements GlobalDedupStore {
     const result = new Map<string, BlobRecord>();
     if (hashes.length === 0) return result;
     const pg = await getPg();
+    const hashPlaceholders = hashes.map((_, i) => `$${i + 4}`).join(",");
     const rows = (await pg.unsafe(
       `SELECT content_hash, skeleton, skeleton_entries, embedding::text AS embedding
        FROM file_blobs
        WHERE provider = $1 AND model = $2 AND dimensions = $3
-         AND content_hash = ANY($4::text[])`,
-      [provider, model, dimensions, hashes],
+         AND content_hash IN (${hashPlaceholders})`,
+      [provider, model, dimensions, ...hashes],
     )) as Array<{
       content_hash: string;
       skeleton: string | null;
@@ -250,10 +252,11 @@ class PgGlobalStore implements GlobalDedupStore {
       }>;
       return rows.map((r) => r.content_hash);
     }
+    const placeholders = excludePackageIds.map((_, i) => `$${i + 1}`).join(",");
     const rows = (await pg.unsafe(
       `SELECT DISTINCT content_hash FROM package_files
-       WHERE NOT (package_id = ANY($1::int[]))`,
-      [excludePackageIds],
+       WHERE package_id NOT IN (${placeholders})`,
+      [...excludePackageIds],
     )) as Array<{ content_hash: string }>;
     return rows.map((r) => r.content_hash);
   }
@@ -261,7 +264,8 @@ class PgGlobalStore implements GlobalDedupStore {
   async deletePackages(packageIds: number[]): Promise<void> {
     if (packageIds.length === 0) return;
     const pg = await getPg();
-    await pg.unsafe(`DELETE FROM packages WHERE id = ANY($1::int[])`, [packageIds]);
+    const placeholders = packageIds.map((_, i) => `$${i + 1}`).join(",");
+    await pg.unsafe(`DELETE FROM packages WHERE id IN (${placeholders})`, [...packageIds]);
   }
 
   async countBlobsExcept(liveHashes: Set<string>): Promise<number> {
@@ -283,19 +287,24 @@ class PgGlobalStore implements GlobalDedupStore {
       )) as Array<{ n: number }>;
       return rows[0]?.n ?? 0;
     }
-    const rows = (await pg.unsafe(
-      `SELECT COUNT(*)::int AS n FROM file_blobs fb
-       WHERE NOT (fb.content_hash = ANY($1::text[]))
-         AND NOT EXISTS (
-           SELECT 1 FROM repo_files rf
-           WHERE rf.content_hash = fb.content_hash
-             AND rf.provider     = fb.provider
-             AND rf.model        = fb.model
-             AND rf.dimensions   = fb.dimensions
-         )`,
-      [Array.from(liveHashes)],
-    )) as Array<{ n: number }>;
-    return rows[0]?.n ?? 0;
+    // Spreading every live hash into its own bind would risk PG's 65535
+    // parameter cap on large dedup sets; load them into a temp table in
+    // chunks instead so the filter scales independently of |liveHashes|.
+    return pg.begin(async (tx) => {
+      await loadLiveHashesIntoTempTable(tx, liveHashes);
+      const rows = (await tx.unsafe(
+        `SELECT COUNT(*)::int AS n FROM file_blobs fb
+         WHERE NOT EXISTS (SELECT 1 FROM _live_hashes WHERE h = fb.content_hash)
+           AND NOT EXISTS (
+             SELECT 1 FROM repo_files rf
+             WHERE rf.content_hash = fb.content_hash
+               AND rf.provider     = fb.provider
+               AND rf.model        = fb.model
+               AND rf.dimensions   = fb.dimensions
+           )`,
+      )) as Array<{ n: number }>;
+      return rows[0]?.n ?? 0;
+    });
   }
 
   async deleteBlobsExcept(liveHashes: Set<string>): Promise<number> {
@@ -314,20 +323,22 @@ class PgGlobalStore implements GlobalDedupStore {
       )) as Array<{ content_hash: string }>;
       return rows.length;
     }
-    const rows = (await pg.unsafe(
-      `DELETE FROM file_blobs fb
-       WHERE NOT (fb.content_hash = ANY($1::text[]))
-         AND NOT EXISTS (
-           SELECT 1 FROM repo_files rf
-           WHERE rf.content_hash = fb.content_hash
-             AND rf.provider     = fb.provider
-             AND rf.model        = fb.model
-             AND rf.dimensions   = fb.dimensions
-         )
-       RETURNING content_hash`,
-      [Array.from(liveHashes)],
-    )) as Array<{ content_hash: string }>;
-    return rows.length;
+    return pg.begin(async (tx) => {
+      await loadLiveHashesIntoTempTable(tx, liveHashes);
+      const rows = (await tx.unsafe(
+        `DELETE FROM file_blobs fb
+         WHERE NOT EXISTS (SELECT 1 FROM _live_hashes WHERE h = fb.content_hash)
+           AND NOT EXISTS (
+             SELECT 1 FROM repo_files rf
+             WHERE rf.content_hash = fb.content_hash
+               AND rf.provider     = fb.provider
+               AND rf.model        = fb.model
+               AND rf.dimensions   = fb.dimensions
+           )
+         RETURNING content_hash`,
+      )) as Array<{ content_hash: string }>;
+      return rows.length;
+    });
   }
 
   async sweepOrphanedBlobs(opts: { dryRun: boolean }): Promise<number | null> {
@@ -366,6 +377,24 @@ class PgGlobalStore implements GlobalDedupStore {
 
   async close(): Promise<void> {
     // Connection pool is shared with per-repo pg ops; closing is the caller's job.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Temp-table loader for large hash filters
+// ---------------------------------------------------------------------------
+
+// 5000 rows per insert leaves comfortable headroom under PG's 65535
+// bind-parameter ceiling without causing many round-trips for typical sets.
+const HASH_INSERT_CHUNK = 5000;
+
+async function loadLiveHashesIntoTempTable(tx: PgTx, liveHashes: Set<string>): Promise<void> {
+  await tx.unsafe(`CREATE TEMP TABLE _live_hashes (h text PRIMARY KEY) ON COMMIT DROP`);
+  const liveArr = Array.from(liveHashes);
+  for (let i = 0; i < liveArr.length; i += HASH_INSERT_CHUNK) {
+    const slice = liveArr.slice(i, i + HASH_INSERT_CHUNK);
+    const placeholders = slice.map((_, j) => `($${j + 1})`).join(",");
+    await tx.unsafe(`INSERT INTO _live_hashes (h) VALUES ${placeholders}`, slice);
   }
 }
 
