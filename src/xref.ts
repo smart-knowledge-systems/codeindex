@@ -99,6 +99,13 @@ async function xrefPg(
   dimensions: number,
 ): Promise<XrefMatch[]> {
   const pg = await getPg();
+  // Bun 1.3.13's bun:sql encodes JS arrays via Array.prototype.toString,
+  // which Postgres 18 rejects for ANY($N). Use Bun's SQL value helper
+  // (`sql(arr)`) to expand arrays into individual placeholders. The
+  // PgClient type from @easier-idx/core only exposes the tagged-template
+  // signature, so cast to access the value-helper call signature
+  // (documented in bun-types/sql.d.ts). Track upstream Bun PR #29552.
+  const sql = pg as unknown as <T>(value: T) => unknown;
 
   // 1. Search skeletons for symbol using BM25 (pre-filter to avoid full table scan)
   const skeletonRows = await pg`
@@ -149,7 +156,7 @@ async function xrefPg(
       SELECT DISTINCT rf.content_hash, rf.file_path, rf.repo_id, r.name AS repo_name
       FROM repo_files rf
       JOIN repos r ON r.id = rf.repo_id
-      WHERE rf.content_hash = ANY(${definitionHashes})
+      WHERE rf.content_hash IN ${sql(definitionHashes)}
         AND rf.provider = ${provider}
         AND rf.model = ${model}
         AND rf.dimensions = ${dimensions}
@@ -185,7 +192,7 @@ async function xrefPg(
     FROM file_imports fi
     JOIN files f ON fi.source_file_id = f.id
     JOIN repos r ON f.repo_id = r.id
-    WHERE fi.resolved_file_id = ANY(${fileIdArray})
+    WHERE fi.resolved_file_id IN ${sql(fileIdArray)}
   `;
   const consumerMatches = buildConsumerMatches(consumers, 0.5);
 
@@ -195,7 +202,7 @@ async function xrefPg(
     FROM cross_repo_edges cre
     JOIN files f ON cre.source_file_id = f.id
     JOIN repos r ON f.repo_id = r.id
-    WHERE cre.target_file_id = ANY(${fileIdArray})
+    WHERE cre.target_file_id IN ${sql(fileIdArray)}
   `;
   const crossEdgeMatches = buildConsumerMatches(crossEdges, 0.4);
 
