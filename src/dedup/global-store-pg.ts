@@ -12,6 +12,7 @@
  */
 
 import { getPg } from "../db/pg";
+import type { PgTx } from "../db/pg";
 import { applyGlobalPgMigrations } from "../db/migrate";
 import type { CodeindexConfig } from "../search/types";
 import type {
@@ -286,21 +287,24 @@ class PgGlobalStore implements GlobalDedupStore {
       )) as Array<{ n: number }>;
       return rows[0]?.n ?? 0;
     }
-    const liveArr = Array.from(liveHashes);
-    const placeholders = liveArr.map((_, i) => `$${i + 1}`).join(",");
-    const rows = (await pg.unsafe(
-      `SELECT COUNT(*)::int AS n FROM file_blobs fb
-       WHERE fb.content_hash NOT IN (${placeholders})
-         AND NOT EXISTS (
-           SELECT 1 FROM repo_files rf
-           WHERE rf.content_hash = fb.content_hash
-             AND rf.provider     = fb.provider
-             AND rf.model        = fb.model
-             AND rf.dimensions   = fb.dimensions
-         )`,
-      [...liveArr],
-    )) as Array<{ n: number }>;
-    return rows[0]?.n ?? 0;
+    // Spreading every live hash into its own bind would risk PG's 65535
+    // parameter cap on large dedup sets; load them into a temp table in
+    // chunks instead so the filter scales independently of |liveHashes|.
+    return pg.begin(async (tx) => {
+      await loadLiveHashesIntoTempTable(tx, liveHashes);
+      const rows = (await tx.unsafe(
+        `SELECT COUNT(*)::int AS n FROM file_blobs fb
+         WHERE NOT EXISTS (SELECT 1 FROM _live_hashes WHERE h = fb.content_hash)
+           AND NOT EXISTS (
+             SELECT 1 FROM repo_files rf
+             WHERE rf.content_hash = fb.content_hash
+               AND rf.provider     = fb.provider
+               AND rf.model        = fb.model
+               AND rf.dimensions   = fb.dimensions
+           )`,
+      )) as Array<{ n: number }>;
+      return rows[0]?.n ?? 0;
+    });
   }
 
   async deleteBlobsExcept(liveHashes: Set<string>): Promise<number> {
@@ -319,22 +323,22 @@ class PgGlobalStore implements GlobalDedupStore {
       )) as Array<{ content_hash: string }>;
       return rows.length;
     }
-    const liveArr = Array.from(liveHashes);
-    const placeholders = liveArr.map((_, i) => `$${i + 1}`).join(",");
-    const rows = (await pg.unsafe(
-      `DELETE FROM file_blobs fb
-       WHERE fb.content_hash NOT IN (${placeholders})
-         AND NOT EXISTS (
-           SELECT 1 FROM repo_files rf
-           WHERE rf.content_hash = fb.content_hash
-             AND rf.provider     = fb.provider
-             AND rf.model        = fb.model
-             AND rf.dimensions   = fb.dimensions
-         )
-       RETURNING content_hash`,
-      [...liveArr],
-    )) as Array<{ content_hash: string }>;
-    return rows.length;
+    return pg.begin(async (tx) => {
+      await loadLiveHashesIntoTempTable(tx, liveHashes);
+      const rows = (await tx.unsafe(
+        `DELETE FROM file_blobs fb
+         WHERE NOT EXISTS (SELECT 1 FROM _live_hashes WHERE h = fb.content_hash)
+           AND NOT EXISTS (
+             SELECT 1 FROM repo_files rf
+             WHERE rf.content_hash = fb.content_hash
+               AND rf.provider     = fb.provider
+               AND rf.model        = fb.model
+               AND rf.dimensions   = fb.dimensions
+           )
+         RETURNING content_hash`,
+      )) as Array<{ content_hash: string }>;
+      return rows.length;
+    });
   }
 
   async sweepOrphanedBlobs(opts: { dryRun: boolean }): Promise<number | null> {
@@ -373,6 +377,24 @@ class PgGlobalStore implements GlobalDedupStore {
 
   async close(): Promise<void> {
     // Connection pool is shared with per-repo pg ops; closing is the caller's job.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Temp-table loader for large hash filters
+// ---------------------------------------------------------------------------
+
+// 5000 rows per insert leaves comfortable headroom under PG's 65535
+// bind-parameter ceiling without causing many round-trips for typical sets.
+const HASH_INSERT_CHUNK = 5000;
+
+async function loadLiveHashesIntoTempTable(tx: PgTx, liveHashes: Set<string>): Promise<void> {
+  await tx.unsafe(`CREATE TEMP TABLE _live_hashes (h text PRIMARY KEY) ON COMMIT DROP`);
+  const liveArr = Array.from(liveHashes);
+  for (let i = 0; i < liveArr.length; i += HASH_INSERT_CHUNK) {
+    const slice = liveArr.slice(i, i + HASH_INSERT_CHUNK);
+    const placeholders = slice.map((_, j) => `($${j + 1})`).join(",");
+    await tx.unsafe(`INSERT INTO _live_hashes (h) VALUES ${placeholders}`, slice);
   }
 }
 
