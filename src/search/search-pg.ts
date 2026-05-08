@@ -196,10 +196,12 @@ export async function searchPgInTransaction(
     if (junctionRows.length > 0) {
       const repoIdArr = [...new Set(junctionRows.map((r) => parseInt(r.repo_id)))];
       const pathArr = [...new Set(junctionRows.map((r) => r.file_path))];
+      const repoPlaceholders = repoIdArr.map((_, i) => `$${i + 1}`).join(",");
+      const pathPlaceholders = pathArr.map((_, i) => `$${repoIdArr.length + i + 1}`).join(",");
       const idRows = (await pg.unsafe(
         `SELECT id, repo_id, file_path FROM files
-         WHERE repo_id = ANY($1) AND file_path = ANY($2)`,
-        [repoIdArr, pathArr] as never[],
+         WHERE repo_id IN (${repoPlaceholders}) AND file_path IN (${pathPlaceholders})`,
+        [...repoIdArr, ...pathArr] as never[],
       )) as { id: string; repo_id: string; file_path: string }[];
       for (const r of idRows) {
         idMap.set(`${r.repo_id}:${r.file_path}`, r.id);
