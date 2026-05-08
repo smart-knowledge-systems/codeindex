@@ -64,12 +64,13 @@ class PgGlobalStore implements GlobalDedupStore {
     const result = new Map<string, BlobRecord>();
     if (hashes.length === 0) return result;
     const pg = await getPg();
+    const hashPlaceholders = hashes.map((_, i) => `$${i + 4}`).join(",");
     const rows = (await pg.unsafe(
       `SELECT content_hash, skeleton, skeleton_entries, embedding::text AS embedding
        FROM file_blobs
        WHERE provider = $1 AND model = $2 AND dimensions = $3
-         AND content_hash = ANY($4::text[])`,
-      [provider, model, dimensions, hashes],
+         AND content_hash IN (${hashPlaceholders})`,
+      [provider, model, dimensions, ...hashes],
     )) as Array<{
       content_hash: string;
       skeleton: string | null;
@@ -250,10 +251,11 @@ class PgGlobalStore implements GlobalDedupStore {
       }>;
       return rows.map((r) => r.content_hash);
     }
+    const placeholders = excludePackageIds.map((_, i) => `$${i + 1}`).join(",");
     const rows = (await pg.unsafe(
       `SELECT DISTINCT content_hash FROM package_files
-       WHERE NOT (package_id = ANY($1::int[]))`,
-      [excludePackageIds],
+       WHERE package_id NOT IN (${placeholders})`,
+      [...excludePackageIds],
     )) as Array<{ content_hash: string }>;
     return rows.map((r) => r.content_hash);
   }
@@ -261,7 +263,8 @@ class PgGlobalStore implements GlobalDedupStore {
   async deletePackages(packageIds: number[]): Promise<void> {
     if (packageIds.length === 0) return;
     const pg = await getPg();
-    await pg.unsafe(`DELETE FROM packages WHERE id = ANY($1::int[])`, [packageIds]);
+    const placeholders = packageIds.map((_, i) => `$${i + 1}`).join(",");
+    await pg.unsafe(`DELETE FROM packages WHERE id IN (${placeholders})`, [...packageIds]);
   }
 
   async countBlobsExcept(liveHashes: Set<string>): Promise<number> {
@@ -283,9 +286,11 @@ class PgGlobalStore implements GlobalDedupStore {
       )) as Array<{ n: number }>;
       return rows[0]?.n ?? 0;
     }
+    const liveArr = Array.from(liveHashes);
+    const placeholders = liveArr.map((_, i) => `$${i + 1}`).join(",");
     const rows = (await pg.unsafe(
       `SELECT COUNT(*)::int AS n FROM file_blobs fb
-       WHERE NOT (fb.content_hash = ANY($1::text[]))
+       WHERE fb.content_hash NOT IN (${placeholders})
          AND NOT EXISTS (
            SELECT 1 FROM repo_files rf
            WHERE rf.content_hash = fb.content_hash
@@ -293,7 +298,7 @@ class PgGlobalStore implements GlobalDedupStore {
              AND rf.model        = fb.model
              AND rf.dimensions   = fb.dimensions
          )`,
-      [Array.from(liveHashes)],
+      [...liveArr],
     )) as Array<{ n: number }>;
     return rows[0]?.n ?? 0;
   }
@@ -314,9 +319,11 @@ class PgGlobalStore implements GlobalDedupStore {
       )) as Array<{ content_hash: string }>;
       return rows.length;
     }
+    const liveArr = Array.from(liveHashes);
+    const placeholders = liveArr.map((_, i) => `$${i + 1}`).join(",");
     const rows = (await pg.unsafe(
       `DELETE FROM file_blobs fb
-       WHERE NOT (fb.content_hash = ANY($1::text[]))
+       WHERE fb.content_hash NOT IN (${placeholders})
          AND NOT EXISTS (
            SELECT 1 FROM repo_files rf
            WHERE rf.content_hash = fb.content_hash
@@ -325,7 +332,7 @@ class PgGlobalStore implements GlobalDedupStore {
              AND rf.dimensions   = fb.dimensions
          )
        RETURNING content_hash`,
-      [Array.from(liveHashes)],
+      [...liveArr],
     )) as Array<{ content_hash: string }>;
     return rows.length;
   }
