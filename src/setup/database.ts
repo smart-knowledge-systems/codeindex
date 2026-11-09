@@ -46,7 +46,7 @@ async function pgOneShot(
     max: 1,
   });
   try {
-    return [...(await sql.unsafe(query, params))];
+    return [...(await sql.unsafe<unknown[]>(query, params))];
   } finally {
     await sql.close();
   }

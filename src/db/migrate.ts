@@ -214,7 +214,7 @@ async function applyPgMigrations(): Promise<MigrationResult> {
     } catch (err) {
       return {
         tag: "err",
-        error: new Error(`Migration ${m.version} failed: ${err}`, { cause: err }),
+        error: new Error(`Migration ${m.version} failed: ${String(err)}`, { cause: err }),
       };
     }
   }
@@ -282,7 +282,7 @@ async function applySqliteMigrations(repoRoot?: string): Promise<MigrationResult
     } catch (err) {
       return {
         tag: "err",
-        error: new Error(`Migration ${m.version} failed: ${err}`, { cause: err }),
+        error: new Error(`Migration ${m.version} failed: ${String(err)}`, { cause: err }),
       };
     }
   }
@@ -433,7 +433,7 @@ export async function applyGlobalPgMigrations(): Promise<MigrationResult> {
     } catch (err) {
       return {
         tag: "err",
-        error: new Error(`Global migration ${m.version} failed: ${err}`, { cause: err }),
+        error: new Error(`Global migration ${m.version} failed: ${String(err)}`, { cause: err }),
       };
     }
   }
@@ -471,7 +471,7 @@ export async function applyGlobalSqliteMigrations(db: Database): Promise<Migrati
     } catch (err) {
       return {
         tag: "err",
-        error: new Error(`Global migration ${m.version} failed: ${err}`, { cause: err }),
+        error: new Error(`Global migration ${m.version} failed: ${String(err)}`, { cause: err }),
       };
     }
   }

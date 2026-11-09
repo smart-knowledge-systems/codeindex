@@ -31,7 +31,7 @@ export async function cloudLogin(): Promise<void> {
 
   const callbackServer = Bun.serve({
     port: 0, // ephemeral port
-    async fetch(req: Request): Promise<Response> {
+    fetch(req: Request): Response {
       const url = new URL(req.url);
       const sessionToken = url.searchParams.get("session_token");
       const returnedState = url.searchParams.get("state");
@@ -69,7 +69,7 @@ export async function cloudLogin(): Promise<void> {
   // Wait for callback (with a timeout)
   const timeout = setTimeout(
     () => {
-      callbackServer.stop();
+      void callbackServer.stop();
       rejectToken(new CloudAuthError("Login timed out — no callback received within 5 minutes"));
     },
     5 * 60 * 1000,
@@ -80,7 +80,7 @@ export async function cloudLogin(): Promise<void> {
     sessionToken = await tokenPromise;
   } finally {
     clearTimeout(timeout);
-    callbackServer.stop();
+    void callbackServer.stop();
   }
 
   // Exchange session token for daemon token

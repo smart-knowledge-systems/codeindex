@@ -58,6 +58,7 @@ export async function openSqliteGlobalStore(config: CodeindexConfig): Promise<Gl
   return new SqliteGlobalStore(db);
 }
 
+/* oxlint-disable typescript/require-await -- bun:sqlite is synchronous; async methods satisfy the Promise-based GlobalDedupStore interface and turn throws into rejections */
 class SqliteGlobalStore implements GlobalDedupStore {
   // Prepared statements are lazily built on first use to keep construction cheap.
   private readonly db: Database;
@@ -402,3 +403,4 @@ class SqliteGlobalStore implements GlobalDedupStore {
     this.db.close();
   }
 }
+/* oxlint-enable typescript/require-await */

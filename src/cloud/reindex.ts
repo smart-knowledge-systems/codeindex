@@ -168,7 +168,7 @@ export async function cloudReindex(repoRoot: string, parsed: ParsedArgs): Promis
 
   const ctx: PipelineContext = {
     repoRoot,
-    repoId: repoRow!.id,
+    repoId: repoRow.id,
     config,
     formatter: config.formatter ?? null,
     store: "sqlite",
@@ -239,7 +239,7 @@ export async function cloudReindex(repoRoot: string, parsed: ParsedArgs): Promis
 
     const sendBatch = async (batch: CollectedFile[], batchIndex: number): Promise<void> => {
       // Skip already-acked batches (resume)
-      if (checkpoint!.batches[batchIndex] === "acked") return;
+      if (checkpoint.batches[batchIndex] === "acked") return;
 
       const safeBatch = batch.map(stripForCloud);
       const payload = {
@@ -264,13 +264,13 @@ export async function cloudReindex(repoRoot: string, parsed: ParsedArgs): Promis
       let attempt = 0;
       while (true) {
         try {
-          checkpoint!.batches[batchIndex] = "sent";
-          await saveCheckpoint(checkpoint!);
+          checkpoint.batches[batchIndex] = "sent";
+          await saveCheckpoint(checkpoint);
 
           await client.ingestBatch(payload);
 
-          checkpoint!.batches[batchIndex] = "acked";
-          await saveCheckpoint(checkpoint!);
+          checkpoint.batches[batchIndex] = "acked";
+          await saveCheckpoint(checkpoint);
           break;
         } catch (err) {
           if (err instanceof CloudRateLimitError && attempt < 5) {

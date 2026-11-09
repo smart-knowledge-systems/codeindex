@@ -100,7 +100,7 @@ export class CloudClient {
   private async requestWithRetry<T>(
     method: string,
     reqPath: string,
-    body: unknown | undefined,
+    body: unknown,
     attempt: number,
   ): Promise<T> {
     const url = `${this.baseUrl}${reqPath}`;
