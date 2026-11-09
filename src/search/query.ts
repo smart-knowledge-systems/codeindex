@@ -334,6 +334,22 @@ function parseSinceTimestamp(since: string): Date {
   return d;
 }
 
+/**
+ * Intersect the env-token scope (CODEINDEX_TOKEN) with an explicit caller scope
+ * (e.g. an MCP SSE session). null = unrestricted.
+ */
+async function resolveAllowedRepoIds(
+  repoRoot: string,
+  options?: SearchOptions,
+): Promise<number[] | null> {
+  const envIds = await getScopedRepoIds(repoRoot);
+  const callerIds = options?.allowedRepoIds ?? null;
+  if (envIds === null) return callerIds;
+  if (callerIds === null) return envIds;
+  const allowed = new Set(callerIds);
+  return envIds.filter((id) => allowed.has(id));
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -375,8 +391,8 @@ export async function search(
   let repoIds = resolved.repoIds;
   const currentRepoId = resolved.currentRepoId;
 
-  // Apply token-based repo scoping if CODEINDEX_TOKEN is set
-  const tokenRepoIds = await getScopedRepoIds(repoRoot);
+  // Restrict to the caller's token scope (CODEINDEX_TOKEN and/or MCP session)
+  const tokenRepoIds = await resolveAllowedRepoIds(repoRoot, options);
   if (tokenRepoIds !== null) {
     const allowed = new Set(tokenRepoIds);
     repoIds = repoIds.filter((id) => allowed.has(id));
@@ -481,7 +497,11 @@ export async function searchChanged(
 
   // Get the repo ID
   const resolved = await resolveRepoIds(repoRoot, options?.scope ?? "project", config);
-  const repoIds = resolved.repoIds;
+  const allowedRepoIds = await resolveAllowedRepoIds(repoRoot, options);
+  const repoIds =
+    allowedRepoIds === null
+      ? resolved.repoIds
+      : resolved.repoIds.filter((id) => allowedRepoIds.includes(id));
   if (repoIds.length === 0) return [];
 
   // Query files changed since the timestamp
@@ -524,7 +544,9 @@ export async function searchChanged(
 
   // Run semantic search and intersect with changed files
   const semanticResults = await search(repoRoot, query, options);
-  return semanticResults.filter((r) => r.type === "file" && changedPaths.has(r.filePath));
+  return semanticResults.filter(
+    (r) => r.type !== "dir" && r.type !== "commit" && changedPaths.has(r.filePath),
+  );
 }
 
 /**

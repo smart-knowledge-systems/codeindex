@@ -1,5 +1,6 @@
 import path from "path";
-import { loadConfig, detectFormatter } from "../config";
+import { loadConfig } from "../config";
+import { resolveFormatter } from "./formatter-trust";
 import { withRepoScope } from "../db/rls";
 import { getSqlite } from "../db/sqlite";
 import { extractSkeletonWithEntries, initParser } from "./skeleton";
@@ -166,7 +167,7 @@ export async function reindexSingleFile(
   repoVisibility?: "public" | "private" | "unknown",
 ): Promise<boolean> {
   const config = await loadConfig(repoRoot);
-  const formatter = config.formatter ?? (await detectFormatter(repoRoot));
+  const formatter = await resolveFormatter(repoRoot, config);
 
   const absPath = path.join(repoRoot, relPath);
   const file = Bun.file(absPath);

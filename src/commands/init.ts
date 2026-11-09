@@ -34,4 +34,10 @@ export async function cmdInit(repoRoot: string) {
     await ensurePgSchema();
     console.log(`Initialized codeindex (store: pg)`);
   }
+
+  if (formatter) {
+    console.log(
+      `Detected formatter "${formatter}". It runs only once trusted: codeindex config --formatter "${formatter}"`,
+    );
+  }
 }

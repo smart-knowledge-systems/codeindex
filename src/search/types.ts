@@ -52,6 +52,11 @@ export interface SearchOptions {
   since?: string;
   explain?: boolean;
   embeddingCache?: EmbeddingCacheLike;
+  /**
+   * Repo IDs the caller may see (e.g. an MCP session's token scope). Results are
+   * restricted to these regardless of `scope`. null/undefined = no restriction.
+   */
+  allowedRepoIds?: number[] | null;
 }
 
 export interface SkeletonEntry {

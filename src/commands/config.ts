@@ -1,5 +1,6 @@
 import path from "path";
 import { loadConfig } from "../config";
+import { trustFormatter } from "../index/formatter-trust";
 
 export async function cmdConfig(repoRoot: string, args: string[]) {
   const config = await loadConfig(repoRoot);
@@ -48,6 +49,11 @@ export async function cmdConfig(repoRoot: string, args: string[]) {
   const merged = { ...existing, ...updates };
   await Bun.write(localConfigPath, JSON.stringify(merged, null, 2) + "\n");
   console.log("Config saved to .codeindex.json");
+  // Setting the formatter explicitly is the user's consent to run it here.
+  if (typeof updates.formatter === "string" && updates.formatter) {
+    await trustFormatter(repoRoot, updates.formatter);
+    console.log(`Trusted formatter "${updates.formatter}" for this repo`);
+  }
 }
 
 export async function cmdConfigList(repoRoot: string) {

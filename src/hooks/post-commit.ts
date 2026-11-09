@@ -8,10 +8,24 @@ import { logEvent } from "../logging";
 
 const HOOK_MARKER = "# codeindex hook";
 
+// The hook passes only the commit: `codeindex update` lists its changed files
+// itself, which handles root commits and any filename (spaces, commas, non-ASCII).
 const HOOK_LINES = `${HOOK_MARKER}
+codeindex update --commit "$(git rev-parse HEAD)"`;
+
+// Earlier hook bodies, upgraded in place. The first passed $files unquoted, so
+// only the first changed file was indexed; the second comma-joined them, which
+// split filenames containing commas and skipped root commits.
+const LEGACY_HOOK_BODIES = [
+  `${HOOK_MARKER}
 files=$(git diff-tree --no-commit-id --name-only -r HEAD)
 commit=$(git rev-parse HEAD)
-codeindex update --files $files --commit $commit`;
+codeindex update --files $files --commit $commit`,
+  `${HOOK_MARKER}
+files=$(git diff-tree --no-commit-id --name-only -r HEAD | paste -sd, -)
+commit=$(git rev-parse HEAD)
+if [ -n "$files" ]; then codeindex update --files "$files" --commit "$commit"; fi`,
+];
 
 const FULL_HOOK_SCRIPT = `#!/bin/sh
 ${HOOK_LINES}
@@ -24,9 +38,15 @@ ${HOOK_LINES}
 type HookState =
   | { readonly kind: "does-not-exist"; readonly hookPath: string }
   | { readonly kind: "already-installed"; readonly hookPath: string }
+  | {
+      readonly kind: "needs-upgrade";
+      readonly hookPath: string;
+      readonly existing: string;
+      readonly legacyBody: string;
+    }
   | { readonly kind: "needs-append"; readonly hookPath: string; readonly existing: string };
 
-export type HookAction = "created" | "appended" | "skipped";
+export type HookAction = "created" | "appended" | "upgraded" | "skipped";
 
 export interface HookInstallResult {
   hookPath: string;
@@ -45,6 +65,11 @@ function decideHookContent(state: HookState): { action: HookAction; content: str
       return { action: "created", content: FULL_HOOK_SCRIPT };
     case "already-installed":
       return { action: "skipped", content: null };
+    case "needs-upgrade":
+      return {
+        action: "upgraded",
+        content: state.existing.replace(state.legacyBody, HOOK_LINES),
+      };
     case "needs-append": {
       const separator = state.existing.endsWith("\n") ? "\n" : "\n\n";
       return { action: "appended", content: state.existing + separator + HOOK_LINES + "\n" };
@@ -64,6 +89,8 @@ async function readHookState(hookPath: string): Promise<HookState> {
   if (!exists) return { kind: "does-not-exist", hookPath };
 
   const existing = await hookFile.text();
+  const legacyBody = LEGACY_HOOK_BODIES.find((body) => existing.includes(body));
+  if (legacyBody) return { kind: "needs-upgrade", hookPath, existing, legacyBody };
   if (existing.includes(HOOK_MARKER)) return { kind: "already-installed", hookPath };
 
   return { kind: "needs-append", hookPath, existing };

@@ -56,6 +56,7 @@ export function registerSearchTools(ctx: McpToolContext): void {
           includeSkeleton: true,
           includeSummary: true,
           embeddingCache,
+          allowedRepoIds: session?.repoIds ?? null,
         });
 
         const enriched = await enrichResults(repoRoot, results, session);
@@ -123,6 +124,7 @@ export function registerSearchTools(ctx: McpToolContext): void {
               includeSkeleton: true,
               includeSummary: true,
               embeddingCache,
+              allowedRepoIds: session?.repoIds ?? null,
             });
             const enriched = await enrichResults(repoRoot, results, session);
             return [q, enriched] as const;
@@ -177,6 +179,7 @@ export function registerSearchTools(ctx: McpToolContext): void {
           includeSkeleton: true,
           includeSummary: true,
           embeddingCache,
+          allowedRepoIds: session?.repoIds ?? null,
         });
 
         const enriched = await enrichResults(repoRoot, results, session);
