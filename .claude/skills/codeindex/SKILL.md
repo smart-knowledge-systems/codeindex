@@ -130,6 +130,8 @@ codeindex serve
 
 # SSE transport for remote/web clients
 codeindex serve --transport sse --port 3100
+# Binds 127.0.0.1 by default; set CODEINDEX_MCP_HOST=0.0.0.0 to expose it
+# (create access tokens first — with none, every client gets full access)
 
 # Print MCP config JSON for editor integration
 codeindex mcp-config

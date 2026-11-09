@@ -100,6 +100,8 @@ codeindex serve
 
 # SSE transport (for remote/web clients)
 codeindex serve --transport sse --port 3100
+# Binds 127.0.0.1 by default; set CODEINDEX_MCP_HOST=0.0.0.0 to expose it
+# (create access tokens first — with none, every client gets full access)
 ```
 
 Exposes 14 MCP tools including `search`, `batchSearch`, `searchChanged`, `intent`, `drift`, `status`, `health`, `check`, `getImporters`, `getDependencies`, `traceImportChain`, `getCrossRepoEdges`, `findImplementors`, `findCallers`, and `reindexFiles`. Authenticated via scoped tokens. Eliminates CLI startup overhead for agent workflows.

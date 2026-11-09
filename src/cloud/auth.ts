@@ -30,6 +30,7 @@ export async function cloudLogin(): Promise<void> {
   const state = randomBytes(32).toString("hex");
 
   const callbackServer = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0, // ephemeral port
     fetch(req: Request): Response {
       const url = new URL(req.url);

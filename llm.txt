@@ -120,7 +120,7 @@ cidx graph --format mermaid|dot|json
 
 # MCP server (for agent integration)
 cidx serve                      # stdio transport
-cidx serve --transport sse --port 3100
+cidx serve --transport sse --port 3100   # 127.0.0.1 only; CODEINDEX_MCP_HOST=0.0.0.0 to expose (tokens first)
 cidx mcp-config                 # Print editor MCP config
 
 # Tuning

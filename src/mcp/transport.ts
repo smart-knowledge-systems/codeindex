@@ -18,6 +18,11 @@ export interface SessionEntry {
 
 const CORS_ORIGINS = process.env.CODEINDEX_CORS_ORIGINS ?? "*";
 
+// Loopback by default: with no access tokens configured the server grants full
+// access, so it must not be reachable from the network unless opted into.
+// oxlint-disable-next-line typescript/prefer-nullish-coalescing -- an empty CODEINDEX_MCP_HOST must fall back to loopback too
+const MCP_HOST = process.env.CODEINDEX_MCP_HOST || "127.0.0.1";
+
 function setCorsHeaders(res: ServerResponse, req: IncomingMessage): void {
   const origin = req.headers.origin ?? "*";
   const allowedOrigin =
@@ -194,9 +199,9 @@ export function startSSE(
     void handleRequest(req, res);
   });
 
-  httpServer.listen(port, () => {
-    process.stderr.write(`codeindex MCP server listening on port ${port} (SSE)\n`);
-    logEvent({ event: "infra.server.started", port, protocol: "sse" });
+  httpServer.listen(port, MCP_HOST, () => {
+    process.stderr.write(`codeindex MCP server listening on ${MCP_HOST}:${port} (SSE)\n`);
+    logEvent({ event: "infra.server.started", host: MCP_HOST, port, protocol: "sse" });
   });
 
   return Promise.resolve(sessions);
