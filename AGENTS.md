@@ -22,7 +22,7 @@ Fight for the smallest model that makes the correct behavior unsurprising. Do no
 - Inferred types over annotations. `any` is the enemy: give SQL rows and parsed JSON real types at the boundary instead of passing `any` inward.
 - Design types and data structures first, then the code that moves them.
 - Every storage change has two backends. SQLite (`bun:sqlite` + `sqlite-vec`) and Postgres (Bun SQL) each get the change, the test, and a numbered migration in `migrations/` (`NNNN_name.sqlite.sql` and `NNNN_name.pg.sql`).
-- `web-tree-sitter` is pinned with a patch in `patches/`. A version bump orphans the patch; re-port or drop it in the same change.
+- Tree-sitter grammars are built here and committed under `grammars/wasm`; `docs/tree-sitter-grammars.md` says how to change one. Never point the loader at `node_modules`: compiled binaries embed the wasm and have no `node_modules`.
 
 ## Checks
 

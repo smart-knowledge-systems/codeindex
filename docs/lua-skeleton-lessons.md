@@ -60,7 +60,7 @@ case "local_function_definition_statement": {
 
 ## WASM Availability
 
-`tree-sitter-lua.wasm` is available in `tree-sitter-wasms@0.1.13`.
+`tree-sitter-lua.wasm` is built from `tree-sitter-lua@2.1.3` into `grammars/wasm` (see `docs/tree-sitter-grammars.md`).
 
 ## Sample Fixture
 
