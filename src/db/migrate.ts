@@ -23,8 +23,7 @@ interface MigrationFile {
 export type MigrationResult = { tag: "ok"; versions: number[] } | { tag: "err"; error: Error };
 
 export type ChecksumVerification =
-  | { tag: "ok"; valid: boolean; mismatches: string[] }
-  | { tag: "unavailable" };
+  { tag: "ok"; valid: boolean; mismatches: string[] } | { tag: "unavailable" };
 
 // ---------------------------------------------------------------------------
 // Pure helpers

@@ -281,8 +281,7 @@ async function fetchRepoRow(repoRoot: string, store: string): Promise<RepoRow> {
   }
   const db = await getSqlite(repoRoot);
   const repo = db.prepare("SELECT * FROM repos WHERE root_path = ?").get(repoRoot) as
-    | RepoRow
-    | undefined;
+    RepoRow | undefined;
   if (!repo) throw new Error("Not indexed yet. Run: codeindex reindex");
   return repo;
 }

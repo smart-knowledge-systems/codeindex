@@ -74,8 +74,7 @@ class SqliteGlobalStore implements GlobalDedupStore {
          WHERE content_hash = ? AND provider = ? AND model = ? AND dimensions = ?`,
       )
       .get(key.contentHash, key.provider, key.model, key.dimensions) as
-      | { id: number; skeleton: string | null; skeleton_entries: string | null }
-      | undefined;
+      { id: number; skeleton: string | null; skeleton_entries: string | null } | undefined;
     if (!row) return null;
 
     const embRow = this.db
@@ -172,8 +171,7 @@ class SqliteGlobalStore implements GlobalDedupStore {
          WHERE tree_hash = ? AND provider = ? AND model = ? AND dimensions = ?`,
       )
       .get(key.treeHash, key.provider, key.model, key.dimensions) as
-      | { id: number; ecosystem: string; name: string; version: string }
-      | undefined;
+      { id: number; ecosystem: string; name: string; version: string } | undefined;
     return row ?? null;
   }
 
