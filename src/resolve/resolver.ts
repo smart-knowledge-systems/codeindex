@@ -301,7 +301,7 @@ export async function cmdResolve(parsed: ParsedArgs): Promise<void> {
       console.log(JSON.stringify(result));
     } else {
       console.error("file unavailable — not pushed and peer offline");
-      console.error(`Strategies tried: ${(result as ResolveFailure).strategies_tried.join(", ")}`);
+      console.error(`Strategies tried: ${result.strategies_tried.join(", ")}`);
     }
     process.exit(1);
   }

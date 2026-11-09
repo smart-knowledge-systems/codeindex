@@ -19,7 +19,7 @@ export function registerFileTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ filePath, repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "getImporters",
@@ -71,7 +71,7 @@ export function registerFileTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ filePath, repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "getDependencies",
@@ -128,7 +128,7 @@ export function registerFileTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ filePath, direction, maxDepth, repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "traceImportChain",
@@ -259,7 +259,7 @@ export function registerFileTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "getCrossRepoEdges",
@@ -356,7 +356,7 @@ export function registerFileTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ symbol, repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "findImplementors",
@@ -435,7 +435,7 @@ export function registerFileTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ symbol, repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "findCallers",

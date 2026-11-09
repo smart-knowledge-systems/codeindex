@@ -82,11 +82,9 @@ export async function withMcpScope<T>(
   // Full access — use cached repo IDs for FORCE RLS
   if (!repoCache.ids || Date.now() - repoCache.fetchedAt > REPO_CACHE_TTL_MS) {
     const stampBefore = repoCache.fetchedAt;
-    if (!repoCache.inflight) {
-      repoCache.inflight = fetchAllRepoIds().finally(() => {
-        repoCache.inflight = null;
-      });
-    }
+    repoCache.inflight ??= fetchAllRepoIds().finally(() => {
+      repoCache.inflight = null;
+    });
     const freshIds = await repoCache.inflight;
     // Only populate cache if it wasn't invalidated while we were awaiting
     if (repoCache.fetchedAt === stampBefore && freshIds) {
@@ -114,7 +112,10 @@ const reindexCallLogs = new Map<string, number[]>();
 
 function reindexRateLimitKey(repoRoot: string, session?: AuthSession): string {
   if (!session || session.repoIds === null) return `${repoRoot}:full`;
-  return `${repoRoot}:${session.repoIds.slice().sort().join(",")}`;
+  return `${repoRoot}:${session.repoIds
+    .slice()
+    .sort((a, b) => a - b)
+    .join(",")}`;
 }
 
 export function checkReindexRateLimit(repoRoot: string, session?: AuthSession): boolean {

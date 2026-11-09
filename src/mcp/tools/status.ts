@@ -28,7 +28,7 @@ export function registerStatusTools(ctx: McpToolContext): void {
     },
     async ({ repoPath, cost }) => {
       try {
-        recordEvent({
+        void recordEvent({
           event: "mcp_tool",
           timestamp: new Date().toISOString(),
           tool: "status",
@@ -55,7 +55,7 @@ export function registerStatusTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "check",
@@ -79,7 +79,7 @@ export function registerStatusTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "health",

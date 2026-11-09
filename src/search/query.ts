@@ -98,17 +98,17 @@ async function withSnippets(
     if (config.store === "pg") {
       // Avoid ANY($n) with array params — Bun.SQL misserialises nested
       // arrays. Use IN ($1,$2,...) with positional placeholders instead.
-      const rows = await withRepoScope(resultRepoIds, async (tx) => {
+      const rows = await withRepoScope(resultRepoIds, (tx) => {
         const repoPlaceholders = resultRepoIds.map((_, i) => `$${i + 1}`).join(",");
         const pathPlaceholders = filePaths
           .map((_, i) => `$${resultRepoIds.length + i + 1}`)
           .join(",");
-        return (await tx.unsafe(
+        return tx.unsafe<{ repo_id: string; file_path: string; skeleton_entries: string | null }>(
           `SELECT repo_id, file_path, skeleton_entries FROM files
            WHERE repo_id IN (${repoPlaceholders})
            AND file_path IN (${pathPlaceholders})`,
           [...resultRepoIds, ...filePaths],
-        )) as { repo_id: string; file_path: string; skeleton_entries: string | null }[];
+        );
       });
       for (const row of rows) {
         if (row.skeleton_entries)
@@ -159,7 +159,7 @@ async function withSnippets(
 
     let entries: SkeletonEntry[];
     try {
-      entries = JSON.parse(entriesJson);
+      entries = JSON.parse(entriesJson) as SkeletonEntry[];
     } catch {
       return result;
     }
@@ -232,11 +232,8 @@ async function withCrossRepoEdges(
       edgeQuery += ` WHERE (source_repo_id IN (${placeholders}) OR target_repo_id IN (${placeholders}))`;
       edgeParams.push(...scopedRepoIds);
     }
-    const allEdges = await withRepoScope(edgeRepoIds, async (tx) => {
-      return (await tx.unsafe(edgeQuery, edgeParams)) as {
-        source_repo_id: string;
-        target_repo_id: string;
-      }[];
+    const allEdges = await withRepoScope(edgeRepoIds, (tx) => {
+      return tx.unsafe<{ source_repo_id: string; target_repo_id: string }>(edgeQuery, edgeParams);
     });
 
     const depsByRepo = new Map<
@@ -460,7 +457,7 @@ export async function search(
     sessionId: getSessionId(),
   });
 
-  recordEvent({
+  void recordEvent({
     event: "search",
     timestamp: new Date().toISOString(),
     sessionId: getSessionId(),
@@ -492,12 +489,12 @@ export async function searchChanged(
 
   if (config.store === "pg") {
     const placeholders = repoIds.map((_, i) => `$${i + 2}`).join(",");
-    const rows = await withRepoScope(repoIds, async (tx) => {
-      return (await tx.unsafe(
+    const rows = await withRepoScope(repoIds, (tx) => {
+      return tx.unsafe<{ file_path: string }>(
         `SELECT file_path FROM files
          WHERE repo_id IN (${placeholders}) AND indexed_at >= $1`,
         [sinceIso, ...repoIds],
-      )) as { file_path: string }[];
+      );
     });
     for (const r of rows) changedPaths.add(r.file_path);
   } else {

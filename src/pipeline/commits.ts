@@ -100,10 +100,10 @@ export const indexCommits: IndexCommitsStage = async (
         }
 
         const fileRow = (
-          (await tx.unsafe("SELECT id FROM files WHERE repo_id = $1 AND file_path = $2", [
-            repoId,
-            cr.relPath,
-          ])) as { id: number }[]
+          await tx.unsafe<{ id: number }>(
+            "SELECT id FROM files WHERE repo_id = $1 AND file_path = $2",
+            [repoId, cr.relPath],
+          )
         ).at(0);
         if (fileRow) {
           await tx.unsafe(

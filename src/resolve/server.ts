@@ -171,7 +171,7 @@ export async function handleResolveRequest(req: Request): Promise<Response> {
 // Export for wiring into daemon (placeholder for future integration)
 // ---------------------------------------------------------------------------
 
-export async function registerResolveEndpoint(): Promise<void> {
+export function registerResolveEndpoint(): void {
   // This will be wired into the daemon server in a future task.
   // For now, handleResolveRequest is the primary export.
   logEvent({ event: "infra.resolve.endpoint_registered" });

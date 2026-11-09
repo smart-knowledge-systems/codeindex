@@ -289,7 +289,7 @@ async function loadPackageNames(
     repos.map(async (repo): Promise<[number, string] | null> => {
       try {
         const raw = await fs.readFile(path.join(repo.rootPath, "package.json"), "utf-8");
-        const pkg = JSON.parse(raw);
+        const pkg = JSON.parse(raw) as { name?: unknown };
         return typeof pkg.name === "string" && pkg.name.length > 0 ? [repo.id, pkg.name] : null;
       } catch {
         // No package.json or unreadable — skip

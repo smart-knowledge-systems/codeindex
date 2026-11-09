@@ -145,7 +145,7 @@ async function xrefPg(
     .filter((h): h is string => h !== null);
   const dedupAttribution: XrefMatch[] = [];
   if (definitionHashes.length > 0) {
-    const attribRows = await pg`
+    const attribRows = await pg<Record<string, unknown>>`
       SELECT DISTINCT rf.content_hash, rf.file_path, rf.repo_id, r.name AS repo_name
       FROM repo_files rf
       JOIN repos r ON r.id = rf.repo_id
@@ -164,7 +164,7 @@ async function xrefPg(
       const prev = scoreByHash.get(hash) ?? 0;
       if (score > prev) scoreByHash.set(hash, score);
     }
-    for (const r of attribRows as Record<string, unknown>[]) {
+    for (const r of attribRows) {
       const key = `${Number(r.repo_id)}:${String(r.file_path)}`;
       if (seen.has(key)) continue;
       seen.add(key);

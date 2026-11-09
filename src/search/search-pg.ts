@@ -24,7 +24,7 @@ export async function searchPg(
   options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
-  useBlobSchema: boolean = false,
+  useBlobSchema = false,
 ): Promise<SearchResult[]> {
   // Use withRepoScope to pin to a single connection, set RLS scope, and
   // apply SET LOCAL hnsw.ef_search within the same transaction
@@ -114,7 +114,7 @@ export async function searchPgInTransaction(
   options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
-  useBlobSchema: boolean = false,
+  useBlobSchema = false,
 ): Promise<SearchResult[]> {
   await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
 

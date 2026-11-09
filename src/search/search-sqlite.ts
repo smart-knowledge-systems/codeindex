@@ -93,7 +93,7 @@ export async function searchSqlite(
   options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
-  useBlobSchema: boolean = false,
+  useBlobSchema = false,
 ): Promise<SearchResult[]> {
   const db = await getSqlite(repoRoot);
   const embBuf = serializeEmbedding(queryEmbedding);
@@ -105,7 +105,8 @@ export async function searchSqlite(
   const sinceDate = options.since ? parseSince(options.since) : null;
 
   // Increase KNN over-fetch when scope filters are active to avoid under-returning
-  const hasFilters = !!(langExts || dirFilters || sinceDate);
+  const hasFilters = langExts !== null || dirFilters !== null || sinceDate !== null;
+  // oxlint-disable-next-line typescript/prefer-nullish-coalescing -- topN of 0 means "no limit", so it must fall back to 50 as well
   const knnLimit = Math.max((options.topN || 50) * (hasFilters ? 10 : 3), hasFilters ? 500 : 200);
 
   // --- Repo info map ---

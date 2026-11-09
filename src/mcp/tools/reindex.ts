@@ -34,7 +34,7 @@ export function registerReindexTools(ctx: McpToolContext): void {
     },
     async ({ paths }) => {
       try {
-        recordEvent({
+        void recordEvent({
           event: "mcp_tool",
           timestamp: new Date().toISOString(),
           tool: "reindexFiles",

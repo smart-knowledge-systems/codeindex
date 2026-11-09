@@ -5,7 +5,7 @@ import { logEvent } from "../../logging";
 const getClient = (() => {
   let client: Anthropic | null = null;
   return (): Anthropic => {
-    if (!client) client = new Anthropic();
+    client ??= new Anthropic();
     return client;
   };
 })();

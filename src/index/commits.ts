@@ -69,8 +69,8 @@ export async function getRepoOrigin(repoRoot: string): Promise<string | null> {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export async function getRepoName(repoRoot: string): Promise<string> {
-  return path.basename(repoRoot);
+export function getRepoName(repoRoot: string): Promise<string> {
+  return Promise.resolve(path.basename(repoRoot));
 }
 
 export async function getChangedFiles(repoRoot: string, commitHash?: string): Promise<string[]> {

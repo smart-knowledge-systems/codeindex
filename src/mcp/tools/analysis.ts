@@ -19,7 +19,7 @@ export function registerAnalysisTools(ctx: McpToolContext): void {
       repoPath: z.string().optional().describe("Repository root path (defaults to server root)"),
     },
     async ({ repoPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "intent",
@@ -46,7 +46,7 @@ export function registerAnalysisTools(ctx: McpToolContext): void {
       agentsMdPath: z.string().optional().describe("Path to AGENTS.md (default: AGENTS.md)"),
     },
     async ({ repoPath, threshold, agentsMdPath }) => {
-      recordEvent({
+      void recordEvent({
         event: "mcp_tool",
         timestamp: new Date().toISOString(),
         tool: "drift",
