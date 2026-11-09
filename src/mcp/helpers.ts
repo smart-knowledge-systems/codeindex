@@ -9,7 +9,7 @@ import { CodeindexError, formatError } from "../errors";
 import type { AuthSession } from "./auth";
 import type { SearchResult } from "../search/types";
 import type { PgTx } from "../db/pg";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { EmbeddingCache } from "./cache";
 
 // ---------------------------------------------------------------------------
@@ -145,8 +145,9 @@ export function checkReindexRateLimit(repoRoot: string, session?: AuthSession): 
 // MCP response helpers — consistent success/error formatting
 // ---------------------------------------------------------------------------
 
+// oxlint-disable-next-line typescript/consistent-type-definitions -- the MCP SDK's tool result type has an index signature, which an interface does not satisfy
 export type McpToolResponse = {
-  content: Array<{ type: "text"; text: string }>;
+  content: { type: "text"; text: string }[];
   isError?: true;
 };
 
@@ -187,13 +188,13 @@ export interface StatusResult {
   lastIndexed: string | null;
   formatter: string;
   cost?: {
-    rows: Array<{
+    rows: {
       operation: string;
       model: string;
       tokensIn: number;
       tokensOut: number;
       costUsd: number;
-    }>;
+    }[];
     totalUsd: number;
   };
 }
@@ -363,7 +364,7 @@ export async function enrichResults(
   repoRoot: string,
   results: SearchResult[],
   session?: AuthSession,
-): Promise<Array<SearchResult & { indexedAt?: string; stale?: boolean }>> {
+): Promise<(SearchResult & { indexedAt?: string; stale?: boolean })[]> {
   const filePaths = results.filter((r) => r.type !== "commit").map((r) => r.filePath);
   const indexedAtMap = await batchGetIndexedAt(repoRoot, filePaths, session);
 

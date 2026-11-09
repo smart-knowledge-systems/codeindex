@@ -143,14 +143,14 @@ export async function searchSqlite(
       dirFilters,
       sinceIso: sinceDate ? sinceDate.toISOString() : null,
     });
-    const junctionRows = db.prepare(built.sql).all(embBuf, knnLimit, ...built.params) as Array<{
+    const junctionRows = db.prepare(built.sql).all(embBuf, knnLimit, ...built.params) as {
       repo_id: number;
       file_path: string;
       skeleton: string | null;
       file_type: string;
       distance: number;
       blob_id: number;
-    }>;
+    }[];
 
     // file_commits still references files.id during the dual-write window;
     // resolve a legacy id per (repo_id, file_path) so BM25 keying and the
@@ -291,7 +291,7 @@ export async function searchSqlite(
   }
 
   // Build commit link map
-  const linksByFileId = new Map<number, Array<{ recency: number; similarity: number }>>();
+  const linksByFileId = new Map<number, { recency: number; similarity: number }[]>();
   const commitIdsByFileId = new Map<number, string[]>();
   for (const link of linkRows) {
     const links = linksByFileId.get(link.file_id) ?? [];

@@ -11,7 +11,7 @@ export interface QualityReport {
   passed: boolean;
   datasetPath: string;
   queryCount: number;
-  results: Array<{ policy: string; result: QualityResult }>;
+  results: { policy: string; result: QualityResult }[];
   timestamp: string;
 }
 

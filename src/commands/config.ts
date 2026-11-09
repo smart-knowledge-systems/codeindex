@@ -57,7 +57,7 @@ export async function cmdConfigList(repoRoot: string) {
   const flattenConfig = (
     obj: Record<string, unknown>,
     prefix: string,
-  ): Array<{ key: string; value: unknown; source: string }> =>
+  ): { key: string; value: unknown; source: string }[] =>
     Object.entries(obj).flatMap(([k, v]) => {
       const key = prefix ? `${prefix}.${k}` : k;
       return v !== null && typeof v === "object" && !Array.isArray(v)

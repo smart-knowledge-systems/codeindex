@@ -2,7 +2,7 @@
 // Repo resolution and options resolution
 // ---------------------------------------------------------------------------
 
-import { loadConfig } from "../config";
+import { type loadConfig } from "../config";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import type { SearchOptions, ScoringConfig } from "./types";

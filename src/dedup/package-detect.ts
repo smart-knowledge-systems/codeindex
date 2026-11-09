@@ -25,7 +25,7 @@ export interface DetectedPackage {
   name: string;
   version: string;
   rootPath: string; // absolute path to package root
-  files: Array<{ relpath: string; contentHash: string }>;
+  files: { relpath: string; contentHash: string }[];
 }
 
 /**
@@ -134,7 +134,7 @@ export async function detectPython(dir: string): Promise<DetectedPackage | null>
 
   // RECORD format (CSV): relpath,sha256=<base64>,size
   const recordText = await readFile(recordPath, "utf-8");
-  const files: Array<{ relpath: string; contentHash: string }> = [];
+  const files: { relpath: string; contentHash: string }[] = [];
   for (const line of recordText.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -184,10 +184,8 @@ const MAX_PACKAGE_FILE_SIZE = 524_288; // mirror walker.MAX_FILE_SIZE
  * Recursively walk a package directory, hashing each file with SHA-256.
  * Used as a fallback when the ecosystem doesn't ship per-file hashes.
  */
-async function walkAndHash(
-  rootPath: string,
-): Promise<Array<{ relpath: string; contentHash: string }>> {
-  const results: Array<{ relpath: string; contentHash: string }> = [];
+async function walkAndHash(rootPath: string): Promise<{ relpath: string; contentHash: string }[]> {
+  const results: { relpath: string; contentHash: string }[] = [];
 
   async function walk(absDir: string, relDir: string): Promise<void> {
     let entries: { name: string; isDirectory: () => boolean; isFile: () => boolean }[];

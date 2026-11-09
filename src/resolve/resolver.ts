@@ -55,7 +55,7 @@ async function strategyLocal(
   filePath: string,
 ): Promise<ResolveResult | null> {
   const repoRoot = process.cwd();
-  let repos: Array<{ name: string; root_path: string }>;
+  let repos: { name: string; root_path: string }[];
   try {
     repos = await repoGetAll(repoRoot);
   } catch {
@@ -218,7 +218,7 @@ export async function resolve(
   filePath: string,
   forceStrategy?: number,
 ): Promise<ResolveResult | ResolveFailure> {
-  const strategies: Array<{ name: string; fn: StrategyFn }> = [
+  const strategies: { name: string; fn: StrategyFn }[] = [
     { name: "local", fn: () => strategyLocal(originUrl, commitHash, filePath) },
     { name: "cache", fn: () => strategyCache(originUrl, commitHash, filePath) },
     { name: "remote", fn: () => strategyRemote(originUrl, commitHash, filePath) },

@@ -187,7 +187,7 @@ function annotateWithEdges(
   results: readonly SearchResult[],
   depsByRepo: ReadonlyMap<
     number,
-    ReadonlyArray<{ repoName: string; direction: "depends-on" | "depended-by" }>
+    readonly { repoName: string; direction: "depends-on" | "depended-by" }[]
   >,
   currentRepoId: number,
 ): SearchResult[] {
@@ -241,7 +241,7 @@ async function withCrossRepoEdges(
 
     const depsByRepo = new Map<
       number,
-      Array<{ repoName: string; direction: "depends-on" | "depended-by" }>
+      { repoName: string; direction: "depends-on" | "depended-by" }[]
     >();
     for (const e of allEdges) {
       const srcId = parseInt(e.source_repo_id);
@@ -283,7 +283,7 @@ async function withCrossRepoEdges(
 
     const depsByRepo = new Map<
       number,
-      Array<{ repoName: string; direction: "depends-on" | "depended-by" }>
+      { repoName: string; direction: "depends-on" | "depended-by" }[]
     >();
     for (const e of allEdges) {
       const sourceList = depsByRepo.get(e.source_repo_id) ?? [];
@@ -307,7 +307,7 @@ async function withCrossRepoEdges(
 
 function parseSinceTimestamp(since: string): Date {
   // Relative formats: "1d", "7d", "2w", "3m"
-  const relMatch = since.match(/^(\d+)([dwm])$/);
+  const relMatch = /^(\d+)([dwm])$/.exec(since);
   if (relMatch) {
     const n = parseInt(relMatch[1]);
     const unit = relMatch[2];

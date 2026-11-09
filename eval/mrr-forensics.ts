@@ -131,13 +131,13 @@ function categorizeRegression(
 
 interface ForensicsReport {
   timestamp: string;
-  profiles: Array<{
+  profiles: {
     name: string;
     description: string;
     avgMrr: number;
     avgPrecision5: number;
     avgRecall: number;
-  }>;
+  }[];
   regressions: RegressionEntry[];
   causeSummary: Record<string, number>;
   recommendations: string[];

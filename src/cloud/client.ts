@@ -106,7 +106,7 @@ export class CloudClient {
     const url = `${this.baseUrl}${reqPath}`;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.token) {
-      headers["Authorization"] = `Bearer ${this.token}`;
+      headers.Authorization = `Bearer ${this.token}`;
     }
 
     let response: Response;

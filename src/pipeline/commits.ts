@@ -6,14 +6,14 @@ import { getProvider } from "../embedding-provider";
 import { getFileCommits } from "../index/commits";
 import type { PipelineContext, IndexCommitsStage } from "./types";
 
-type CommitRecord = {
+interface CommitRecord {
   relPath: string;
   hash: string;
   message: string;
   date: string;
   rank: number;
   embedding: number[] | null;
-};
+}
 
 /** Batch-load all existing commit hashes for a repo into a Set. */
 async function loadExistingCommitHashes(

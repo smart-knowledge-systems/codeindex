@@ -47,7 +47,7 @@ function resolveFileImports(
   file: EmbeddedFile,
   allFiles: Set<string>,
   fileIdMap: ReadonlyMap<string, number>,
-): Array<{ importedModule: string; resolvedId: number | null; language: string }> {
+): { importedModule: string; resolvedId: number | null; language: string }[] {
   return file.importEdges.map((edge) => {
     const resolved = resolveImport(edge.importedModule, file.relPath, edge.language, allFiles);
     const resolvedId = resolved ? (fileIdMap.get(resolved) ?? null) : null;

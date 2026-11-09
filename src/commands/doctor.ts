@@ -10,7 +10,7 @@ import { getSqlite } from "../db/sqlite";
 
 export async function cmdDoctor(repoRoot: string) {
   // Collect results immutably; derive overall status with every()
-  const results: Array<{ label: string; passed: boolean; hint?: string }> = [];
+  const results: { label: string; passed: boolean; hint?: string }[] = [];
 
   const check = (label: string, pass: boolean, hint?: string) => {
     const icon = pass ? "[ok]" : "[!!]";

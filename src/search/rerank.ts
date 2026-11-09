@@ -69,7 +69,7 @@ async function resolveFileIds(
     const rows = (await pgUnsafe(
       `SELECT id, repo_id, file_path FROM files WHERE repo_id IN (${placeholders}) AND file_path IN (${pathPlaceholders})`,
       [...ctx.repoIds, ...paths],
-    )) as Array<{ id: string; repo_id: string; file_path: string }>;
+    )) as { id: string; repo_id: string; file_path: string }[];
     for (const row of rows) {
       map.set(`${row.repo_id}:${row.file_path}`, parseInt(row.id, 10));
     }
@@ -81,11 +81,11 @@ async function resolveFileIds(
       .prepare(
         `SELECT id, repo_id, file_path FROM files WHERE repo_id IN (${repoPlaceholders}) AND file_path IN (${pathPlaceholders})`,
       )
-      .all(...ctx.repoIds, ...paths) as Array<{
+      .all(...ctx.repoIds, ...paths) as {
       id: number;
       repo_id: number;
       file_path: string;
-    }>;
+    }[];
     for (const row of rows) {
       map.set(`${row.repo_id}:${row.file_path}`, row.id);
     }
@@ -129,12 +129,12 @@ async function getImportProximityBoosts(
       const importedRows = (await pgUnsafe(
         `SELECT DISTINCT resolved_file_id AS fid FROM file_imports WHERE source_file_id IN (${placeholders}) AND resolved_file_id IS NOT NULL`,
         topFileIds,
-      )) as Array<{ fid: string }>;
+      )) as { fid: string }[];
       // Files that import top results
       const importerRows = (await pgUnsafe(
         `SELECT DISTINCT source_file_id AS fid FROM file_imports WHERE resolved_file_id IN (${placeholders})`,
         topFileIds,
-      )) as Array<{ fid: string }>;
+      )) as { fid: string }[];
 
       const connected = new Set([
         ...importedRows.map((r) => parseInt(r.fid, 10)),
@@ -152,12 +152,12 @@ async function getImportProximityBoosts(
         .prepare(
           `SELECT DISTINCT resolved_file_id AS fid FROM file_imports WHERE source_file_id IN (${placeholders}) AND resolved_file_id IS NOT NULL`,
         )
-        .all(...topFileIds) as Array<{ fid: number }>;
+        .all(...topFileIds) as { fid: number }[];
       const importerRows = db
         .prepare(
           `SELECT DISTINCT source_file_id AS fid FROM file_imports WHERE resolved_file_id IN (${placeholders})`,
         )
-        .all(...topFileIds) as Array<{ fid: number }>;
+        .all(...topFileIds) as { fid: number }[];
 
       const connected = new Set([
         ...importedRows.map((r) => r.fid),
@@ -196,7 +196,7 @@ async function getCrossRepoBoosts(
          UNION
          SELECT DISTINCT source_file_id AS fid FROM cross_repo_edges WHERE target_file_id IN (${placeholders})`,
         topFileIds,
-      )) as Array<{ fid: string }>;
+      )) as { fid: string }[];
 
       for (const row of rows) {
         const fid = parseInt(row.fid, 10);
@@ -213,7 +213,7 @@ async function getCrossRepoBoosts(
            UNION
            SELECT DISTINCT source_file_id AS fid FROM cross_repo_edges WHERE target_file_id IN (${placeholders})`,
         )
-        .all(...topFileIds, ...topFileIds) as Array<{ fid: number }>;
+        .all(...topFileIds, ...topFileIds) as { fid: number }[];
 
       for (const row of rows) {
         if (allIds.has(row.fid) && !topSet.has(row.fid)) {
@@ -252,7 +252,7 @@ async function getCoChangeBoosts(
          WHERE fc1.file_id IN (${placeholders})
          GROUP BY fc2.file_id`,
         topFileIds,
-      )) as Array<{ fid: string; best_recency: string }>;
+      )) as { fid: string; best_recency: string }[];
 
       for (const row of rows) {
         const fid = parseInt(row.fid, 10);
@@ -274,7 +274,7 @@ async function getCoChangeBoosts(
            WHERE fc1.file_id IN (${placeholders})
            GROUP BY fc2.file_id`,
         )
-        .all(...topFileIds) as Array<{ fid: number; best_recency: number }>;
+        .all(...topFileIds) as { fid: number; best_recency: number }[];
 
       for (const row of rows) {
         if (allIds.has(row.fid) && !topSet.has(row.fid)) {

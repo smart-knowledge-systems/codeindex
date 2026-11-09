@@ -38,7 +38,7 @@ export async function generateSummary(
 }
 
 export async function generateSummariesBatch(
-  prompts: Array<{ id: string; prompt: string }>,
+  prompts: { id: string; prompt: string }[],
   model = "claude-haiku-4-5-20251001",
 ): Promise<Map<string, { summary: string; tokensIn: number; tokensOut: number }>> {
   const client = getClient();

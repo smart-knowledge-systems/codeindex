@@ -42,11 +42,11 @@ class PgGlobalStore implements GlobalDedupStore {
        FROM file_blobs
        WHERE content_hash = $1 AND provider = $2 AND model = $3 AND dimensions = $4`,
       [key.contentHash, key.provider, key.model, key.dimensions],
-    )) as Array<{
+    )) as {
       skeleton: string | null;
       skeleton_entries: string | null;
       embedding: string | null;
-    }>;
+    }[];
     const row = rows.at(0);
     if (!row || !row.embedding) return null;
     return {
@@ -72,12 +72,12 @@ class PgGlobalStore implements GlobalDedupStore {
        WHERE provider = $1 AND model = $2 AND dimensions = $3
          AND content_hash IN (${hashPlaceholders})`,
       [provider, model, dimensions, ...hashes],
-    )) as Array<{
+    )) as {
       content_hash: string;
       skeleton: string | null;
       skeleton_entries: string | null;
       embedding: string | null;
-    }>;
+    }[];
     for (const row of rows) {
       if (!row.embedding) continue;
       result.set(row.content_hash, {
@@ -130,7 +130,7 @@ class PgGlobalStore implements GlobalDedupStore {
        FROM packages
        WHERE tree_hash = $1 AND provider = $2 AND model = $3 AND dimensions = $4`,
       [key.treeHash, key.provider, key.model, key.dimensions],
-    )) as Array<{ id: number; ecosystem: string; name: string; version: string }>;
+    )) as { id: number; ecosystem: string; name: string; version: string }[];
     return rows.at(0) ?? null;
   }
 
@@ -139,7 +139,7 @@ class PgGlobalStore implements GlobalDedupStore {
     const rows = (await pg.unsafe(
       `SELECT relpath, content_hash FROM package_files WHERE package_id = $1`,
       [packageId],
-    )) as Array<{ relpath: string; content_hash: string }>;
+    )) as { relpath: string; content_hash: string }[];
     return rows.map((r) => ({ relpath: r.relpath, contentHash: r.content_hash }));
   }
 
@@ -167,7 +167,7 @@ class PgGlobalStore implements GlobalDedupStore {
           key.model,
           key.dimensions,
         ],
-      )) as Array<{ id: number }>;
+      )) as { id: number }[];
       pkgId = rows[0].id;
       for (const f of files) {
         await tx.unsafe(
@@ -193,24 +193,24 @@ class PgGlobalStore implements GlobalDedupStore {
 
   async stats(): Promise<DedupStats> {
     const pg = await getPg();
-    const blobRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM file_blobs`)) as Array<{
+    const blobRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM file_blobs`)) as {
       n: number;
-    }>;
-    const pkgRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM packages`)) as Array<{
+    }[];
+    const pkgRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM packages`)) as {
       n: number;
-    }>;
-    const linkRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM repo_packages`)) as Array<{
+    }[];
+    const linkRows = (await pg.unsafe(`SELECT COUNT(*)::int AS n FROM repo_packages`)) as {
       n: number;
-    }>;
+    }[];
     const ecoRows = (await pg.unsafe(
       `SELECT ecosystem, COUNT(*)::int AS n FROM packages GROUP BY ecosystem ORDER BY n DESC`,
-    )) as Array<{ ecosystem: string; n: number }>;
+    )) as { ecosystem: string; n: number }[];
     const provRows = (await pg.unsafe(
       `SELECT provider, model, dimensions, COUNT(*)::int AS n
        FROM file_blobs
        GROUP BY provider, model, dimensions
        ORDER BY n DESC`,
-    )) as Array<{ provider: string; model: string; dimensions: number; n: number }>;
+    )) as { provider: string; model: string; dimensions: number; n: number }[];
     return {
       blobCount: blobRows[0]?.n ?? 0,
       packageCount: pkgRows[0]?.n ?? 0,
@@ -231,7 +231,7 @@ class PgGlobalStore implements GlobalDedupStore {
     const rows = (await pg.unsafe(
       `DELETE FROM repo_packages WHERE repo_root = $1 RETURNING package_id`,
       [repoRoot],
-    )) as Array<{ package_id: number }>;
+    )) as { package_id: number }[];
     return rows.length;
   }
 
@@ -240,16 +240,16 @@ class PgGlobalStore implements GlobalDedupStore {
     const rows = (await pg.unsafe(
       `SELECT id FROM packages
        WHERE id NOT IN (SELECT DISTINCT package_id FROM repo_packages)`,
-    )) as Array<{ id: number }>;
+    )) as { id: number }[];
     return rows.map((r) => r.id);
   }
 
   async listLivePackageBlobHashes(excludePackageIds: number[]): Promise<string[]> {
     const pg = await getPg();
     if (excludePackageIds.length === 0) {
-      const rows = (await pg.unsafe(`SELECT DISTINCT content_hash FROM package_files`)) as Array<{
+      const rows = (await pg.unsafe(`SELECT DISTINCT content_hash FROM package_files`)) as {
         content_hash: string;
-      }>;
+      }[];
       return rows.map((r) => r.content_hash);
     }
     const placeholders = excludePackageIds.map((_, i) => `$${i + 1}`).join(",");
@@ -257,7 +257,7 @@ class PgGlobalStore implements GlobalDedupStore {
       `SELECT DISTINCT content_hash FROM package_files
        WHERE package_id NOT IN (${placeholders})`,
       [...excludePackageIds],
-    )) as Array<{ content_hash: string }>;
+    )) as { content_hash: string }[];
     return rows.map((r) => r.content_hash);
   }
 
@@ -284,7 +284,7 @@ class PgGlobalStore implements GlobalDedupStore {
              AND rf.model        = fb.model
              AND rf.dimensions   = fb.dimensions
          )`,
-      )) as Array<{ n: number }>;
+      )) as { n: number }[];
       return rows[0]?.n ?? 0;
     }
     // Spreading every live hash into its own bind would risk PG's 65535
@@ -302,7 +302,7 @@ class PgGlobalStore implements GlobalDedupStore {
                AND rf.model        = fb.model
                AND rf.dimensions   = fb.dimensions
            )`,
-      )) as Array<{ n: number }>;
+      )) as { n: number }[];
       return rows[0]?.n ?? 0;
     });
   }
@@ -320,7 +320,7 @@ class PgGlobalStore implements GlobalDedupStore {
              AND rf.dimensions   = fb.dimensions
          )
          RETURNING content_hash`,
-      )) as Array<{ content_hash: string }>;
+      )) as { content_hash: string }[];
       return rows.length;
     }
     return pg.begin(async (tx) => {
@@ -336,7 +336,7 @@ class PgGlobalStore implements GlobalDedupStore {
                AND rf.dimensions   = fb.dimensions
            )
          RETURNING content_hash`,
-      )) as Array<{ content_hash: string }>;
+      )) as { content_hash: string }[];
       return rows.length;
     });
   }
@@ -366,12 +366,12 @@ class PgGlobalStore implements GlobalDedupStore {
     if (opts.dryRun) {
       const rows = (await pg.unsafe(
         `SELECT COUNT(*)::int AS n FROM file_blobs fb ${orphanWhere}`,
-      )) as Array<{ n: number }>;
+      )) as { n: number }[];
       return rows[0]?.n ?? 0;
     }
     const rows = (await pg.unsafe(
       `DELETE FROM file_blobs fb ${orphanWhere} RETURNING content_hash`,
-    )) as Array<{ content_hash: string }>;
+    )) as { content_hash: string }[];
     return rows.length;
   }
 

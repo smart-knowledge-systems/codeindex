@@ -52,7 +52,7 @@ function buildDefinitionMatches(
 }
 
 /** Convert consumer query rows into consumer matches. */
-function buildConsumerMatches(rows: Array<Record<string, unknown>>, score: number): XrefMatch[] {
+function buildConsumerMatches(rows: Record<string, unknown>[], score: number): XrefMatch[] {
   return rows.map((c) => ({
     filePath: String(c.file_path),
     repoName: String(c.repo_name),
@@ -164,7 +164,7 @@ async function xrefPg(
       const prev = scoreByHash.get(hash) ?? 0;
       if (score > prev) scoreByHash.set(hash, score);
     }
-    for (const r of attribRows as Array<Record<string, unknown>>) {
+    for (const r of attribRows as Record<string, unknown>[]) {
       const key = `${Number(r.repo_id)}:${String(r.file_path)}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -224,14 +224,14 @@ async function xrefSqlite(
        WHERE f.skeleton IS NOT NULL
          AND f.skeleton LIKE '%' || ? || '%'`,
     )
-    .all(symbol) as Array<{
+    .all(symbol) as {
     id: number;
     file_path: string;
     skeleton: string;
     repo_id: number;
     content_hash: string;
     repo_name: string;
-  }>;
+  }[];
 
   const docs = skeletonRows.map((r) => ({ id: String(r.id), text: r.skeleton }));
   if (docs.length === 0) return [];
@@ -272,12 +272,12 @@ async function xrefSqlite(
            AND rf.model = ?
            AND rf.dimensions = ?`,
       )
-      .all(...definitionHashes, provider, model, dimensions) as Array<{
+      .all(...definitionHashes, provider, model, dimensions) as {
       content_hash: string;
       file_path: string;
       repo_id: number;
       repo_name: string;
-    }>;
+    }[];
     const seen = new Set(definitionMatches.map((m) => `${m.repoId}:${m.filePath}`));
     const scoreByHash = new Map<string, number>();
     for (const id of definitionFileIds) {
@@ -313,7 +313,7 @@ async function xrefSqlite(
        JOIN repos r ON f.repo_id = r.id
        WHERE fi.resolved_file_id IN (${placeholders})`,
     )
-    .all(...fileIdArray) as Array<Record<string, unknown>>;
+    .all(...fileIdArray) as Record<string, unknown>[];
   const consumerMatches = buildConsumerMatches(consumers, 0.5);
 
   // 3. Check cross_repo_edges
@@ -325,7 +325,7 @@ async function xrefSqlite(
        JOIN repos r ON f.repo_id = r.id
        WHERE cre.target_file_id IN (${placeholders})`,
     )
-    .all(...fileIdArray) as Array<Record<string, unknown>>;
+    .all(...fileIdArray) as Record<string, unknown>[];
   const crossEdgeMatches = buildConsumerMatches(crossEdges, 0.4);
 
   return [...definitionMatches, ...dedupAttribution, ...consumerMatches, ...crossEdgeMatches];

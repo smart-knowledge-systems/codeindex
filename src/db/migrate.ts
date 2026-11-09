@@ -561,7 +561,7 @@ export async function checkEmbeddingDimensions(
     if (rows.length === 0 || !rows[0].sql) return null;
 
     const sql = rows[0].sql;
-    const match = sql.match(/float\[(\d+)\]/);
+    const match = /float\[(\d+)\]/.exec(sql);
     if (!match) return null;
 
     const tableDimensions = parseInt(match[1], 10);
