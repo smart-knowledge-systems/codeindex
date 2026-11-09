@@ -201,7 +201,7 @@ codeindex mcp-config              # Print MCP server config for editors
 4. **Extract** an AST skeleton via tree-sitter for supported languages, or first N lines for non-code files
 5. **Extract imports** from tree-sitter skeletons into the `file_imports` table for dependency graph queries
 6. **Embed** skeletons using the configured embedding provider (batched)
-7. **Embed** recent commit messages and link to files with recency ranks
+7. **Embed** recent commit messages, with any credential in them replaced by `[REDACTED]`, and link to files with recency ranks
 8. **Summarize** directories bottom-up (cached by content hash — ~90% cost reduction on incremental reindex)
 9. **Discover** cross-repo relationships from import edges across registered repos
 10. **Record** token usage and estimated costs

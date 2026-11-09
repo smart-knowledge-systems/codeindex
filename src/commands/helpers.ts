@@ -6,7 +6,7 @@ import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { getRepoOrigin, getRepoName } from "../index/commits";
 import { MAX_FILE_SIZE } from "../index/walker";
-import { scanForSecrets } from "../index/secrets";
+import { redactSecrets, scanForSecrets } from "../index/secrets";
 import { isPublishedContent } from "../index/public-repo";
 import { formatAndHash } from "../index/formatter";
 import { extractSkeletonWithEntries } from "../index/skeleton";
@@ -121,5 +121,5 @@ export async function getCommitMessage(repoRoot: string, hash: string): Promise<
   });
   const exitCode = await proc.exited;
   if (exitCode !== 0) return null;
-  return (await new Response(proc.stdout).text()).trim();
+  return redactSecrets((await new Response(proc.stdout).text()).trim());
 }

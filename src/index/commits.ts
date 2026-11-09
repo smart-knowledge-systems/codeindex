@@ -1,4 +1,5 @@
 import path from "path";
+import { redactSecrets } from "./secrets";
 import { logEvent } from "../logging";
 
 // ---------------------------------------------------------------------------
@@ -101,7 +102,7 @@ function parseCommitOutput(output: string): CommitEntry[] {
   for (let i = 0; i + 2 < lines.length; i += 3) {
     const hash = lines[i].trim();
     if (hash.length === 0) continue;
-    result.push({ hash, message: lines[i + 1].trim(), date: lines[i + 2].trim() });
+    result.push({ hash, message: redactSecrets(lines[i + 1].trim()), date: lines[i + 2].trim() });
   }
   return result;
 }

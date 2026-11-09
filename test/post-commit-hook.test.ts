@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import { getChangedFiles } from "../src/index/commits";
+import { getChangedFiles, getFileCommits } from "../src/index/commits";
+import { getCommitMessage } from "../src/commands/helpers";
 import { installHook } from "../src/hooks/post-commit";
 
 let repo: string;
@@ -34,6 +35,21 @@ describe("getChangedFiles", () => {
 
     const files = await getChangedFiles(repo, git("rev-parse", "HEAD"));
     expect(files.sort()).toEqual([...names].sort());
+  });
+});
+
+describe("commit messages", () => {
+  it("are redacted where they are read from git", async () => {
+    const key = `AKIA${"Z7QRSTUV2345WXYZ"}`;
+    writeFileSync(path.join(repo, "a.ts"), "x\n");
+    git("add", ".");
+    git("commit", "-q", "-m", `rotate key, old one was ${key}`);
+
+    const [entry] = await getFileCommits(repo, "a.ts", 1);
+    expect(entry?.message).toBe("rotate key, old one was [REDACTED]");
+    expect(await getCommitMessage(repo, git("rev-parse", "HEAD"))).toBe(
+      "rotate key, old one was [REDACTED]",
+    );
   });
 });
 
