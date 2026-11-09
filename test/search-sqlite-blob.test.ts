@@ -37,13 +37,7 @@ describe("buildBlobFileQuerySqlite", () => {
     expect(sql).toContain(
       "EXISTS (SELECT 1 FROM files f JOIN file_commits fc ON fc.file_id = f.id",
     );
-    expect(params).toEqual([
-      "ts",
-      "tsx",
-      "src/%",
-      "lib/%",
-      "2026-01-01T00:00:00.000Z",
-    ]);
+    expect(params).toEqual(["ts", "tsx", "src/%", "lib/%", "2026-01-01T00:00:00.000Z"]);
   });
 
   it("rejects non-integer repo ids", () => {

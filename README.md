@@ -42,12 +42,12 @@ Run `codeindex doctor` to verify your environment is configured correctly.
 
 You can also set credentials manually:
 
-| Method | Scope | Example |
-|--------|-------|---------|
-| `codeindex auth` | Global (all repos) | Interactive setup |
+| Method                     | Scope              | Example                           |
+| -------------------------- | ------------------ | --------------------------------- |
+| `codeindex auth`           | Global (all repos) | Interactive setup                 |
 | `~/.config/codeindex/.env` | Global (all repos) | `CODEINDEX_OPENAI_API_KEY=sk-...` |
-| Project `.env` file | Single repo | `OPENAI_API_KEY=sk-...` |
-| Shell export | Session | `export OPENAI_API_KEY=sk-...` |
+| Project `.env` file        | Single repo        | `OPENAI_API_KEY=sk-...`           |
+| Shell export               | Session            | `export OPENAI_API_KEY=sk-...`    |
 
 Priority (highest wins): shell export > project `.env` > `CODEINDEX_OPENAI_API_KEY` > global `.env`
 
@@ -225,18 +225,18 @@ Results include files, directories, and commits. Per-language scoring profiles a
 
 ## Storage
 
-| Backend | Use case | Vector search |
-|---------|----------|---------------|
-| **SQLite** (default) | Single-repo, zero-config, portable, CI/CD | sqlite-vec `vec_distance_cosine()` |
-| **PostgreSQL** | Multi-repo, shared index, cross-repo intelligence | pgvector `<=>` operator with HNSW indexes |
+| Backend              | Use case                                          | Vector search                             |
+| -------------------- | ------------------------------------------------- | ----------------------------------------- |
+| **SQLite** (default) | Single-repo, zero-config, portable, CI/CD         | sqlite-vec `vec_distance_cosine()`        |
+| **PostgreSQL**       | Multi-repo, shared index, cross-repo intelligence | pgvector `<=>` operator with HNSW indexes |
 
 ## Embedding providers
 
-| Provider | Model | Cost | Setup |
-|----------|-------|------|-------|
-| **OpenAI** (default) | `text-embedding-3-small` | ~$0.02/1K files | `codeindex auth` or `OPENAI_API_KEY` env var |
-| **Ollama** (local) | `nomic-embed-text` | Free | `codeindex auth` or `ollama pull nomic-embed-text` |
-| **Anthropic** | `voyage-3-lite` | ~$0.02/1K files | `ANTHROPIC_API_KEY` env var |
+| Provider             | Model                    | Cost            | Setup                                              |
+| -------------------- | ------------------------ | --------------- | -------------------------------------------------- |
+| **OpenAI** (default) | `text-embedding-3-small` | ~$0.02/1K files | `codeindex auth` or `OPENAI_API_KEY` env var       |
+| **Ollama** (local)   | `nomic-embed-text`       | Free            | `codeindex auth` or `ollama pull nomic-embed-text` |
+| **Anthropic**        | `voyage-3-lite`          | ~$0.02/1K files | `ANTHROPIC_API_KEY` env var                        |
 
 ## Ignore patterns
 

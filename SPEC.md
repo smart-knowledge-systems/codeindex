@@ -1,10 +1,11 @@
 # codeindex
 
-A local semantic index for codebases. Augments Claude Code's built-in Glob/Grep/Read tools with embedding-based search so the agent knows *where to look* before doing text search.
+A local semantic index for codebases. Augments Claude Code's built-in Glob/Grep/Read tools with embedding-based search so the agent knows _where to look_ before doing text search.
 
 ## Inspirations
 
 ### OpenViking — Agent-native Context Database
+
 - **Repo**: https://github.com/volcengine/OpenViking
 - **AST extraction**: https://github.com/volcengine/OpenViking/tree/main/openviking/parse/parsers/code/ast
 - **Tree builder**: https://github.com/volcengine/OpenViking/blob/main/openviking/parse/tree_builder.py
@@ -17,6 +18,7 @@ A local semantic index for codebases. Augments Claude Code's built-in Glob/Grep/
 - **What we skipped**: Hierarchical priority-queue traversal, session/memory management, custom C++ KV engine, AGFS virtual filesystem, hotness scoring, LLM-based reranking, intent analysis query expansion.
 
 ### Augment Context Services — Cloud Code Search
+
 - **Docs**: https://docs.augmentcode.com/context-services/overview
 - **SDK API Reference**: https://docs.augmentcode.com/context-services/sdk/api-reference.md
 - **MCP Overview**: https://docs.augmentcode.com/context-services/mcp/overview.md
@@ -25,12 +27,14 @@ A local semantic index for codebases. Augments Claude Code's built-in Glob/Grep/
 - **What we skipped**: Cloud-hosted index, proprietary embedding model, per-query credit costs, opaque chunking strategy.
 
 ### sigma-ralph-grindset — Claude CLI as LLM Backend
+
 - **Repo**: https://github.com/smart-knowledge-systems/sigma-ralph-grindset
 - **CLI backend**: https://github.com/smart-knowledge-systems/sigma-ralph-grindset/blob/main/src/audit/cli-backend.ts
 - **JSON schema enforcement**: https://github.com/smart-knowledge-systems/sigma-ralph-grindset/blob/main/src/audit/schema.ts
 - **What we took**: Pattern of spawning `claude --print --model haiku` with `--json-schema` for structured output, using the CLI as a cheap LLM backend without adding an SDK dependency. Dual-backend approach (CLI for dev, API for production).
 
 ### db-harness — TypeScript Database Skill Pattern
+
 - **Repo**: `/Users/russfugal/ObsidianVault/tPoSO/db-harness`
 - **What we took**: Modular skill structure with typed query functions exported as a single `db` object, dual-database abstraction (PostgreSQL + SQLite), Bun-native database access, `types.ts` for all interfaces.
 
@@ -72,16 +76,19 @@ Query time:
 ## Storage
 
 ### PostgreSQL (default)
+
 - One database on localhost for all indexed repos.
 - Uses pgvector extension for vector similarity search.
 - Default query scoped to current repo (by git remote origin); `--all` or `--repos` flags for cross-repo search.
 
 ### SQLite (portable option)
+
 - Uses sqlite-vec extension for vector similarity search.
 - `.codeindex.db` file in repo root (or custom path).
 - Can be committed to the repo for sharing.
 
 ### Export
+
 - `codeindex export` snapshots the current repo's data from PostgreSQL into a SQLite file.
 - Useful for CI artifacts, sharing with teammates, or offline use.
 
@@ -182,21 +189,21 @@ Directories are also returned as standalone results with `type: "dir"` using `di
 
 ```typescript
 interface SearchResult {
-  filePath: string           // relative to repo root (absolute if cross-repo)
-  cosineSimilarity: number   // raw vector similarity (file_score or dir_score or commit score)
-  finalScore: number         // after commit_boost + parent_boost
-  type: string               // ".ts" | ".js" | ".md" | "dir" | "commit" | etc.
-  inProject: boolean         // true if same repo as cwd
-  repoId?: string            // repo name/origin when inProject is false
-  commitIds?: string[]       // relevant commit hashes (for file results)
-  skeleton?: string          // AST skeleton preview (included when requested)
+  filePath: string; // relative to repo root (absolute if cross-repo)
+  cosineSimilarity: number; // raw vector similarity (file_score or dir_score or commit score)
+  finalScore: number; // after commit_boost + parent_boost
+  type: string; // ".ts" | ".js" | ".md" | "dir" | "commit" | etc.
+  inProject: boolean; // true if same repo as cwd
+  repoId?: string; // repo name/origin when inProject is false
+  commitIds?: string[]; // relevant commit hashes (for file results)
+  skeleton?: string; // AST skeleton preview (included when requested)
 }
 
 interface SearchOptions {
-  minScore?: number          // default 0.3, return all results >= this
-  topN?: number              // optional cap on result count, default unlimited
-  scope?: "project" | "all" | string[]   // repo names, default "project"
-  includeSkeleton?: boolean  // include skeleton text in results, default false
+  minScore?: number; // default 0.3, return all results >= this
+  topN?: number; // optional cap on result count, default unlimited
+  scope?: "project" | "all" | string[]; // repo names, default "project"
+  includeSkeleton?: boolean; // include skeleton text in results, default false
 }
 ```
 
@@ -216,6 +223,7 @@ codeindex update --files $files --commit $commit
 ```
 
 The `update` command:
+
 1. For each file: format (in memory) -> hash -> skip if unchanged -> extract skeleton -> embed -> upsert.
 2. For the commit: embed message -> upsert -> link to files with recency ranks.
 3. For each affected directory (bottom-up from changed files to root):
@@ -230,6 +238,7 @@ codeindex reindex [--store pg|sqlite] [--path ./]
 ```
 
 Walks the entire file tree, respecting:
+
 - `.gitignore` (standard git ignore rules)
 - `.indexignore` (additional patterns, same syntax as .gitignore)
 
@@ -239,15 +248,15 @@ Processes all files and directories bottom-up. Uses content hashes to skip files
 
 Auto-detected from project config files, checked in priority order:
 
-| Config file                          | Formatter command    |
-|--------------------------------------|----------------------|
-| `biome.json` / `biome.jsonc`        | `biome format`       |
-| `.prettierrc*` / `prettier.config.*` | `prettier`           |
-| `rustfmt.toml` / `.rustfmt.toml`    | `rustfmt`            |
-| `pyproject.toml` `[tool.black]`     | `black`              |
-| `pyproject.toml` `[tool.ruff]`      | `ruff format`        |
-| `.clang-format`                      | `clang-format`       |
-| Go files present                     | `gofmt`              |
+| Config file                          | Formatter command |
+| ------------------------------------ | ----------------- |
+| `biome.json` / `biome.jsonc`         | `biome format`    |
+| `.prettierrc*` / `prettier.config.*` | `prettier`        |
+| `rustfmt.toml` / `.rustfmt.toml`     | `rustfmt`         |
+| `pyproject.toml` `[tool.black]`      | `black`           |
+| `pyproject.toml` `[tool.ruff]`       | `ruff format`     |
+| `.clang-format`                      | `clang-format`    |
+| Go files present                     | `gofmt`           |
 
 Override: `codeindex config --formatter "prettier --write"`
 
@@ -280,11 +289,13 @@ claude --print \
 ```
 
 Processing order (bottom-up):
+
 1. Leaf directories first (no child summaries available, only file skeletons + docs).
 2. Parent directories next (include child directory summaries, but NOT grandchild file skeletons).
 3. Continue up to repo root.
 
 Each directory stores two independent embeddings:
+
 - `concat_embedding`: embedding of the raw concatenated child skeletons (non-recursive).
 - `summary_embedding`: embedding of the haiku-generated summary (which incorporates recursive child summaries).
 
@@ -310,15 +321,15 @@ function createMiddleware(options) -> RequestHandler
 
 ### Extracted per language:
 
-| Language       | Extensions              | Extracts                                                    |
-|----------------|-------------------------|-------------------------------------------------------------|
-| TypeScript/JS  | .ts .tsx .js .jsx       | imports, classes, methods, functions, JSDoc comments         |
-| Python         | .py                     | imports, classes, methods, functions, module/class docstrings|
-| Rust           | .rs                     | use declarations, structs, traits, enums, impl blocks, fns  |
-| Go             | .go                     | imports, structs, interfaces, functions, methods             |
-| Java           | .java                   | imports, classes, interfaces, enums, methods, Javadoc        |
-| C/C++          | .c .cpp .h .hpp         | includes, classes, structs, namespaces, functions, Doxygen   |
-| C#             | .cs                     | usings, classes, interfaces, methods                         |
+| Language      | Extensions        | Extracts                                                      |
+| ------------- | ----------------- | ------------------------------------------------------------- |
+| TypeScript/JS | .ts .tsx .js .jsx | imports, classes, methods, functions, JSDoc comments          |
+| Python        | .py               | imports, classes, methods, functions, module/class docstrings |
+| Rust          | .rs               | use declarations, structs, traits, enums, impl blocks, fns    |
+| Go            | .go               | imports, structs, interfaces, functions, methods              |
+| Java          | .java             | imports, classes, interfaces, enums, methods, Javadoc         |
+| C/C++         | .c .cpp .h .hpp   | includes, classes, structs, namespaces, functions, Doxygen    |
+| C#            | .cs               | usings, classes, interfaces, methods                          |
 
 Non-code files (.md, .json, .yaml, .toml, etc.) use first N lines (configurable, default 50) as the skeleton.
 
@@ -388,22 +399,23 @@ codeindex/
 
 ## Dependencies
 
-| Package                  | Purpose                              |
-|--------------------------|--------------------------------------|
-| `tree-sitter`            | AST parsing (via WASM bindings)      |
-| `tree-sitter-typescript` | TS/JS grammar                        |
-| `tree-sitter-python`     | Python grammar                       |
-| `tree-sitter-rust`       | Rust grammar                         |
-| `tree-sitter-go`         | Go grammar                           |
-| `tree-sitter-java`       | Java grammar                         |
-| `tree-sitter-c`          | C grammar                            |
-| `tree-sitter-cpp`        | C++ grammar                          |
-| `tree-sitter-c-sharp`    | C# grammar                           |
-| `openai`                 | Embedding API (text-embedding-3-small)|
-| `ignore`                 | .gitignore/.indexignore parsing       |
-| `sqlite-vec`             | SQLite vector extension (optional)    |
+| Package                  | Purpose                                |
+| ------------------------ | -------------------------------------- |
+| `tree-sitter`            | AST parsing (via WASM bindings)        |
+| `tree-sitter-typescript` | TS/JS grammar                          |
+| `tree-sitter-python`     | Python grammar                         |
+| `tree-sitter-rust`       | Rust grammar                           |
+| `tree-sitter-go`         | Go grammar                             |
+| `tree-sitter-java`       | Java grammar                           |
+| `tree-sitter-c`          | C grammar                              |
+| `tree-sitter-cpp`        | C++ grammar                            |
+| `tree-sitter-c-sharp`    | C# grammar                             |
+| `openai`                 | Embedding API (text-embedding-3-small) |
+| `ignore`                 | .gitignore/.indexignore parsing        |
+| `sqlite-vec`             | SQLite vector extension (optional)     |
 
 Runtime dependencies (not npm packages):
+
 - `claude` CLI (for directory summary generation)
 - `git` (for hooks, commit history, file change detection)
 - PostgreSQL with pgvector (default storage)

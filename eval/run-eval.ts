@@ -91,9 +91,7 @@ export async function runEval(
     };
 
     const searchResults = await search(repoRoot, q.query, options);
-    const returnedFiles = searchResults
-      .filter((r) => r.type !== "commit")
-      .map((r) => r.filePath);
+    const returnedFiles = searchResults.filter((r) => r.type !== "commit").map((r) => r.filePath);
 
     const precision5 = computePrecisionAt5(returnedFiles, q.expectedFiles);
     const hitRate5 = computeHitRateAt5(returnedFiles, q.expectedFiles);
@@ -167,9 +165,7 @@ function generateMarkdown(summary: EvalSummary, ripgrepSummary?: EvalSummary): s
     lines.push(
       `| Avg Recall | ${summary.avgRecall.toFixed(3)} | ${ripgrepSummary.avgRecall.toFixed(3)} |`,
     );
-    lines.push(
-      `| Avg MRR | ${summary.avgMrr.toFixed(3)} | ${ripgrepSummary.avgMrr.toFixed(3)} |`,
-    );
+    lines.push(`| Avg MRR | ${summary.avgMrr.toFixed(3)} | ${ripgrepSummary.avgMrr.toFixed(3)} |`);
     lines.push(
       `| Avg nDCG@10 | ${summary.avgNdcg.toFixed(3)} | ${ripgrepSummary.avgNdcg.toFixed(3)} |`,
     );
@@ -330,10 +326,7 @@ async function main() {
     );
   }
 
-  fs.writeFileSync(
-    path.join(outputDir, `${configName}.json`),
-    JSON.stringify(summary, null, 2),
-  );
+  fs.writeFileSync(path.join(outputDir, `${configName}.json`), JSON.stringify(summary, null, 2));
 
   const markdown = generateMarkdown(summary, ripgrepSummary);
   fs.writeFileSync(path.join(outputDir, "SUMMARY.md"), markdown);

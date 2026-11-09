@@ -31,9 +31,7 @@ export function validateDataset(
 /**
  * Print a validation report.
  */
-export function printValidationReport(
-  result: ReturnType<typeof validateDataset>,
-): void {
+export function printValidationReport(result: ReturnType<typeof validateDataset>): void {
   console.log(`\nDataset Validation Report`);
   console.log(`Valid queries: ${result.valid.length}`);
   console.log(`Stale queries: ${result.stale.length}`);

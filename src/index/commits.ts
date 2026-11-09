@@ -6,7 +6,8 @@ import { logEvent } from "../logging";
 // ---------------------------------------------------------------------------
 
 export type GitResult =
-  { ok: true; stdout: string } | { ok: false; error: Error; exitCode: number };
+  | { ok: true; stdout: string }
+  | { ok: false; error: Error; exitCode: number };
 
 // ---------------------------------------------------------------------------
 // Git runner with structured error logging

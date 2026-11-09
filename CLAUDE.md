@@ -7,7 +7,7 @@
 - **GitHub account:** Run `gh auth switch --user smart-knowledge-systems` before git operations
 - **Atomic commits**: One commit per logical change
 - **Complex tasks:** Use agent teams for multi-file, cross-layer, or parallelizable work. See `~/.claude/agent-teams.md` for setup and best practices
-- **Dogfood:** 
+- **Dogfood:**
   - use /codeindex as the primary/initial search (follow up with any tool, including standard grep)
   - Explore agents, Plan agents, and agentic teams should also utilize the `codeindex search` CLI
   - reindex after commits

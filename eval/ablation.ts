@@ -113,19 +113,15 @@ async function main() {
 
     summaries.push(summary);
 
-    fs.writeFileSync(
-      path.join(outputDir, `${config.name}.json`),
-      JSON.stringify(summary, null, 2),
-    );
+    fs.writeFileSync(path.join(outputDir, `${config.name}.json`), JSON.stringify(summary, null, 2));
 
-    console.log(`  P@5: ${avgPrecision5.toFixed(3)}  Recall: ${avgRecall.toFixed(3)}  MRR: ${avgMrr.toFixed(3)}`);
+    console.log(
+      `  P@5: ${avgPrecision5.toFixed(3)}  Recall: ${avgRecall.toFixed(3)}  MRR: ${avgMrr.toFixed(3)}`,
+    );
   }
 
   // Write combined ablation results
-  fs.writeFileSync(
-    path.join(outputDir, "ablation.json"),
-    JSON.stringify(summaries, null, 2),
-  );
+  fs.writeFileSync(path.join(outputDir, "ablation.json"), JSON.stringify(summaries, null, 2));
 
   // Write comparison markdown
   const markdown = generateComparisonMarkdown(summaries);

@@ -88,7 +88,9 @@ async function main() {
   );
 
   // If previous model results exist, include them in the table
-  const resultFiles = fs.readdirSync(outputDir).filter((f) => f.startsWith("model-") && f.endsWith(".json"));
+  const resultFiles = fs
+    .readdirSync(outputDir)
+    .filter((f) => f.startsWith("model-") && f.endsWith(".json"));
   if (resultFiles.length > 1) {
     console.log("\n--- Full Comparison ---\n");
     console.log("| Model | nDCG@10 | MRR | P@5 | HR@5 | Recall | Cost/1K files |");
