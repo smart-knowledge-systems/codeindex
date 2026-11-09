@@ -1,0 +1,1625 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`skeleton golden output sample.c 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 7,
+      "kind": "typedef",
+      "name": "Point",
+      "startLine": 4,
+    },
+    {
+      "endLine": 13,
+      "kind": "typedef",
+      "name": "Rect",
+      "startLine": 9,
+    },
+    {
+      "endLine": 18,
+      "kind": "function",
+      "name": "point_new",
+      "startLine": 15,
+    },
+    {
+      "endLine": 22,
+      "kind": "function",
+      "name": "rect_area",
+      "startLine": 20,
+    },
+  ],
+  "text": 
+"# sample.c [C]
+imports: stdio.h, stdlib.h
+
+typedef struct Point
+
+typedef struct Rect
+
+function point_new(x: int, y: int) -> Point
+
+function rect_area(*r: Rect) -> int"
+,
+}
+`;
+
+exports[`skeleton golden output sample.cpp 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 32,
+      "kind": "namespace",
+      "name": "shapes",
+      "startLine": 4,
+    },
+    {
+      "endLine": 10,
+      "kind": "class",
+      "name": "Shape",
+      "startLine": 6,
+    },
+    {
+      "endLine": 19,
+      "kind": "class",
+      "name": "Circle",
+      "startLine": 12,
+    },
+    {
+      "endLine": 23,
+      "kind": "function",
+      "name": "Circle::area",
+      "startLine": 21,
+    },
+    {
+      "endLine": 30,
+      "kind": "class",
+      "name": "Container",
+      "startLine": 26,
+    },
+  ],
+  "text": 
+"# sample.cpp [C++]
+imports: string, vector
+
+namespace shapes
+  class Shape
+    function ~Shape()
+
+
+  class Circle
+    function Circle(radius: double)
+
+
+  function Circle::area() -> double
+
+  template<typename T>
+  class Container"
+,
+}
+`;
+
+exports[`skeleton golden output sample.cs 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 9,
+      "kind": "interface",
+      "name": "ILogger",
+      "startLine": 6,
+    },
+    {
+      "endLine": 8,
+      "kind": "method",
+      "name": "Log",
+      "startLine": 8,
+    },
+    {
+      "endLine": 32,
+      "kind": "class",
+      "name": "ConsoleLogger",
+      "startLine": 11,
+    },
+    {
+      "endLine": 20,
+      "kind": "method",
+      "name": "ConsoleLogger",
+      "startLine": 17,
+    },
+    {
+      "endLine": 25,
+      "kind": "method",
+      "name": "Log",
+      "startLine": 22,
+    },
+    {
+      "endLine": 31,
+      "kind": "method",
+      "name": "Create",
+      "startLine": 27,
+    },
+  ],
+  "text": 
+"# sample.cs [C#]
+imports: System, System.Collections.Generic
+
+interface ILogger
+  + Log() -> void
+
+[Serializable]
+class ConsoleLogger
+  + Name: string
+  + ConsoleLogger()
+  + Log() -> void
+  [Obsolete("Use Create instead")]
+  + Create() -> ConsoleLogger"
+,
+}
+`;
+
+exports[`skeleton golden output sample.ex 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 37,
+      "kind": "class",
+      "name": "Animals.Dog",
+      "startLine": 1,
+    },
+    {
+      "endLine": 16,
+      "kind": "function",
+      "name": "new",
+      "startLine": 14,
+    },
+    {
+      "endLine": 20,
+      "kind": "function",
+      "name": "validate",
+      "startLine": 18,
+    },
+    {
+      "endLine": 24,
+      "kind": "function",
+      "name": "speak",
+      "startLine": 22,
+    },
+    {
+      "endLine": 28,
+      "kind": "function",
+      "name": "speak",
+      "startLine": 26,
+    },
+    {
+      "endLine": 36,
+      "kind": "function",
+      "name": "define_greeting",
+      "startLine": 30,
+    },
+    {
+      "endLine": 42,
+      "kind": "interface",
+      "name": "Describable",
+      "startLine": 39,
+    },
+    {
+      "endLine": 41,
+      "kind": "function",
+      "name": "describe",
+      "startLine": 41,
+    },
+    {
+      "endLine": 48,
+      "kind": "impl",
+      "name": "Describable",
+      "startLine": 44,
+    },
+    {
+      "endLine": 47,
+      "kind": "function",
+      "name": "describe",
+      "startLine": 45,
+    },
+    {
+      "endLine": 66,
+      "kind": "class",
+      "name": "Animals.Cat",
+      "startLine": 50,
+    },
+    {
+      "endLine": 57,
+      "kind": "function",
+      "name": "new",
+      "startLine": 55,
+    },
+    {
+      "endLine": 61,
+      "kind": "function",
+      "name": "purr",
+      "startLine": 59,
+    },
+    {
+      "endLine": 65,
+      "kind": "function",
+      "name": "internal_macro",
+      "startLine": 63,
+    },
+    {
+      "endLine": 76,
+      "kind": "class",
+      "name": "MathUtils",
+      "startLine": 68,
+    },
+    {
+      "endLine": 70,
+      "kind": "function",
+      "name": "add",
+      "startLine": 70,
+    },
+    {
+      "endLine": 72,
+      "kind": "function",
+      "name": "subtract",
+      "startLine": 72,
+    },
+    {
+      "endLine": 74,
+      "kind": "function",
+      "name": "divide",
+      "startLine": 74,
+    },
+    {
+      "endLine": 75,
+      "kind": "function",
+      "name": "divide",
+      "startLine": 75,
+    },
+  ],
+  "text": 
+"# sample.ex [Elixir]
+imports: use GenServer, import Enum, require Logger
+
+defmodule Animals.Dog
+  defstruct [name, age, breed]
+  def new(name, age)
+  defp validate(dog)
+  def speak(dog)
+  def speak(_other)
+  defmacro define_greeting(name)
+
+defprotocol Describable
+  def describe(data)
+
+defimpl Describable, for: Animals.Dog
+  def describe(dog)
+
+defmodule Animals.Cat
+  defstruct [name, color]
+  def new(name, color \\\\ "black")
+  defp purr()
+  defmacrop internal_macro()
+
+defmodule MathUtils
+  def add(a, b)
+  def subtract(a, b)
+  def divide(_a, 0)
+  def divide(a, b)"
+,
+}
+`;
+
+exports[`skeleton golden output sample.go 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 7,
+      "kind": "interface",
+      "name": "Handler",
+      "startLine": 5,
+    },
+    {
+      "endLine": 11,
+      "kind": "struct",
+      "name": "Router",
+      "startLine": 9,
+    },
+    {
+      "endLine": 15,
+      "kind": "function",
+      "name": "NewRouter",
+      "startLine": 13,
+    },
+    {
+      "endLine": 19,
+      "kind": "method",
+      "name": "Handle",
+      "startLine": 17,
+    },
+    {
+      "endLine": 32,
+      "kind": "function",
+      "name": "hello",
+      "startLine": 30,
+    },
+  ],
+  "text": 
+"# sample.go [Go]
+imports: fmt
+
+interface Handler
+
+struct Router
+
+function NewRouter() -> *Router
+
+function (r *Router) Handle(path string, h Handler)
+
+const (MaxRetries, Timeout)
+
+var (DefaultRouter)
+
+function hello() -> string"
+,
+}
+`;
+
+exports[`skeleton golden output sample.java 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 7,
+      "kind": "interface",
+      "name": "Repository",
+      "startLine": 4,
+    },
+    {
+      "endLine": 5,
+      "kind": "method",
+      "name": "findById",
+      "startLine": 5,
+    },
+    {
+      "endLine": 6,
+      "kind": "method",
+      "name": "findAll",
+      "startLine": 6,
+    },
+    {
+      "endLine": 33,
+      "kind": "class",
+      "name": "UserService",
+      "startLine": 9,
+    },
+    {
+      "endLine": 14,
+      "kind": "method",
+      "name": "UserService",
+      "startLine": 12,
+    },
+    {
+      "endLine": 18,
+      "kind": "method",
+      "name": "addUser",
+      "startLine": 16,
+    },
+    {
+      "endLine": 22,
+      "kind": "method",
+      "name": "getUsers",
+      "startLine": 20,
+    },
+    {
+      "endLine": 27,
+      "kind": "method",
+      "name": "toString",
+      "startLine": 24,
+    },
+    {
+      "endLine": 32,
+      "kind": "method",
+      "name": "removeAll",
+      "startLine": 29,
+    },
+  ],
+  "text": 
+"# sample.java [Java]
+imports: java.util.List, java.util.ArrayList
+
+interface Repository
+  + findById(id: int) -> T
+  + findAll() -> List<T>
+
+class UserService
+  + UserService()
+  + addUser(name: String) -> void
+  + getUsers() -> List<String>
+  @Override
+  + toString() -> String
+  @Deprecated
+  + removeAll() -> void"
+,
+}
+`;
+
+exports[`skeleton golden output sample.js 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 11,
+      "kind": "class",
+      "name": "Logger",
+      "startLine": 3,
+    },
+    {
+      "endLine": 6,
+      "kind": "method",
+      "name": "constructor",
+      "startLine": 4,
+    },
+    {
+      "endLine": 10,
+      "kind": "method",
+      "name": "log",
+      "startLine": 8,
+    },
+    {
+      "endLine": 15,
+      "kind": "function",
+      "name": "formatDate",
+      "startLine": 13,
+    },
+  ],
+  "text": 
+"# sample.js [JavaScript]
+
+class Logger
+  + constructor(prefix)
+  + log(message)
+
+function formatDate(date)"
+,
+}
+`;
+
+exports[`skeleton golden output sample.kt 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 10,
+      "kind": "class",
+      "name": "Config",
+      "startLine": 6,
+    },
+    {
+      "endLine": 16,
+      "kind": "interface",
+      "name": "Repository",
+      "startLine": 12,
+    },
+    {
+      "endLine": 13,
+      "kind": "method",
+      "name": "findById",
+      "startLine": 13,
+    },
+    {
+      "endLine": 14,
+      "kind": "method",
+      "name": "save",
+      "startLine": 14,
+    },
+    {
+      "endLine": 15,
+      "kind": "method",
+      "name": "delete",
+      "startLine": 15,
+    },
+    {
+      "endLine": 48,
+      "kind": "class",
+      "name": "UserRepository",
+      "startLine": 18,
+    },
+    {
+      "endLine": 24,
+      "kind": "method",
+      "name": "findById",
+      "startLine": 21,
+    },
+    {
+      "endLine": 29,
+      "kind": "method",
+      "name": "save",
+      "startLine": 26,
+    },
+    {
+      "endLine": 33,
+      "kind": "method",
+      "name": "delete",
+      "startLine": 31,
+    },
+    {
+      "endLine": 37,
+      "kind": "method",
+      "name": "findByEmail",
+      "startLine": 35,
+    },
+    {
+      "endLine": 47,
+      "kind": "class",
+      "name": "Companion",
+      "startLine": 39,
+    },
+    {
+      "endLine": 42,
+      "kind": "method",
+      "name": "create",
+      "startLine": 40,
+    },
+    {
+      "endLine": 46,
+      "kind": "method",
+      "name": "default",
+      "startLine": 44,
+    },
+    {
+      "endLine": 60,
+      "kind": "class",
+      "name": "AppRegistry",
+      "startLine": 50,
+    },
+    {
+      "endLine": 55,
+      "kind": "method",
+      "name": "register",
+      "startLine": 53,
+    },
+    {
+      "endLine": 59,
+      "kind": "method",
+      "name": "get",
+      "startLine": 57,
+    },
+    {
+      "endLine": 66,
+      "kind": "function",
+      "name": "initializeApp",
+      "startLine": 62,
+    },
+  ],
+  "text": 
+"# sample.kt [Kotlin]
+imports: com.example.models.User, com.example.utils.Logger
+
+data class Config
+
+interface Repository
+  + findById(id: String) -> T?
+  + save(entity: T) -> T
+  + delete(id: String)
+
+class UserRepository
+  + logger
+  + findById(id: String) -> User?
+  + save(entity: User) -> User
+  + delete(id: String)
+  + findByEmail(email: String) -> User?
+  companion object
+    + create(config: Config) -> UserRepository
+    + default() -> UserRepository
+
+object AppRegistry
+  + services
+  + register(name: String, service: Any)
+  + get(name: String) -> Any?
+
+function initializeApp(config: Config) -> UserRepository
+
+val DEFAULT_CONFIG"
+,
+}
+`;
+
+exports[`skeleton golden output sample.lua 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 20,
+      "kind": "function",
+      "name": "M.new",
+      "startLine": 12,
+    },
+    {
+      "endLine": 25,
+      "kind": "function",
+      "name": "M:getName",
+      "startLine": 23,
+    },
+    {
+      "endLine": 30,
+      "kind": "function",
+      "name": "M:addItem",
+      "startLine": 28,
+    },
+    {
+      "endLine": 35,
+      "kind": "function",
+      "name": "M:calculateDamage",
+      "startLine": 33,
+    },
+    {
+      "endLine": 42,
+      "kind": "function",
+      "name": "clamp",
+      "startLine": 38,
+    },
+    {
+      "endLine": 47,
+      "kind": "function",
+      "name": "M:takeDamage",
+      "startLine": 45,
+    },
+    {
+      "endLine": 52,
+      "kind": "function",
+      "name": "M:isAlive",
+      "startLine": 50,
+    },
+    {
+      "endLine": 60,
+      "kind": "function",
+      "name": "createGame",
+      "startLine": 54,
+    },
+  ],
+  "text": 
+"# sample.lua [Lua]
+imports: json, lib.utils
+
++ M.new(name, level)
++ M:getName()
++ M:addItem(item)
++ M:calculateDamage(baseDamage)
++ clamp(value, min, max) [local]
++ M:takeDamage(amount)
++ M:isAlive()
++ createGame(playerName)"
+,
+}
+`;
+
+exports[`skeleton golden output sample.php 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 3,
+      "kind": "namespace",
+      "name": "App\\Models",
+      "startLine": 3,
+    },
+    {
+      "endLine": 13,
+      "kind": "interface",
+      "name": "Renderable",
+      "startLine": 9,
+    },
+    {
+      "endLine": 11,
+      "kind": "method",
+      "name": "render",
+      "startLine": 11,
+    },
+    {
+      "endLine": 12,
+      "kind": "method",
+      "name": "getTemplate",
+      "startLine": 12,
+    },
+    {
+      "endLine": 26,
+      "kind": "class",
+      "name": "HasTimestamps",
+      "startLine": 15,
+    },
+    {
+      "endLine": 20,
+      "kind": "method",
+      "name": "getCreatedAt",
+      "startLine": 17,
+    },
+    {
+      "endLine": 25,
+      "kind": "method",
+      "name": "touch",
+      "startLine": 22,
+    },
+    {
+      "endLine": 60,
+      "kind": "class",
+      "name": "User",
+      "startLine": 28,
+    },
+    {
+      "endLine": 39,
+      "kind": "method",
+      "name": "__construct",
+      "startLine": 35,
+    },
+    {
+      "endLine": 44,
+      "kind": "method",
+      "name": "render",
+      "startLine": 41,
+    },
+    {
+      "endLine": 49,
+      "kind": "method",
+      "name": "getTemplate",
+      "startLine": 46,
+    },
+    {
+      "endLine": 54,
+      "kind": "method",
+      "name": "getName",
+      "startLine": 51,
+    },
+    {
+      "endLine": 59,
+      "kind": "method",
+      "name": "validateEmail",
+      "startLine": 56,
+    },
+    {
+      "endLine": 70,
+      "kind": "class",
+      "name": "Admin",
+      "startLine": 62,
+    },
+    {
+      "endLine": 69,
+      "kind": "method",
+      "name": "hasPermission",
+      "startLine": 66,
+    },
+    {
+      "endLine": 75,
+      "kind": "function",
+      "name": "formatUser",
+      "startLine": 72,
+    },
+    {
+      "endLine": 84,
+      "kind": "class",
+      "name": "Route",
+      "startLine": 77,
+    },
+    {
+      "endLine": 83,
+      "kind": "method",
+      "name": "__construct",
+      "startLine": 80,
+    },
+    {
+      "endLine": 100,
+      "kind": "enum",
+      "name": "Status",
+      "startLine": 86,
+    },
+    {
+      "endLine": 99,
+      "kind": "method",
+      "name": "label",
+      "startLine": 92,
+    },
+  ],
+  "text": 
+"# sample.php [PHP]
+imports: App\\Interfaces\\Renderable, App\\Traits\\HasTimestamps, Illuminate\\Database\\Eloquent\\Model
+
+namespace App\\Models
+
+interface Renderable
+  + render() -> string
+  + getTemplate() -> string
+
+trait HasTimestamps
+  + getCreatedAt() -> string
+  + touch() -> void
+
+class User
+  - $name
+  - $email
+  + __construct($name: string, $email: string)
+  + render() -> string
+  + getTemplate() -> string
+  + getName() -> string
+  - validateEmail() -> bool
+
+class Admin
+  - $permissions
+  + hasPermission($permission: string) -> bool
+
+function formatUser($user: User) -> string
+
+class Route
+  + __construct($path: string, $method: string)
+
+enum Status
+  case Active
+  case Inactive
+  case Pending
+  + label() -> string"
+,
+}
+`;
+
+exports[`skeleton golden output sample.py 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 10,
+      "kind": "class",
+      "name": "Config",
+      "startLine": 6,
+    },
+    {
+      "endLine": 31,
+      "kind": "class",
+      "name": "Database",
+      "startLine": 13,
+    },
+    {
+      "endLine": 18,
+      "kind": "method",
+      "name": "__init__",
+      "startLine": 16,
+    },
+    {
+      "endLine": 22,
+      "kind": "method",
+      "name": "connect",
+      "startLine": 20,
+    },
+    {
+      "endLine": 26,
+      "kind": "method",
+      "name": "query",
+      "startLine": 24,
+    },
+    {
+      "endLine": 31,
+      "kind": "function",
+      "name": "is_connected",
+      "startLine": 29,
+    },
+    {
+      "endLine": 36,
+      "kind": "function",
+      "name": "create_pool",
+      "startLine": 34,
+    },
+  ],
+  "text": 
+"# sample.py [Python]
+imports: typing, dataclasses
+
+@dataclass
+class Config
+  """Application configuration."""
+
+class Database
+  """Manages database connections."""
+  + __init__(url: str) -> None
+  + connect() -> None
+    """Open the connection."""
+  + query(sql: str, params: Optional[List]) -> List[dict]
+    """Execute a query and return rows."""
+  @property
+  + is_connected() -> bool
+    """Check connection status."""
+
+function create_pool(url: str, size: int) -> Database
+  """Create a connection pool.""""
+,
+}
+`;
+
+exports[`skeleton golden output sample.rb 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 41,
+      "kind": "class",
+      "name": "Animals",
+      "startLine": 4,
+    },
+    {
+      "endLine": 20,
+      "kind": "class",
+      "name": "Animal",
+      "startLine": 5,
+    },
+    {
+      "endLine": 6,
+      "kind": "property",
+      "name": "name",
+      "startLine": 6,
+    },
+    {
+      "endLine": 6,
+      "kind": "property",
+      "name": "age",
+      "startLine": 6,
+    },
+    {
+      "endLine": 11,
+      "kind": "method",
+      "name": "initialize",
+      "startLine": 8,
+    },
+    {
+      "endLine": 15,
+      "kind": "method",
+      "name": "speak",
+      "startLine": 13,
+    },
+    {
+      "endLine": 19,
+      "kind": "method",
+      "name": "to_s",
+      "startLine": 17,
+    },
+    {
+      "endLine": 30,
+      "kind": "class",
+      "name": "Dog",
+      "startLine": 22,
+    },
+    {
+      "endLine": 25,
+      "kind": "method",
+      "name": "speak",
+      "startLine": 23,
+    },
+    {
+      "endLine": 29,
+      "kind": "method",
+      "name": "fetch",
+      "startLine": 27,
+    },
+    {
+      "endLine": 40,
+      "kind": "class",
+      "name": "Cat",
+      "startLine": 32,
+    },
+    {
+      "endLine": 35,
+      "kind": "method",
+      "name": "speak",
+      "startLine": 33,
+    },
+    {
+      "endLine": 39,
+      "kind": "method",
+      "name": "create",
+      "startLine": 37,
+    },
+    {
+      "endLine": 47,
+      "kind": "class",
+      "name": "Serializable",
+      "startLine": 43,
+    },
+    {
+      "endLine": 46,
+      "kind": "method",
+      "name": "to_json",
+      "startLine": 44,
+    },
+    {
+      "endLine": 51,
+      "kind": "method",
+      "name": "greet",
+      "startLine": 49,
+    },
+  ],
+  "text": 
+"# sample.rb [Ruby]
+imports: json, helpers/utils
+
+module Animals
+  class Animal
+    attr_reader name, age
+    + initialize(name, age)
+    + speak()
+    + to_s()
+
+  class Dog < < Animal
+    + speak()
+    + fetch(item)
+
+  class Cat < < Animal
+    + speak()
+    + self.create(name)
+
+
+module Serializable
+  + to_json()
+
++ greet(name)"
+,
+}
+`;
+
+exports[`skeleton golden output sample.rs 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 6,
+      "kind": "trait",
+      "name": "Storage",
+      "startLine": 3,
+    },
+    {
+      "endLine": 11,
+      "kind": "struct",
+      "name": "MemoryStore",
+      "startLine": 9,
+    },
+    {
+      "endLine": 21,
+      "kind": "impl",
+      "name": "MemoryStore",
+      "startLine": 13,
+    },
+    {
+      "endLine": 16,
+      "kind": "function",
+      "name": "get",
+      "startLine": 14,
+    },
+    {
+      "endLine": 20,
+      "kind": "function",
+      "name": "set",
+      "startLine": 18,
+    },
+    {
+      "endLine": 27,
+      "kind": "function",
+      "name": "create_store",
+      "startLine": 23,
+    },
+  ],
+  "text": 
+"# sample.rs [Rust]
+imports: std::collections::HashMap
+
+trait Storage
+  + get(&self, key: &str) -> Option<&str>
+  + set(&mut self, key: String, value: String)
+
+#[derive(Debug, Clone)]
+struct MemoryStore
+
+impl Storage for MemoryStore
+  - get(&self, key: &str) -> Option<&str>
+  - set(&mut self, key: String, value: String)
+
+function create_store() -> MemoryStore"
+,
+}
+`;
+
+exports[`skeleton golden output sample.scala 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 14,
+      "kind": "object",
+      "name": "AppConfig",
+      "startLine": 7,
+    },
+    {
+      "endLine": 8,
+      "kind": "property",
+      "name": "defaultPort",
+      "startLine": 8,
+    },
+    {
+      "endLine": 9,
+      "kind": "property",
+      "name": "debug",
+      "startLine": 9,
+    },
+    {
+      "endLine": 13,
+      "kind": "function",
+      "name": "load",
+      "startLine": 11,
+    },
+    {
+      "endLine": 25,
+      "kind": "class",
+      "name": "AppConfig",
+      "startLine": 17,
+    },
+    {
+      "endLine": 18,
+      "kind": "property",
+      "name": "settings",
+      "startLine": 18,
+    },
+    {
+      "endLine": 20,
+      "kind": "function",
+      "name": "get",
+      "startLine": 20,
+    },
+    {
+      "endLine": 24,
+      "kind": "function",
+      "name": "set",
+      "startLine": 22,
+    },
+    {
+      "endLine": 32,
+      "kind": "trait",
+      "name": "Repository",
+      "startLine": 28,
+    },
+    {
+      "endLine": 29,
+      "kind": "function",
+      "name": "findById",
+      "startLine": 29,
+    },
+    {
+      "endLine": 30,
+      "kind": "function",
+      "name": "save",
+      "startLine": 30,
+    },
+    {
+      "endLine": 31,
+      "kind": "function",
+      "name": "delete",
+      "startLine": 31,
+    },
+    {
+      "endLine": 35,
+      "kind": "class",
+      "name": "User",
+      "startLine": 35,
+    },
+    {
+      "endLine": 50,
+      "kind": "class",
+      "name": "UserRepository",
+      "startLine": 38,
+    },
+    {
+      "endLine": 39,
+      "kind": "property",
+      "name": "store",
+      "startLine": 39,
+    },
+    {
+      "endLine": 41,
+      "kind": "function",
+      "name": "findById",
+      "startLine": 41,
+    },
+    {
+      "endLine": 45,
+      "kind": "function",
+      "name": "save",
+      "startLine": 43,
+    },
+    {
+      "endLine": 49,
+      "kind": "function",
+      "name": "delete",
+      "startLine": 47,
+    },
+    {
+      "endLine": 53,
+      "kind": "type",
+      "name": "UserId",
+      "startLine": 53,
+    },
+    {
+      "endLine": 56,
+      "kind": "property",
+      "name": "MaxRetries",
+      "startLine": 56,
+    },
+    {
+      "endLine": 57,
+      "kind": "property",
+      "name": "currentUser",
+      "startLine": 57,
+    },
+    {
+      "endLine": 62,
+      "kind": "function",
+      "name": "createRepository",
+      "startLine": 60,
+    },
+  ],
+  "text": 
+"# sample.scala [Scala]
+imports: scala.collection.mutable, scala.concurrent.Future
+
+object AppConfig
+  val defaultPort: Int
+  var debug: Boolean
+  function load(path: String) -> AppConfig
+
+class AppConfig
+  val settings: mutable.Map[String, String]
+  function get(key: String) -> Option[String]
+  function set(key: String, value: String) -> Unit
+
+trait Repository
+
+case class User
+
+class UserRepository
+  val store: mutable.Map[Long, User]
+  function findById(id: Long) -> Option[User]
+  function save(entity: User) -> Unit
+  function delete(id: Long) -> Boolean
+
+type UserId = Long
+val MaxRetries: Int
+var currentUser: Option[User]
+function createRepository() -> Repository[User]"
+,
+}
+`;
+
+exports[`skeleton golden output sample.swift 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 7,
+      "kind": "protocol",
+      "name": "Drawable",
+      "startLine": 4,
+    },
+    {
+      "endLine": 18,
+      "kind": "struct",
+      "name": "Point",
+      "startLine": 9,
+    },
+    {
+      "endLine": 17,
+      "kind": "method",
+      "name": "distanceTo",
+      "startLine": 13,
+    },
+    {
+      "endLine": 36,
+      "kind": "class",
+      "name": "Shape",
+      "startLine": 20,
+    },
+    {
+      "endLine": 31,
+      "kind": "method",
+      "name": "draw",
+      "startLine": 29,
+    },
+    {
+      "endLine": 35,
+      "kind": "method",
+      "name": "area",
+      "startLine": 33,
+    },
+    {
+      "endLine": 49,
+      "kind": "class",
+      "name": "Circle",
+      "startLine": 38,
+    },
+    {
+      "endLine": 48,
+      "kind": "method",
+      "name": "area",
+      "startLine": 46,
+    },
+    {
+      "endLine": 65,
+      "kind": "enum",
+      "name": "Direction",
+      "startLine": 51,
+    },
+    {
+      "endLine": 64,
+      "kind": "method",
+      "name": "description",
+      "startLine": 57,
+    },
+    {
+      "endLine": 71,
+      "kind": "class",
+      "name": "Shape",
+      "startLine": 67,
+    },
+    {
+      "endLine": 70,
+      "kind": "method",
+      "name": "describe",
+      "startLine": 68,
+    },
+    {
+      "endLine": 73,
+      "kind": "type",
+      "name": "ShapeList",
+      "startLine": 73,
+    },
+    {
+      "endLine": 81,
+      "kind": "function",
+      "name": "createShapes",
+      "startLine": 75,
+    },
+  ],
+  "text": 
+"# sample.swift [Swift]
+imports: Foundation, UIKit
+
+protocol Drawable
+
+struct Point
+  + x: Double
+  + y: Double
+  + distanceTo() -> Double
+
+class Shape
+  + color: String
+  + name: String
+  + init()
+  + draw()
+  + area() -> Double
+
+class Circle
+  + radius: Double
+  + init()
+  + area() -> Double
+
+enum Direction
+  + description() -> String
+
+extension Shape
+  + describe() -> String
+
+typealias ShapeList = ShapeList
++ createShapes() -> ShapeList"
+,
+}
+`;
+
+exports[`skeleton golden output sample.ts 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 6,
+      "kind": "interface",
+      "name": "Config",
+      "startLine": 3,
+    },
+    {
+      "endLine": 18,
+      "kind": "class",
+      "name": "Server",
+      "startLine": 8,
+    },
+    {
+      "endLine": 13,
+      "kind": "method",
+      "name": "constructor",
+      "startLine": 11,
+    },
+    {
+      "endLine": 17,
+      "kind": "method",
+      "name": "start",
+      "startLine": 15,
+    },
+    {
+      "endLine": 23,
+      "kind": "function",
+      "name": "loadConfig",
+      "startLine": 20,
+    },
+    {
+      "endLine": 25,
+      "kind": "type",
+      "name": "UserId",
+      "startLine": 25,
+    },
+    {
+      "endLine": 31,
+      "kind": "enum",
+      "name": "LogLevel",
+      "startLine": 27,
+    },
+  ],
+  "text": 
+"# sample.ts [TypeScript]
+imports: fs/promises
+
+interface Config
+  + host: string
+  + port: number
+
+class Server
+  - port()
+  + constructor(port: number)
+  + start() -> Promise<void>
+
+function loadConfig(path: string) -> Promise<Config>
+
+type UserId = string | number
+
+enum LogLevel
+  members: Debug, Info, Error"
+,
+}
+`;
+
+exports[`skeleton golden output sample.tsx 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 6,
+      "kind": "interface",
+      "name": "ButtonProps",
+      "startLine": 3,
+    },
+    {
+      "endLine": 10,
+      "kind": "function",
+      "name": "Button",
+      "startLine": 8,
+    },
+    {
+      "endLine": 15,
+      "kind": "function",
+      "name": "useCounter",
+      "startLine": 12,
+    },
+  ],
+  "text": 
+"# sample.tsx [TSX]
+imports: react
+
+interface ButtonProps
+  + label: string
+  + onClick: () => void
+
+function Button({ label, onClick }: ButtonProps)
+
+function useCounter(initial: number)"
+,
+}
+`;
+
+exports[`skeleton golden output sample.zig 1`] = `
+{
+  "entries": [
+    {
+      "endLine": 19,
+      "kind": "struct",
+      "name": "Point",
+      "startLine": 6,
+    },
+    {
+      "endLine": 12,
+      "kind": "method",
+      "name": "init",
+      "startLine": 10,
+    },
+    {
+      "endLine": 18,
+      "kind": "method",
+      "name": "distance",
+      "startLine": 14,
+    },
+    {
+      "endLine": 36,
+      "kind": "enum",
+      "name": "Direction",
+      "startLine": 22,
+    },
+    {
+      "endLine": 35,
+      "kind": "method",
+      "name": "opposite",
+      "startLine": 28,
+    },
+    {
+      "endLine": 51,
+      "kind": "union",
+      "name": "Value",
+      "startLine": 39,
+    },
+    {
+      "endLine": 50,
+      "kind": "method",
+      "name": "isNumeric",
+      "startLine": 45,
+    },
+    {
+      "endLine": 58,
+      "kind": "enum",
+      "name": "ParseError",
+      "startLine": 54,
+    },
+    {
+      "endLine": 64,
+      "kind": "function",
+      "name": "parseInt",
+      "startLine": 61,
+    },
+    {
+      "endLine": 69,
+      "kind": "function",
+      "name": "helperFunction",
+      "startLine": 67,
+    },
+    {
+      "endLine": 74,
+      "kind": "function",
+      "name": "maxValue",
+      "startLine": 72,
+    },
+    {
+      "endLine": 80,
+      "kind": "function",
+      "name": "Point distance",
+      "startLine": 76,
+    },
+    {
+      "endLine": 84,
+      "kind": "function",
+      "name": "Direction opposite",
+      "startLine": 82,
+    },
+  ],
+  "text": 
+"# sample.zig [Zig]
+imports: std, std, std
+
+pub struct Point
+  x: f64
+  y: f64
+  + init(x: f64, y: f64) -> Point
+  + distance(self: Point, other: Point) -> f64
+
+pub enum Direction
+  variants: north, south, east, west
+  + opposite(self: Direction) -> Direction
+
+pub union Value
+  variants: integer: i64, float: f64, string: []const u8, none
+  + isNumeric(self: Value) -> bool
+
+pub error ParseError
+  values: InvalidSyntax, UnexpectedToken, OutOfMemory
+
+pub function parseInt(input: []const u8) -> ParseError!i64
+
+function helperFunction(allocator: std.mem.Allocator, size: usize) -> ![]u8
+
+pub function maxValue(comptime T: type, a: T, b: T) -> T
+
+test "Point distance"
+
+test "Direction opposite""
+,
+}
+`;
