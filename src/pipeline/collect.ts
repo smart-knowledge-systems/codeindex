@@ -50,7 +50,9 @@ async function processFile(
       });
       if (ctx.secretOverrideCount != null) ctx.secretOverrideCount++;
     } else {
-      process.stderr.write(`  SKIP ${file.relPath}: potential secrets detected\n`);
+      process.stderr.write(
+        `  SKIP ${file.relPath}: potential secrets [${scan.patterns.join(", ")}]\n`,
+      );
       logEvent({
         event: "infra.secrets.detected",
         file_path_hash: hashPath(file.relPath),

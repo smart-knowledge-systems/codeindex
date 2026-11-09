@@ -196,7 +196,7 @@ codeindex mcp-config              # Print MCP server config for editors
 ### Indexing pipeline
 
 1. **Walk** the repo, respecting `.gitignore` and `.indexignore`
-2. **Scan** file content for secrets — skip files with potential API keys, tokens, or private keys
+2. **Scan** file content for secrets — skip files with potential API keys, tokens, or private keys. A false positive on one line is exempted with `allow-secret <rule>` on that line, using the rule id the skip message names; a private key cannot be exempted
 3. **Format** each file in-memory (auto-detected formatter) and SHA-256 hash — skip if unchanged. A formatter from the repo (`.codeindex.json` or auto-detected) runs only after you trust it with `codeindex config --formatter "<cmd>"`; one set in `~/.config/codeindex/config.json` always runs
 4. **Extract** an AST skeleton via tree-sitter for supported languages, or first N lines for non-code files
 5. **Extract imports** from tree-sitter skeletons into the `file_imports` table for dependency graph queries

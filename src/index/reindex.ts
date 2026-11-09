@@ -187,6 +187,7 @@ export async function reindexSingleFile(
         `  OVERRIDE ${relPath}: secret patterns [${scan.patterns.join(", ")}] overridden — public repo, published content\n`,
       );
     } else {
+      process.stderr.write(`  SKIP ${relPath}: potential secrets [${scan.patterns.join(", ")}]\n`);
       return false;
     }
   }
