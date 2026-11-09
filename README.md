@@ -278,6 +278,7 @@ bun run check            # format check + lint + typecheck
 bun run format           # oxfmt write
 bun run lint:fix         # oxlint (type-aware) with auto-fix
 bun test                 # Run tests
+bun run secrets:scan     # Check commits since origin/main for credentials
 ```
 
 ## Roadmap

@@ -13,6 +13,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # secrets:scan reads every commit the change adds, not just the tip.
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -32,3 +35,8 @@ jobs:
 
       - name: Test
         run: bun test
+
+      - name: Secret scan
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: bun run secrets:scan --base "$BASE"

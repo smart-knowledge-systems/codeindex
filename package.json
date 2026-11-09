@@ -14,7 +14,8 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun test",
-    "check": "oxfmt --check && oxlint --type-aware && bun run typecheck"
+    "check": "oxfmt --check && oxlint --type-aware && bun run typecheck",
+    "secrets:scan": "bun scripts/secret-scan.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

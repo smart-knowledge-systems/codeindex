@@ -26,7 +26,8 @@ Fight for the smallest model that makes the correct behavior unsurprising. Do no
 
 ## Checks
 
-- `bun run check` runs `oxfmt --check`, `oxlint --type-aware`, and `bun run typecheck`. Run it and `bun test` before pushing. CI runs the same steps on every PR.
+- `bun run check` runs `oxfmt --check`, `oxlint --type-aware`, and `bun run typecheck`. Run it, `bun test`, and `bun run secrets:scan` before pushing. CI runs the same steps on every PR.
+- `bun run secrets:scan` fails on a credential in any line or message of any commit since `origin/main`, including one added and later removed. Rotate a real credential; exempt a false positive with `allow-secret <rule>` on its line. Test samples are assembled from string pieces so no literal credential is committed.
 - `bun run format` and `bun run lint:fix` apply fixes. Keep a formatter or autofix sweep in its own commit.
 - Run checks in the foreground. If a run will exceed your tool's call limit, start it in the background and wait on it before ending your turn.
 
