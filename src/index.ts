@@ -187,7 +187,9 @@ async function main() {
 
   // --version: print version and exit
   if (hasFlag(parsed, "version")) {
-    const pkg = await Bun.file(path.join(import.meta.dir, "../package.json")).json();
+    const pkg = (await Bun.file(path.join(import.meta.dir, "../package.json")).json()) as {
+      version: string;
+    };
     console.log(pkg.version);
     process.exit(0);
   }
@@ -651,7 +653,7 @@ async function main() {
       }
 
       case "mcp-config":
-        await cmdMcpConfig(parsed);
+        cmdMcpConfig(parsed);
         break;
 
       case "serve": {

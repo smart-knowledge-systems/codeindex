@@ -212,7 +212,7 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
   console.log("Building directory index...");
   const nullSummaryProvider: SummaryProvider = {
     name: "none",
-    summarizeDirectory: async () => null,
+    summarizeDirectory: () => Promise.resolve(null),
   };
   await summarizeDirs(ctx, allFiles, nullSummaryProvider);
   console.log("Directory index complete.");

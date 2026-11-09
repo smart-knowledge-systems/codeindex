@@ -31,15 +31,15 @@ export async function cmdConfig(repoRoot: string, args: string[]) {
     const scoringFn = SCORING_KEYS[key];
     if (scoringFn) {
       const [field, parsed] = scoringFn(value);
-      return { ...acc, scoring: { ...((acc.scoring as object) ?? {}), [field]: parsed } };
+      return { ...acc, scoring: { ...(acc.scoring ?? {}), [field]: parsed } };
     }
     return acc;
   }, {});
 
   const localConfigPath = path.join(repoRoot, ".codeindex.json");
-  const existing = await (async () => {
+  const existing = await (async (): Promise<Record<string, unknown>> => {
     try {
-      return await Bun.file(localConfigPath).json();
+      return (await Bun.file(localConfigPath).json()) as Record<string, unknown>;
     } catch {
       return {};
     }

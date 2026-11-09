@@ -10,6 +10,7 @@ import { isPublishedContent } from "../index/public-repo";
 import { formatAndHash } from "../index/formatter";
 import { extractSkeletonWithEntries } from "../index/skeleton";
 import { extractImports } from "../index/imports";
+import type { CollectedFile, PipelineContext } from "../pipeline";
 
 export async function ensureRepo(repoRoot: string): Promise<number> {
   const config = await loadConfig(repoRoot);
@@ -45,9 +46,9 @@ export async function ensureRepo(repoRoot: string): Promise<number> {
 }
 
 export async function collectChangedFiles(
-  ctx: import("../pipeline").PipelineContext,
+  ctx: PipelineContext,
   relPaths: string[],
-): Promise<import("../pipeline").CollectedFile[]> {
+): Promise<CollectedFile[]> {
   const { repoRoot, repoId, config, formatter, store } = ctx;
 
   // Load existing hashes for dedup — built immutably from DB rows
@@ -62,7 +63,7 @@ export async function collectChangedFiles(
 
   const existingHashes = new Map(hashRows.map((r) => [r.file_path, r.content_hash] as const));
 
-  const collected: import("../pipeline").CollectedFile[] = [];
+  const collected: CollectedFile[] = [];
 
   for (const relPath of relPaths) {
     const absPath = path.join(repoRoot, relPath);

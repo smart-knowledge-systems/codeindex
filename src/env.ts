@@ -33,9 +33,7 @@ export function loadGlobalEnv(): void {
         value = value.slice(1, -1);
       }
       // Don't override existing env vars (local .env / shell exports win)
-      if (process.env[key] === undefined) {
-        process.env[key] = value;
-      }
+      process.env[key] ??= value;
     }
   } catch {
     // File doesn't exist — that's fine

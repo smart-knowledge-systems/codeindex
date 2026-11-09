@@ -58,7 +58,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const key = arg.slice(2);
       if (VALUE_FLAGS.has(key)) {
         const next = args[i + 1];
-        flags[key] = next !== undefined ? next : "";
+        flags[key] = next ?? "";
         i += 2;
       } else {
         flags[key] = true;
