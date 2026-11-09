@@ -81,7 +81,7 @@ async function main() {
   }
 
   const datasetPath = path.join(import.meta.dir, "dataset.json");
-  const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+  const dataset = JSON.parse(fs.readFileSync(datasetPath, "utf-8")) as EvalQuery[];
 
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -101,12 +101,16 @@ async function main() {
     const avgPrecision5 = results.reduce((s, r) => s + r.precision5, 0) / results.length;
     const avgRecall = results.reduce((s, r) => s + r.recall, 0) / results.length;
     const avgMrr = results.reduce((s, r) => s + r.mrr, 0) / results.length;
+    const avgHitRate5 = results.reduce((s, r) => s + r.hitRate5, 0) / results.length;
+    const avgNdcg = results.reduce((s, r) => s + r.ndcg, 0) / results.length;
 
     const summary: EvalSummary = {
       configName: config.name,
       avgPrecision5,
+      avgHitRate5,
       avgRecall,
       avgMrr,
+      avgNdcg,
       results,
       timestamp: new Date().toISOString(),
     };

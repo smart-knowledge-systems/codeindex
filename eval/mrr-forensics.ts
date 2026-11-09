@@ -235,7 +235,7 @@ async function main() {
   const datasetPath = path.resolve(
     datasetFile.startsWith("/") ? datasetFile : path.join(import.meta.dir, datasetFile),
   );
-  const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+  const dataset = JSON.parse(fs.readFileSync(datasetPath, "utf-8")) as EvalQuery[];
 
   console.log(`MRR Forensics: ${dataset.length} queries, ${PROFILES.length} scoring profiles`);
   console.log(`Repo: ${repoRoot}\n`);

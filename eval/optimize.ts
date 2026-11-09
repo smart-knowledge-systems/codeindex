@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type { ScoringConfig } from "../src/search/types";
-import type { EvalQuery, EvalSummary } from "./types";
+import type { EvalQuery } from "./types";
 import { runEval } from "./run-eval";
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ async function main() {
   }
 
   const datasetPath = path.join(import.meta.dir, "dataset.json");
-  const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+  const dataset = JSON.parse(fs.readFileSync(datasetPath, "utf-8")) as EvalQuery[];
 
   fs.mkdirSync(outputDir, { recursive: true });
 

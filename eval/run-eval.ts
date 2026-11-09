@@ -230,7 +230,7 @@ async function main() {
   const datasetPath = path.resolve(
     datasetFile.startsWith("/") ? datasetFile : path.join(import.meta.dir, datasetFile),
   );
-  let dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+  let dataset = JSON.parse(fs.readFileSync(datasetPath, "utf-8")) as EvalQuery[];
 
   // Apply repo/language filters
   if (filterRepo) {
@@ -288,7 +288,7 @@ async function main() {
     const rgResults: EvalResult[] = [];
 
     for (const q of dataset) {
-      const rg = await ripgrepBaseline(repoRoot, q.query, q.expectedFiles);
+      const rg = ripgrepBaseline(repoRoot, q.query, q.expectedFiles);
       rgResults.push({
         queryId: q.id,
         query: q.query,

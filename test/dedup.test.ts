@@ -48,40 +48,60 @@ function fakeVector(seed: number): number[] {
   return Array.from({ length: EMBED_DIM }, (_, j) => ((seed + j) % 100) * 0.001);
 }
 
-mock.module("@easier-idx/embedding", () => ({
-  embed: async (_provider: unknown, texts: string | string[]) => {
+void mock.module("@easier-idx/embedding", () => ({
+  embed: (_provider: unknown, texts: string | string[]) => {
     const arr = Array.isArray(texts) ? texts : [texts];
     embedCallCount++;
     totalEmbeddings += arr.length;
-    return arr.map((_, i) => fakeVector(i));
+    return Promise.resolve(arr.map((_, i) => fakeVector(i)));
   },
-  embedSingle: async () => fakeVector(0),
+  embedSingle: () => Promise.resolve(fakeVector(0)),
 }));
 
-mock.module("../src/embedding-provider", () => ({
+void mock.module("../src/embedding-provider", () => ({
   getProvider: () => ({}),
-  resetProvider: () => {},
+  resetProvider: () => undefined,
 }));
 
 // ---------------------------------------------------------------------------
 // In-memory GlobalDedupStore — keyed by content_hash + provider/model/dims.
 // ---------------------------------------------------------------------------
 
+interface StoredPackage extends PackageMeta, PackageKey {
+  id: number;
+}
+
 class InMemoryGlobalStore implements GlobalDedupStore {
-  private blobs = new Map<string, BlobRecord>();
-  private packages = new Map<string, PackageRecord & PackageKey>();
+  private blobs = new Map<string, BlobKey & BlobRecord>();
+  private packages = new Map<number, StoredPackage>();
   private packageFiles = new Map<number, PackageFileEntry[]>();
+  /** repoRoot → (packageId → mountPath) */
+  private repoLinks = new Map<string, Map<number, string>>();
   private nextPkgId = 1;
 
   private blobKey(k: BlobKey): string {
     return `${k.contentHash}|${k.provider}|${k.model}|${k.dimensions}`;
   }
 
-  async lookupBlob(key: BlobKey): Promise<BlobRecord | null> {
-    return this.blobs.get(this.blobKey(key)) ?? null;
+  private findPackage(key: PackageKey): StoredPackage | undefined {
+    for (const p of this.packages.values()) {
+      if (
+        p.treeHash === key.treeHash &&
+        p.provider === key.provider &&
+        p.model === key.model &&
+        p.dimensions === key.dimensions
+      ) {
+        return p;
+      }
+    }
+    return undefined;
   }
 
-  async lookupBlobs(
+  lookupBlob(key: BlobKey): Promise<BlobRecord | null> {
+    return Promise.resolve(this.blobs.get(this.blobKey(key)) ?? null);
+  }
+
+  lookupBlobs(
     hashes: string[],
     provider: string,
     model: string,
@@ -92,41 +112,133 @@ class InMemoryGlobalStore implements GlobalDedupStore {
       const r = this.blobs.get(this.blobKey({ contentHash: h, provider, model, dimensions }));
       if (r) result.set(h, r);
     }
-    return result;
+    return Promise.resolve(result);
   }
 
-  async writeBlob(key: BlobKey, record: BlobRecord): Promise<void> {
-    this.blobs.set(this.blobKey(key), record);
+  writeBlob(key: BlobKey, record: BlobRecord): Promise<void> {
+    const k = this.blobKey(key);
+    if (!this.blobs.has(k)) this.blobs.set(k, { ...key, ...record });
+    return Promise.resolve();
   }
 
-  async lookupPackage(key: PackageKey): Promise<PackageRecord | null> {
-    const k = `${key.treeHash}|${key.provider}|${key.model}|${key.dimensions}`;
-    return this.packages.get(k) ?? null;
+  lookupPackage(key: PackageKey): Promise<PackageRecord | null> {
+    const p = this.findPackage(key);
+    return Promise.resolve(
+      p ? { id: p.id, ecosystem: p.ecosystem, name: p.name, version: p.version } : null,
+    );
   }
 
-  async listPackageFiles(packageId: number): Promise<PackageFileEntry[]> {
-    return this.packageFiles.get(packageId) ?? [];
+  listPackageFiles(packageId: number): Promise<PackageFileEntry[]> {
+    return Promise.resolve(this.packageFiles.get(packageId) ?? []);
   }
 
-  async writePackage(
-    key: PackageKey,
-    meta: PackageMeta,
-    files: PackageFileEntry[],
-  ): Promise<number> {
+  writePackage(key: PackageKey, meta: PackageMeta, files: PackageFileEntry[]): Promise<number> {
+    const existing = this.findPackage(key);
+    if (existing) return Promise.resolve(existing.id);
     const id = this.nextPkgId++;
-    const k = `${key.treeHash}|${key.provider}|${key.model}|${key.dimensions}`;
-    this.packages.set(k, { id, ...meta, ...key });
+    this.packages.set(id, { id, ...meta, ...key });
     this.packageFiles.set(id, files);
-    return id;
+    return Promise.resolve(id);
   }
 
-  async linkRepoPackage(): Promise<void> {}
-
-  async stats(): Promise<DedupStats> {
-    return { blobCount: this.blobs.size, packageCount: this.packages.size };
+  linkRepoPackage(repoRoot: string, packageId: number, mountPath: string): Promise<void> {
+    let links = this.repoLinks.get(repoRoot);
+    if (!links) {
+      links = new Map();
+      this.repoLinks.set(repoRoot, links);
+    }
+    links.set(packageId, mountPath);
+    return Promise.resolve();
   }
 
-  async close(): Promise<void> {}
+  unlinkRepoPackages(repoRoot: string): Promise<number> {
+    const removed = this.repoLinks.get(repoRoot)?.size ?? 0;
+    this.repoLinks.delete(repoRoot);
+    return Promise.resolve(removed);
+  }
+
+  stats(): Promise<DedupStats> {
+    const ecosystems = new Map<string, number>();
+    for (const p of this.packages.values()) {
+      ecosystems.set(p.ecosystem, (ecosystems.get(p.ecosystem) ?? 0) + 1);
+    }
+    const providers = new Map<string, DedupStats["providers"][number]>();
+    for (const b of this.blobs.values()) {
+      const k = `${b.provider}|${b.model}|${b.dimensions}`;
+      const entry = providers.get(k);
+      if (entry) entry.blobs++;
+      else
+        providers.set(k, {
+          provider: b.provider,
+          model: b.model,
+          dimensions: b.dimensions,
+          blobs: 1,
+        });
+    }
+    let repoLinkCount = 0;
+    for (const links of this.repoLinks.values()) repoLinkCount += links.size;
+    return Promise.resolve({
+      blobCount: this.blobs.size,
+      packageCount: this.packages.size,
+      repoLinkCount,
+      ecosystems: [...ecosystems].map(([ecosystem, count]) => ({ ecosystem, count })),
+      providers: [...providers.values()],
+      storageBytes: null,
+    });
+  }
+
+  listOrphanedPackageIds(): Promise<number[]> {
+    const linked = new Set<number>();
+    for (const links of this.repoLinks.values()) {
+      for (const id of links.keys()) linked.add(id);
+    }
+    return Promise.resolve([...this.packages.keys()].filter((id) => !linked.has(id)));
+  }
+
+  listLivePackageBlobHashes(excludePackageIds: number[]): Promise<string[]> {
+    const excluded = new Set(excludePackageIds);
+    const hashes = new Set<string>();
+    for (const [id, files] of this.packageFiles) {
+      if (excluded.has(id)) continue;
+      for (const f of files) hashes.add(f.contentHash);
+    }
+    return Promise.resolve([...hashes]);
+  }
+
+  deletePackages(packageIds: number[]): Promise<void> {
+    for (const id of packageIds) {
+      this.packages.delete(id);
+      this.packageFiles.delete(id);
+      for (const links of this.repoLinks.values()) links.delete(id);
+    }
+    return Promise.resolve();
+  }
+
+  countBlobsExcept(liveHashes: Set<string>): Promise<number> {
+    let count = 0;
+    for (const b of this.blobs.values()) if (!liveHashes.has(b.contentHash)) count++;
+    return Promise.resolve(count);
+  }
+
+  deleteBlobsExcept(liveHashes: Set<string>): Promise<number> {
+    let count = 0;
+    for (const [k, b] of this.blobs) {
+      if (!liveHashes.has(b.contentHash)) {
+        this.blobs.delete(k);
+        count++;
+      }
+    }
+    return Promise.resolve(count);
+  }
+
+  /** Like the SQLite backend: no unified file_blobs table, so callers fall back to the live-set protocol. */
+  sweepOrphanedBlobs(_opts: { dryRun: boolean }): Promise<number | null> {
+    return Promise.resolve(null);
+  }
+
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 // ---------------------------------------------------------------------------

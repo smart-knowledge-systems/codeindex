@@ -11,7 +11,7 @@ describe("cloud privacy", () => {
     content: 'const secret = "do-not-send-this";\nexport function main() {}',
     skeleton: "export function main() {}",
     skeletonEntries: JSON.stringify([{ name: "main", kind: "function", startLine: 2, endLine: 2 }]),
-    importEdges: [{ source: "src/index.ts", target: "./util", kind: "import" }],
+    importEdges: [{ importedModule: "./util", language: "typescript" }],
   };
 
   it("stripForCloud removes content and absPath", () => {

@@ -48,7 +48,7 @@ async function main() {
   }
 
   const datasetPath = path.join(import.meta.dir, "dataset.json");
-  const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+  const dataset = JSON.parse(fs.readFileSync(datasetPath, "utf-8")) as EvalQuery[];
 
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -96,7 +96,7 @@ async function main() {
     console.log("| Model | nDCG@10 | MRR | P@5 | HR@5 | Recall | Cost/1K files |");
     console.log("|-------|---------|-----|-----|------|--------|---------------|");
     for (const f of resultFiles) {
-      const data: EvalSummary = JSON.parse(fs.readFileSync(path.join(outputDir, f), "utf-8"));
+      const data = JSON.parse(fs.readFileSync(path.join(outputDir, f), "utf-8")) as EvalSummary;
       console.log(
         `| ${data.model ?? data.configName} | ${data.avgNdcg.toFixed(3)} | ${data.avgMrr.toFixed(3)} | ${data.avgPrecision5.toFixed(3)} | ${(data.avgHitRate5 ?? 0).toFixed(3)} | ${data.avgRecall.toFixed(3)} | $${(data.costPer1kFiles ?? -1).toFixed(4)} |`,
       );

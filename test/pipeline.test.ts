@@ -28,17 +28,17 @@ function fakeVector(seed: number): number[] {
   return Array.from({ length: EMBED_DIM }, (_, j) => ((seed + j) % 100) * 0.001);
 }
 
-mock.module("@easier-idx/embedding", () => ({
-  embed: async (_provider: unknown, texts: string | string[]) => {
+void mock.module("@easier-idx/embedding", () => ({
+  embed: (_provider: unknown, texts: string | string[]) => {
     const arr = Array.isArray(texts) ? texts : [texts];
-    return arr.map((_, i) => fakeVector(i));
+    return Promise.resolve(arr.map((_, i) => fakeVector(i)));
   },
-  embedSingle: async (_provider: unknown, _text: string) => fakeVector(0),
+  embedSingle: (_provider: unknown, _text: string) => Promise.resolve(fakeVector(0)),
 }));
 
-mock.module("../src/embedding-provider", () => ({
+void mock.module("../src/embedding-provider", () => ({
   getProvider: () => ({}),
-  resetProvider: () => {},
+  resetProvider: () => undefined,
 }));
 
 // ---------------------------------------------------------------------------
@@ -47,8 +47,8 @@ mock.module("../src/embedding-provider", () => ({
 
 const noopSummaryProvider: SummaryProvider = {
   name: "noop",
-  async summarizeDirectory(_concatSkeleton, _childSummaries) {
-    return null;
+  summarizeDirectory(_concatSkeleton, _childSummaries) {
+    return Promise.resolve(null);
   },
 };
 
@@ -132,7 +132,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await closeSqlite(fixtureRepoRoot);
+  await closeSqlite();
   fs.rmSync(fixtureRepoRoot, { recursive: true, force: true });
 });
 
@@ -301,7 +301,7 @@ describe("summarizeDirs()", () => {
     }[];
     const allFiles = fileRows.map((r) => r.file_path);
 
-    await expect(summarizeDirs(ctx, allFiles, noopSummaryProvider)).resolves.toBeUndefined();
+    expect(await summarizeDirs(ctx, allFiles, noopSummaryProvider)).toBeUndefined();
   });
 
   it("creates directory rows", async () => {

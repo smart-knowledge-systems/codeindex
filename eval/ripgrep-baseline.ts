@@ -70,11 +70,11 @@ function rgSearch(repoRoot: string, keyword: string): string[] {
   }
 }
 
-export async function ripgrepBaseline(
+export function ripgrepBaseline(
   repoRoot: string,
   query: string,
   expectedFiles: string[],
-): Promise<{ precision5: number; returnedFiles: string[] }> {
+): { precision5: number; returnedFiles: string[] } {
   const keywords = extractKeywords(query);
 
   if (keywords.length === 0) {
