@@ -15,7 +15,7 @@ export async function initParser(): Promise<void> {
   parserInitialised = true;
 }
 
-const WASM_DIR = path.join(import.meta.dir, "../../../node_modules/tree-sitter-wasms/out");
+const WASM_DIR = path.join(import.meta.dir, "../../../grammars/wasm");
 
 export async function loadLanguage(lang: SupportedLanguage): Promise<Language> {
   const cached = languageCache.get(lang);

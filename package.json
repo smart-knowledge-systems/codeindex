@@ -29,7 +29,6 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "ignore": "^7.0.14",
     "sqlite-vec": "^0.1.9",
-    "tree-sitter-wasms": "0.1.13",
     "web-tree-sitter": "0.25.3"
   },
   "patchedDependencies": {
