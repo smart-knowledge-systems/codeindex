@@ -131,13 +131,13 @@ function categorizeRegression(
 
 interface ForensicsReport {
   timestamp: string;
-  profiles: Array<{
+  profiles: {
     name: string;
     description: string;
     avgMrr: number;
     avgPrecision5: number;
     avgRecall: number;
-  }>;
+  }[];
   regressions: RegressionEntry[];
   causeSummary: Record<string, number>;
   recommendations: string[];
@@ -189,10 +189,7 @@ function generateReport(
     );
   }
 
-  if (
-    (causeSummary["hybrid-dilution"] ?? 0) > regressions.length * 0.4 &&
-    regressions.length > 0
-  ) {
+  if ((causeSummary["hybrid-dilution"] ?? 0) > regressions.length * 0.4 && regressions.length > 0) {
     recommendations.push(
       `${causeSummary["hybrid-dilution"]} of ${regressions.length} regressions caused by hybrid dilution — BM25 weight may be too high.`,
     );
@@ -238,7 +235,7 @@ async function main() {
   const datasetPath = path.resolve(
     datasetFile.startsWith("/") ? datasetFile : path.join(import.meta.dir, datasetFile),
   );
-  const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+  const dataset = JSON.parse(fs.readFileSync(datasetPath, "utf-8")) as EvalQuery[];
 
   console.log(`MRR Forensics: ${dataset.length} queries, ${PROFILES.length} scoring profiles`);
   console.log(`Repo: ${repoRoot}\n`);
@@ -280,7 +277,9 @@ async function main() {
   console.log(`\n--- MRR Forensics Report ---`);
   console.log(`\nProfile comparison:`);
   for (const p of report.profiles) {
-    console.log(`  ${p.name.padEnd(20)} MRR: ${p.avgMrr.toFixed(3)}  P@5: ${p.avgPrecision5.toFixed(3)}  Recall: ${p.avgRecall.toFixed(3)}`);
+    console.log(
+      `  ${p.name.padEnd(20)} MRR: ${p.avgMrr.toFixed(3)}  P@5: ${p.avgPrecision5.toFixed(3)}  Recall: ${p.avgRecall.toFixed(3)}`,
+    );
   }
 
   if (regressions.length > 0) {

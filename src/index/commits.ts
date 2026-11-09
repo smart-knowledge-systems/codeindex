@@ -6,7 +6,8 @@ import { logEvent } from "../logging";
 // ---------------------------------------------------------------------------
 
 export type GitResult =
-  { ok: true; stdout: string } | { ok: false; error: Error; exitCode: number };
+  | { ok: true; stdout: string }
+  | { ok: false; error: Error; exitCode: number };
 
 // ---------------------------------------------------------------------------
 // Git runner with structured error logging
@@ -68,8 +69,8 @@ export async function getRepoOrigin(repoRoot: string): Promise<string | null> {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export async function getRepoName(repoRoot: string): Promise<string> {
-  return path.basename(repoRoot);
+export function getRepoName(repoRoot: string): Promise<string> {
+  return Promise.resolve(path.basename(repoRoot));
 }
 
 export async function getChangedFiles(repoRoot: string, commitHash?: string): Promise<string[]> {

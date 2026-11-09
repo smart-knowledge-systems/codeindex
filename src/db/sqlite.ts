@@ -20,6 +20,7 @@ export async function sqliteUnsafe(sql: string, params: unknown[] = []) {
     .all(...(params as (string | number | bigint | boolean | null | Uint8Array)[]));
 }
 
+// oxlint-disable-next-line typescript/require-await -- keeps the Promise-returning signature parallel to closePg; callers await it
 export async function closeSqlite() {
   easierCloseSqlite();
 }

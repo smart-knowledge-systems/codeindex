@@ -65,9 +65,7 @@ export async function cmdManifest(repoRoot: string) {
   // a network round-trip.
   let visibilityCache: "public" | "private" | "unknown" | undefined;
   const getVisibility = async (): Promise<"public" | "private" | "unknown"> => {
-    if (visibilityCache === undefined) {
-      visibilityCache = await checkRepoVisibility(repoRoot);
-    }
+    visibilityCache ??= await checkRepoVisibility(repoRoot);
     return visibilityCache;
   };
 

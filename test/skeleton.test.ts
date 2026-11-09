@@ -208,13 +208,13 @@ describe("Rust (.rs)", () => {
 // fixture, expected header tag, and a representative entry to find.
 // =============================================================================
 
-const languageSmokeTests: Array<{
+const languageSmokeTests: {
   label: string;
   fixture: string;
   headerTag: string;
   sampleEntry: { name: string; kind: string };
   skeletonContains?: string[];
-}> = [
+}[] = [
   {
     label: "TSX (.tsx)",
     fixture: "sample.tsx",

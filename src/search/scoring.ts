@@ -9,7 +9,7 @@ import type { ScoringConfig, ScoreExplanation } from "./types";
 // ---------------------------------------------------------------------------
 
 function computeCommitBoost(
-  links: ReadonlyArray<{ recency: number; similarity: number }>,
+  links: readonly { recency: number; similarity: number }[],
   scoring: ScoringConfig,
 ): number {
   const { commitDecay, commitDepth } = scoring;
@@ -67,7 +67,7 @@ export interface FileScoreInput {
   readonly fileType: string;
   readonly skeletonLength: number;
   readonly avgTokenCount: number;
-  readonly commitLinks: ReadonlyArray<{ recency: number; similarity: number }>;
+  readonly commitLinks: readonly { recency: number; similarity: number }[];
   readonly dirSim: number;
   readonly rawBM25: number;
   readonly maxBM25: number;

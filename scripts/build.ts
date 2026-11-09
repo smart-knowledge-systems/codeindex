@@ -31,7 +31,7 @@ async function build() {
 
     const proc = Bun.spawn(
       ["bun", "build", "--compile", "--target", target, "--outfile", outFile, entrypoint],
-      { stdout: "inherit", stderr: "inherit" }
+      { stdout: "inherit", stderr: "inherit" },
     );
 
     const exitCode = await proc.exited;
@@ -57,4 +57,4 @@ async function build() {
   }
 }
 
-build();
+await build();

@@ -23,7 +23,8 @@ interface MigrationFile {
 export type MigrationResult = { tag: "ok"; versions: number[] } | { tag: "err"; error: Error };
 
 export type ChecksumVerification =
-  { tag: "ok"; valid: boolean; mismatches: string[] } | { tag: "unavailable" };
+  | { tag: "ok"; valid: boolean; mismatches: string[] }
+  | { tag: "unavailable" };
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -213,7 +214,7 @@ async function applyPgMigrations(): Promise<MigrationResult> {
     } catch (err) {
       return {
         tag: "err",
-        error: new Error(`Migration ${m.version} failed: ${err}`, { cause: err }),
+        error: new Error(`Migration ${m.version} failed: ${String(err)}`, { cause: err }),
       };
     }
   }
@@ -281,7 +282,7 @@ async function applySqliteMigrations(repoRoot?: string): Promise<MigrationResult
     } catch (err) {
       return {
         tag: "err",
-        error: new Error(`Migration ${m.version} failed: ${err}`, { cause: err }),
+        error: new Error(`Migration ${m.version} failed: ${String(err)}`, { cause: err }),
       };
     }
   }
@@ -432,7 +433,7 @@ export async function applyGlobalPgMigrations(): Promise<MigrationResult> {
     } catch (err) {
       return {
         tag: "err",
-        error: new Error(`Global migration ${m.version} failed: ${err}`, { cause: err }),
+        error: new Error(`Global migration ${m.version} failed: ${String(err)}`, { cause: err }),
       };
     }
   }
@@ -470,7 +471,7 @@ export async function applyGlobalSqliteMigrations(db: Database): Promise<Migrati
     } catch (err) {
       return {
         tag: "err",
-        error: new Error(`Global migration ${m.version} failed: ${err}`, { cause: err }),
+        error: new Error(`Global migration ${m.version} failed: ${String(err)}`, { cause: err }),
       };
     }
   }
@@ -560,7 +561,7 @@ export async function checkEmbeddingDimensions(
     if (rows.length === 0 || !rows[0].sql) return null;
 
     const sql = rows[0].sql;
-    const match = sql.match(/float\[(\d+)\]/);
+    const match = /float\[(\d+)\]/.exec(sql);
     if (!match) return null;
 
     const tableDimensions = parseInt(match[1], 10);

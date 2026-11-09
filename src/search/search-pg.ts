@@ -24,7 +24,7 @@ export async function searchPg(
   options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
-  useBlobSchema: boolean = false,
+  useBlobSchema = false,
 ): Promise<SearchResult[]> {
   // Use withRepoScope to pin to a single connection, set RLS scope, and
   // apply SET LOCAL hnsw.ef_search within the same transaction
@@ -114,7 +114,7 @@ export async function searchPgInTransaction(
   options: Required<Omit<SearchOptions, "embeddingCache">>,
   scoring: ScoringConfig,
   languageProfiles?: Record<string, Partial<ScoringConfig>>,
-  useBlobSchema: boolean = false,
+  useBlobSchema = false,
 ): Promise<SearchResult[]> {
   await pg.unsafe("SET LOCAL hnsw.ef_search = 40");
 
@@ -180,13 +180,13 @@ export async function searchPgInTransaction(
     const junctionRows = (await pg.unsafe(
       built.sql,
       built.params.length > 0 ? (built.params as never[]) : undefined,
-    )) as Array<{
+    )) as {
       repo_id: string;
       file_path: string;
       skeleton: string | null;
       file_type: string;
       similarity: string;
-    }>;
+    }[];
 
     // file_commits still references files.id during the dual-write window,
     // so resolve a legacy id per (repo_id, file_path) for BM25 keying and
@@ -306,7 +306,7 @@ export async function searchPgInTransaction(
   }
 
   // Build commit link map and commit id set in a single pass
-  const linksByFileId = new Map<number, Array<{ recency: number; similarity: number }>>();
+  const linksByFileId = new Map<number, { recency: number; similarity: number }[]>();
   const commitIdsByFileId = new Map<number, string[]>();
   for (const link of linkRows) {
     const fileId = parseInt(link.file_id);

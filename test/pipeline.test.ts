@@ -28,17 +28,17 @@ function fakeVector(seed: number): number[] {
   return Array.from({ length: EMBED_DIM }, (_, j) => ((seed + j) % 100) * 0.001);
 }
 
-mock.module("@easier-idx/embedding", () => ({
-  embed: async (_provider: unknown, texts: string | string[]) => {
+void mock.module("@easier-idx/embedding", () => ({
+  embed: (_provider: unknown, texts: string | string[]) => {
     const arr = Array.isArray(texts) ? texts : [texts];
-    return arr.map((_, i) => fakeVector(i));
+    return Promise.resolve(arr.map((_, i) => fakeVector(i)));
   },
-  embedSingle: async (_provider: unknown, _text: string) => fakeVector(0),
+  embedSingle: (_provider: unknown, _text: string) => Promise.resolve(fakeVector(0)),
 }));
 
-mock.module("../src/embedding-provider", () => ({
+void mock.module("../src/embedding-provider", () => ({
   getProvider: () => ({}),
-  resetProvider: () => {},
+  resetProvider: () => undefined,
 }));
 
 // ---------------------------------------------------------------------------
@@ -47,8 +47,8 @@ mock.module("../src/embedding-provider", () => ({
 
 const noopSummaryProvider: SummaryProvider = {
   name: "noop",
-  async summarizeDirectory(_concatSkeleton, _childSummaries) {
-    return null;
+  summarizeDirectory(_concatSkeleton, _childSummaries) {
+    return Promise.resolve(null);
   },
 };
 
@@ -132,7 +132,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await closeSqlite(fixtureRepoRoot);
+  await closeSqlite();
   fs.rmSync(fixtureRepoRoot, { recursive: true, force: true });
 });
 
@@ -217,9 +217,9 @@ describe("storeFiles()", () => {
     await storeFiles(ctx, embedded);
 
     const db = await getSqlite(fixtureRepoRoot);
-    const rows = db
-      .prepare("SELECT file_path FROM files WHERE repo_id = ?")
-      .all(repoId) as { file_path: string }[];
+    const rows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
 
     const uniquePaths = new Set(rows.map((r) => r.file_path));
     expect(uniquePaths.size).toBe(rows.length); // no duplicates
@@ -240,9 +240,9 @@ describe("pruneStale()", () => {
       "INSERT INTO files (repo_id, file_path, content_hash, file_type) VALUES (?, ?, ?, ?)",
     ).run(repoId, "ghost/phantom.ts", "abc123", ".ts");
 
-    const dbRows = db
-      .prepare("SELECT file_path FROM files WHERE repo_id = ?")
-      .all(repoId) as { file_path: string }[];
+    const dbRows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
     const allPaths = new Set(
       dbRows.map((r) => r.file_path).filter((p) => p !== "ghost/phantom.ts"),
     );
@@ -258,9 +258,9 @@ describe("pruneStale()", () => {
 
   it("returns 0 when nothing is stale", async () => {
     const db = await getSqlite(fixtureRepoRoot);
-    const rows = db
-      .prepare("SELECT file_path FROM files WHERE repo_id = ?")
-      .all(repoId) as { file_path: string }[];
+    const rows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
     const allPaths = new Set(rows.map((r) => r.file_path));
 
     const pruned = await pruneStale(ctx, allPaths);
@@ -271,9 +271,9 @@ describe("pruneStale()", () => {
 describe("indexCommits()", () => {
   it("embeds commits and returns a count", async () => {
     const db = await getSqlite(fixtureRepoRoot);
-    const fileRows = db
-      .prepare("SELECT file_path FROM files WHERE repo_id = ?")
-      .all(repoId) as { file_path: string }[];
+    const fileRows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
     const allFiles = fileRows.map((r) => r.file_path);
 
     const count = await indexCommits(ctx, allFiles);
@@ -283,9 +283,9 @@ describe("indexCommits()", () => {
 
   it("is idempotent — second run returns 0 new commits", async () => {
     const db = await getSqlite(fixtureRepoRoot);
-    const fileRows = db
-      .prepare("SELECT file_path FROM files WHERE repo_id = ?")
-      .all(repoId) as { file_path: string }[];
+    const fileRows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
     const allFiles = fileRows.map((r) => r.file_path);
 
     const count = await indexCommits(ctx, allFiles);
@@ -296,19 +296,19 @@ describe("indexCommits()", () => {
 describe("summarizeDirs()", () => {
   it("runs without error on fixture repo", async () => {
     const db = await getSqlite(fixtureRepoRoot);
-    const fileRows = db
-      .prepare("SELECT file_path FROM files WHERE repo_id = ?")
-      .all(repoId) as { file_path: string }[];
+    const fileRows = db.prepare("SELECT file_path FROM files WHERE repo_id = ?").all(repoId) as {
+      file_path: string;
+    }[];
     const allFiles = fileRows.map((r) => r.file_path);
 
-    await expect(summarizeDirs(ctx, allFiles, noopSummaryProvider)).resolves.toBeUndefined();
+    expect(await summarizeDirs(ctx, allFiles, noopSummaryProvider)).toBeUndefined();
   });
 
   it("creates directory rows", async () => {
     const db = await getSqlite(fixtureRepoRoot);
-    const rows = db
-      .prepare("SELECT dir_path FROM directories WHERE repo_id = ?")
-      .all(repoId) as { dir_path: string }[];
+    const rows = db.prepare("SELECT dir_path FROM directories WHERE repo_id = ?").all(repoId) as {
+      dir_path: string;
+    }[];
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some((r) => r.dir_path === ".")).toBe(true);
   });

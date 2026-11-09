@@ -11,7 +11,7 @@ export interface QualityReport {
   passed: boolean;
   datasetPath: string;
   queryCount: number;
-  results: Array<{ policy: string; result: QualityResult }>;
+  results: { policy: string; result: QualityResult }[];
   timestamp: string;
 }
 
@@ -64,7 +64,7 @@ export async function runQualityCheck(
   baselinePath?: string,
 ): Promise<QualityReport> {
   const resolvedDataset = datasetPath ?? path.join(import.meta.dir, "../../eval/dataset.json");
-  const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(resolvedDataset, "utf-8"));
+  const dataset = JSON.parse(fs.readFileSync(resolvedDataset, "utf-8")) as EvalQuery[];
 
   // I/O: run eval
   const evalResults = await runEval(repoRoot, dataset);

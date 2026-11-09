@@ -83,7 +83,7 @@ export function skeletonPhp(filename: string, root: Node): string {
         const paramStr = extractPhpParams(params ?? null);
         const retType = node.childForFieldName("return_type");
         const retStr = retType ? ` -> ${retType.text}` : "";
-        const vis = node.text.match(/^\s*(private|protected)/) ? "-" : "+";
+        const vis = /^\s*(private|protected)/.exec(node.text) ? "-" : "+";
         lines.push(`${indent}${vis} ${name?.text ?? "(anonymous)"}(${paramStr})${retStr}`);
         break;
       }
@@ -120,7 +120,7 @@ export function skeletonPhp(filename: string, root: Node): string {
         const propName = varNode?.text ?? "";
         if (propName) {
           const modifier = isReadonly ? "readonly " : "";
-          const vis = node.text.match(/^\s*(private|protected)/) ? "-" : "+";
+          const vis = /^\s*(private|protected)/.exec(node.text) ? "-" : "+";
           lines.push(`${indent}${vis} ${modifier}${propName}`);
         }
         break;

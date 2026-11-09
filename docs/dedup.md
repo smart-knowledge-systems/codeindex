@@ -25,10 +25,10 @@ and `site-packages` package trees.
 
 Codeindex supports two backends for the global dedup store:
 
-| Backend | Where it lives | Best for |
-|---|---|---|
-| **Postgres** *(recommended)* | Same PG instance as your per-repo index, in the unified `file_blobs` / `repo_files` tables (plus `packages` / `package_files` / `repo_packages` for the package tier) | Anyone already running the PG per-repo backend; teams; multi-machine / CI setups |
-| **SQLite** | `~/.codeindex/global.db` (single file) | Single-developer, single-machine, zero-config |
+| Backend                      | Where it lives                                                                                                                                                        | Best for                                                                         |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| **Postgres** _(recommended)_ | Same PG instance as your per-repo index, in the unified `file_blobs` / `repo_files` tables (plus `packages` / `package_files` / `repo_packages` for the package tier) | Anyone already running the PG per-repo backend; teams; multi-machine / CI setups |
+| **SQLite**                   | `~/.codeindex/global.db` (single file)                                                                                                                                | Single-developer, single-machine, zero-config                                    |
 
 ### What dedup saves
 
@@ -126,9 +126,9 @@ Dedup:  812 hits / 47 misses (94.5% hit rate, ~$0.0042 saved)
 
 ## What gets deduplicated
 
-| Tier | Dedup key | When it kicks in |
-|---|---|---|
-| **File** | `(content_hash, provider, model, dimensions)` | Always — every file indexed by `reindex` or `update`. |
+| Tier        | Dedup key                                                             | When it kicks in                                                                                                          |
+| ----------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **File**    | `(content_hash, provider, model, dimensions)`                         | Always — every file indexed by `reindex` or `update`.                                                                     |
 | **Package** | `(tree_hash, provider, model, dimensions)` for installed dep packages | Opt-in via `dedup.indexDependencies: true`. Detects npm, Cargo, Go modcache, and Python site-packages package boundaries. |
 
 The file tier is on whenever dedup is enabled. The package tier is
@@ -148,7 +148,7 @@ costs `O(changed files)`, not `O(all files)`.
 
 When a source repo is in a clean working tree, codeindex enumerates files
 via `git ls-tree -r HEAD` instead of the filesystem walker. Git's blob
-SHA-1 *is* a content hash, so files unchanged since the last reindex skip
+SHA-1 _is_ a content hash, so files unchanged since the last reindex skip
 the disk read entirely — no formatter, no parser, no embedder. Dirty
 working trees fall back to the filesystem walker transparently.
 
@@ -205,24 +205,24 @@ only references were in the removed repo.
     "host": "localhost",
     "port": 5432,
     "database": "codeindex",
-    "user": "codeindex"
+    "user": "codeindex",
   },
 
   "dedup": {
     "enabled": true,
-    "backend": "pg",           // "pg" | "sqlite" | null (prompt next time)
-    "sqlitePath": null,        // override default ~/.codeindex/global.db
-    "indexDependencies": false // opt-in package-tier walking
-  }
+    "backend": "pg", // "pg" | "sqlite" | null (prompt next time)
+    "sqlitePath": null, // override default ~/.codeindex/global.db
+    "indexDependencies": false, // opt-in package-tier walking
+  },
 }
 ```
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `enabled` | bool | `true` | Master switch. `false` bypasses dedup entirely. |
-| `backend` | `"pg" \| "sqlite" \| null` | `null` | `null` triggers the first-use prompt. |
-| `sqlitePath` | string | `~/.codeindex/global.db` | SQLite store path override. |
-| `indexDependencies` | bool | `false` | Enable the package-tier pre-warm stage. Walks `node_modules` and `vendor/` on every reindex; expensive on first run, free on subsequent runs. |
+| Key                 | Type                       | Default                  | Notes                                                                                                                                         |
+| ------------------- | -------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`           | bool                       | `true`                   | Master switch. `false` bypasses dedup entirely.                                                                                               |
+| `backend`           | `"pg" \| "sqlite" \| null` | `null`                   | `null` triggers the first-use prompt.                                                                                                         |
+| `sqlitePath`        | string                     | `~/.codeindex/global.db` | SQLite store path override.                                                                                                                   |
+| `indexDependencies` | bool                       | `false`                  | Enable the package-tier pre-warm stage. Walks `node_modules` and `vendor/` on every reindex; expensive on first run, free on subsequent runs. |
 
 When `backend: "pg"`, the dedup store reuses the `pg.*` connection
 settings from the same config file — it does **not** need a separate
@@ -289,7 +289,7 @@ each repo, which migrates the per-repo index into PG, then enable dedup
 as above. You end up with one database holding both the per-repo indexes
 and the global dedup store.
 
-### 2. Dedup disabled on Postgres → dedup on Postgres *(you are here)*
+### 2. Dedup disabled on Postgres → dedup on Postgres _(you are here)_
 
 You already run PG for per-repo indexes (`pg.*` is already in your
 config) but haven't enabled dedup. This is the simplest path:
@@ -482,7 +482,7 @@ The store lives wholly under your control:
 
 ## Cloud mode (forthcoming)
 
-A future cidx-cloud integration will let users opt-in to a *shared*
+A future cidx-cloud integration will let users opt-in to a _shared_
 global store for **public** repositories and **registry-backed**
 dependency packages. When enabled:
 

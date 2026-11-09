@@ -9,6 +9,7 @@
 ### Why the patch exists
 
 Version 0.25.3's TypeScript declarations incorrectly type several `Node` array properties as `(Node | null)[]` instead of `Node[]`. The patch fixes:
+
 - `children`, `namedChildren`
 - `childrenForFieldName`, `childrenForFieldId`
 - `descendantsOfType`
@@ -21,27 +22,27 @@ The `.wasm` grammar files from `tree-sitter-wasms@0.1.13` are **binary-incompati
 
 ### Tested combinations
 
-| web-tree-sitter | WASM source | Result |
-|---|---|---|
-| 0.25.3 | `tree-sitter-wasms@0.1.13` | Works |
-| 0.26.6 | `tree-sitter-wasms@0.1.13` | **Fails** — ABI mismatch |
-| 0.26.6 | Grammar-package WASMs (e.g., `tree-sitter-typescript@0.23.2`) | Works |
+| web-tree-sitter | WASM source                                                   | Result                   |
+| --------------- | ------------------------------------------------------------- | ------------------------ |
+| 0.25.3          | `tree-sitter-wasms@0.1.13`                                    | Works                    |
+| 0.26.6          | `tree-sitter-wasms@0.1.13`                                    | **Fails** — ABI mismatch |
+| 0.26.6          | Grammar-package WASMs (e.g., `tree-sitter-typescript@0.23.2`) | Works                    |
 
 ### Why grammar-package WASMs aren't a drop-in solution
 
 Only 2 of 9 supported languages ship `.wasm` files in their npm packages:
 
-| Language | Package | Ships `.wasm`? |
-|---|---|---|
-| TypeScript/TSX | `tree-sitter-typescript@0.23.2` | Yes |
-| JavaScript | `tree-sitter-javascript@0.25.0` | Yes |
-| Python | `tree-sitter-python@0.25.0` | No |
-| Rust | `tree-sitter-rust@0.24.0` | No |
-| Go | `tree-sitter-go@0.25.0` | No |
-| Java | `tree-sitter-java@0.23.5` | No |
-| C | `tree-sitter-c@0.24.1` | No |
-| C++ | `tree-sitter-cpp@0.23.4` | No |
-| C# | `tree-sitter-c-sharp@0.23.1` | No |
+| Language       | Package                         | Ships `.wasm`? |
+| -------------- | ------------------------------- | -------------- |
+| TypeScript/TSX | `tree-sitter-typescript@0.23.2` | Yes            |
+| JavaScript     | `tree-sitter-javascript@0.25.0` | Yes            |
+| Python         | `tree-sitter-python@0.25.0`     | No             |
+| Rust           | `tree-sitter-rust@0.24.0`       | No             |
+| Go             | `tree-sitter-go@0.25.0`         | No             |
+| Java           | `tree-sitter-java@0.23.5`       | No             |
+| C              | `tree-sitter-c@0.24.1`          | No             |
+| C++            | `tree-sitter-cpp@0.23.4`        | No             |
+| C#             | `tree-sitter-c-sharp@0.23.1`    | No             |
 
 ## Upgrade triggers
 

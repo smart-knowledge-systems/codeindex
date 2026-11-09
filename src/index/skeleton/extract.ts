@@ -47,7 +47,7 @@ function skeletonProse(content: string): { text: string; entries: SkeletonEntry[
     const trimmed = line.trimStart();
 
     // Headings: # Title, ## Section, etc.
-    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)/);
+    const headingMatch = /^(#{1,6})\s+(.+)/.exec(trimmed);
     if (headingMatch) {
       parts.push(line);
       entries.push({

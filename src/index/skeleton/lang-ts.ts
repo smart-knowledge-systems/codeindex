@@ -157,10 +157,7 @@ function extractTsInterface(node: Node): string[] {
 }
 
 function extractTsFunction(node: Node): string {
-  const name =
-    childText(node, "name") ||
-    node.childForFieldName("name")?.text ||
-    (node.type === "variable_declarator" ? childText(node, "name") : "");
+  const name = childText(node, "name");
   const params = node.childForFieldName("parameters");
   const paramStr = extractTsParams(params);
   const retStr = extractTsReturnType(node);

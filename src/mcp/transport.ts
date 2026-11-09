@@ -125,7 +125,7 @@ export async function startStdio(server: McpServer): Promise<void> {
  * Extracts Bearer token from Authorization header for auth.
  * Includes CORS headers and per-session rate limiting.
  */
-export async function startSSE(
+export function startSSE(
   createServer_: (session?: AuthSession) => McpServer,
   port: number,
   repoRoot: string,
@@ -133,7 +133,7 @@ export async function startSSE(
   const sessions = new Map<string, SessionEntry>();
   const rateLimiter = new RateLimiter();
 
-  const httpServer = createServer(async (req, res) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     // Set CORS headers on all responses
     setCorsHeaders(res, req);
 
@@ -188,6 +188,10 @@ export async function startSSE(
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found");
     }
+  };
+
+  const httpServer = createServer((req, res) => {
+    void handleRequest(req, res);
   });
 
   httpServer.listen(port, () => {
@@ -195,5 +199,5 @@ export async function startSSE(
     logEvent({ event: "infra.server.started", port, protocol: "sse" });
   });
 
-  return sessions;
+  return Promise.resolve(sessions);
 }

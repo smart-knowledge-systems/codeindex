@@ -5,17 +5,21 @@ import { childText, firstChildOfType } from "../skeleton-utils";
 // Scala extractor
 // ---------------------------------------------------------------------------
 
+function scalaName(node: Node): string {
+  return childText(node, "name") || (firstChildOfType(node, "identifier")?.text ?? "");
+}
+
 function extractScalaParams(params: Node | null): string {
   if (!params) return "";
   const parts: string[] = [];
   for (const p of params.namedChildren) {
     if (p.type === "parameter") {
-      const name = childText(p, "name") || firstChildOfType(p, "identifier")?.text || "";
+      const name = scalaName(p);
       const type_ =
         p.childForFieldName("type") ?? firstChildOfType(p, "type_identifier", "generic_type");
       parts.push(type_ ? `${name}: ${type_.text}` : name);
     } else if (p.type === "class_parameter") {
-      const name = childText(p, "name") || firstChildOfType(p, "identifier")?.text || "";
+      const name = scalaName(p);
       const type_ =
         p.childForFieldName("type") ?? firstChildOfType(p, "type_identifier", "generic_type");
       parts.push(type_ ? `${name}: ${type_.text}` : name);
@@ -52,8 +56,7 @@ export function skeletonScala(filename: string, root: Node): string {
   function processNode(node: Node, indent = ""): void {
     switch (node.type) {
       case "object_definition": {
-        const name =
-          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        const name = scalaName(node) || "(anonymous)";
         lines.push(`${indent}object ${name}`);
         const body = node.childForFieldName("body") ?? firstChildOfType(node, "template_body");
         if (body) {
@@ -63,8 +66,7 @@ export function skeletonScala(filename: string, root: Node): string {
         break;
       }
       case "class_definition": {
-        const name =
-          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        const name = scalaName(node) || "(anonymous)";
         const isCaseClass = node.children.some((c) => !c.isNamed && c.type === "case");
         const keyword = isCaseClass ? "case class" : "class";
         lines.push(`${indent}${keyword} ${name}`);
@@ -76,8 +78,7 @@ export function skeletonScala(filename: string, root: Node): string {
         break;
       }
       case "trait_definition": {
-        const name =
-          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        const name = scalaName(node) || "(anonymous)";
         lines.push(`${indent}trait ${name}`);
         const body = node.childForFieldName("body") ?? firstChildOfType(node, "template_body");
         if (body) {
@@ -87,8 +88,7 @@ export function skeletonScala(filename: string, root: Node): string {
         break;
       }
       case "function_definition": {
-        const name =
-          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        const name = scalaName(node) || "(anonymous)";
         const params = node.childForFieldName("parameters") ?? firstChildOfType(node, "parameters");
         const paramStr = extractScalaParams(params ?? null);
         const retStr = extractScalaReturnType(node);
@@ -108,8 +108,7 @@ export function skeletonScala(filename: string, root: Node): string {
         break;
       }
       case "type_definition": {
-        const name =
-          childText(node, "name") || firstChildOfType(node, "identifier")?.text || "(anonymous)";
+        const name = scalaName(node) || "(anonymous)";
         const rhs = node.childForFieldName("type") ?? firstChildOfType(node, "type_identifier");
         lines.push(`${indent}type ${name}${rhs ? ` = ${rhs.text}` : ""}`);
         break;

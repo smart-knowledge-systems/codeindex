@@ -9,7 +9,7 @@ import { CodeindexError, formatError } from "../errors";
 import type { AuthSession } from "./auth";
 import type { SearchResult } from "../search/types";
 import type { PgTx } from "../db/pg";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { EmbeddingCache } from "./cache";
 
 // ---------------------------------------------------------------------------
@@ -82,11 +82,9 @@ export async function withMcpScope<T>(
   // Full access — use cached repo IDs for FORCE RLS
   if (!repoCache.ids || Date.now() - repoCache.fetchedAt > REPO_CACHE_TTL_MS) {
     const stampBefore = repoCache.fetchedAt;
-    if (!repoCache.inflight) {
-      repoCache.inflight = fetchAllRepoIds().finally(() => {
-        repoCache.inflight = null;
-      });
-    }
+    repoCache.inflight ??= fetchAllRepoIds().finally(() => {
+      repoCache.inflight = null;
+    });
     const freshIds = await repoCache.inflight;
     // Only populate cache if it wasn't invalidated while we were awaiting
     if (repoCache.fetchedAt === stampBefore && freshIds) {
@@ -114,7 +112,10 @@ const reindexCallLogs = new Map<string, number[]>();
 
 function reindexRateLimitKey(repoRoot: string, session?: AuthSession): string {
   if (!session || session.repoIds === null) return `${repoRoot}:full`;
-  return `${repoRoot}:${session.repoIds.slice().sort().join(",")}`;
+  return `${repoRoot}:${session.repoIds
+    .slice()
+    .sort((a, b) => a - b)
+    .join(",")}`;
 }
 
 export function checkReindexRateLimit(repoRoot: string, session?: AuthSession): boolean {
@@ -145,8 +146,9 @@ export function checkReindexRateLimit(repoRoot: string, session?: AuthSession): 
 // MCP response helpers — consistent success/error formatting
 // ---------------------------------------------------------------------------
 
+// oxlint-disable-next-line typescript/consistent-type-definitions -- the MCP SDK's tool result type has an index signature, which an interface does not satisfy
 export type McpToolResponse = {
-  content: Array<{ type: "text"; text: string }>;
+  content: { type: "text"; text: string }[];
   isError?: true;
 };
 
@@ -187,13 +189,13 @@ export interface StatusResult {
   lastIndexed: string | null;
   formatter: string;
   cost?: {
-    rows: Array<{
+    rows: {
       operation: string;
       model: string;
       tokensIn: number;
       tokensOut: number;
       costUsd: number;
-    }>;
+    }[];
     totalUsd: number;
   };
 }
@@ -281,7 +283,8 @@ async function fetchRepoRow(repoRoot: string, store: string): Promise<RepoRow> {
   }
   const db = await getSqlite(repoRoot);
   const repo = db.prepare("SELECT * FROM repos WHERE root_path = ?").get(repoRoot) as
-    RepoRow | undefined;
+    | RepoRow
+    | undefined;
   if (!repo) throw new Error("Not indexed yet. Run: codeindex reindex");
   return repo;
 }
@@ -362,7 +365,7 @@ export async function enrichResults(
   repoRoot: string,
   results: SearchResult[],
   session?: AuthSession,
-): Promise<Array<SearchResult & { indexedAt?: string; stale?: boolean }>> {
+): Promise<(SearchResult & { indexedAt?: string; stale?: boolean })[]> {
   const filePaths = results.filter((r) => r.type !== "commit").map((r) => r.filePath);
   const indexedAtMap = await batchGetIndexedAt(repoRoot, filePaths, session);
 

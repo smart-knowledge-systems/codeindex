@@ -224,9 +224,9 @@ export async function evict(originUrl: string): Promise<void> {
 }
 
 export async function listCached(): Promise<
-  Array<{ url: string; path: string; sizeBytes: number; lastAccessed: Date }>
+  { url: string; path: string; sizeBytes: number; lastAccessed: Date }[]
 > {
-  const results: Array<{ url: string; path: string; sizeBytes: number; lastAccessed: Date }> = [];
+  const results: { url: string; path: string; sizeBytes: number; lastAccessed: Date }[] = [];
 
   if (!existsSync(CACHE_ROOT)) return results;
 

@@ -7,11 +7,9 @@ import type { PolicyContext, PolicyResult, FixResult } from "./types";
  *
  * Returns an empty array (no fixes applied) until the telemetry gate is met.
  */
-export async function runAutoFix(
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function runAutoFix(
   _ctx: PolicyContext,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _failedPolicies: Array<{ policy: string; result: PolicyResult }>,
+  _failedPolicies: { policy: string; result: PolicyResult }[],
 ): Promise<FixResult[]> {
-  return [];
+  return Promise.resolve([]);
 }

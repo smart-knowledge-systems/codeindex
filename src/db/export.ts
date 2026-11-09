@@ -125,10 +125,52 @@ export function createExportSchema(
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- pg query results are untyped
-type PgRow = Record<string, any>;
+interface RepoRow {
+  id: number;
+  origin_url: string | null;
+  root_path: string;
+  name: string;
+  formatter_cmd: string | null;
+}
 
-function exportRepos(db: Database, repos: PgRow[]): void {
+interface FileRow {
+  id: number;
+  repo_id: number;
+  file_path: string;
+  content_hash: string;
+  skeleton: string | null;
+  skeleton_entries: string | null;
+  file_type: string;
+  indexed_at: string | null;
+  embedding?: string | null;
+}
+
+interface DirRow {
+  id: number;
+  repo_id: number;
+  dir_path: string;
+  concat_skeleton: string | null;
+  summary: string | null;
+  concat_embedding?: string | null;
+  summary_embedding?: string | null;
+}
+
+interface CommitRow {
+  id: number;
+  repo_id: number;
+  commit_hash: string;
+  message: string;
+  authored_at: string | null;
+  embedding?: string | null;
+}
+
+interface FileCommitRow {
+  file_id: number;
+  commit_id: number;
+  recency: number;
+}
+
+function exportRepos(db: Database, repos: RepoRow[]): void {
   for (const r of repos) {
     db.prepare(
       "INSERT OR REPLACE INTO repos (id, origin_url, root_path, name, formatter_cmd) VALUES (?, ?, ?, ?, ?)",
@@ -138,7 +180,7 @@ function exportRepos(db: Database, repos: PgRow[]): void {
 
 function exportFiles(
   db: Database,
-  files: PgRow[],
+  files: FileRow[],
   shouldExclude: (filePath: string) => boolean,
   redactEmbeddings: boolean,
 ): Set<number> {
@@ -175,7 +217,7 @@ function exportFiles(
 
 function exportDirectories(
   db: Database,
-  dirs: PgRow[],
+  dirs: DirRow[],
   shouldExclude: (filePath: string) => boolean,
   redactEmbeddings: boolean,
 ): void {
@@ -203,7 +245,7 @@ function exportDirectories(
   }
 }
 
-function exportCommits(db: Database, commits: PgRow[], redactEmbeddings: boolean): void {
+function exportCommits(db: Database, commits: CommitRow[], redactEmbeddings: boolean): void {
   for (const c of commits) {
     db.prepare(
       "INSERT OR REPLACE INTO commits (id, repo_id, commit_hash, message, authored_at) VALUES (?, ?, ?, ?, ?)",
@@ -217,7 +259,11 @@ function exportCommits(db: Database, commits: PgRow[], redactEmbeddings: boolean
   }
 }
 
-function exportFileCommits(db: Database, fileCommits: PgRow[], exportedFileIds: Set<number>): void {
+function exportFileCommits(
+  db: Database,
+  fileCommits: FileCommitRow[],
+  exportedFileIds: Set<number>,
+): void {
   for (const fc of fileCommits) {
     if (exportedFileIds.has(fc.file_id)) {
       db.prepare(
@@ -265,8 +311,8 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
     );
 
     // Fetch and export repos
-    const repos = await pg.unsafe("SELECT * FROM repos WHERE id = $1", [repoId]);
-    exportRepos(db, repos as PgRow[]);
+    const repos = await pg.unsafe<RepoRow>("SELECT * FROM repos WHERE id = $1", [repoId]);
+    exportRepos(db, repos);
 
     // Fetch and export files + embeddings.
     // Phase 3: re-denormalize on export from the content-addressed dedup
@@ -281,7 +327,7 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
     const fileSelectCols = redactEmbeddings
       ? "f.id, rf.repo_id, rf.file_path, rf.content_hash, fb.skeleton, fb.skeleton_entries::text AS skeleton_entries, fb.file_type, rf.indexed_at::text"
       : "f.id, rf.repo_id, rf.file_path, rf.content_hash, fb.skeleton, fb.skeleton_entries::text AS skeleton_entries, fb.file_type, rf.indexed_at::text, fb.embedding::text";
-    const files = await pg.unsafe(
+    const files = await pg.unsafe<FileRow>(
       `SELECT ${fileSelectCols}
        FROM repo_files rf
        JOIN file_blobs fb
@@ -297,33 +343,35 @@ export async function exportToSqlite(repoId: number, outPath: string, opts: Expo
          AND rf.dimensions = $4`,
       [repoId, provider, model, dims],
     );
-    const exportedFileIds = exportFiles(db, files as PgRow[], shouldExclude, redactEmbeddings);
+    const exportedFileIds = exportFiles(db, files, shouldExclude, redactEmbeddings);
 
     // Fetch and export directories + embeddings
     const dirColumns = redactEmbeddings
       ? "id, repo_id, dir_path, concat_skeleton, summary"
       : "id, repo_id, dir_path, concat_skeleton, summary, concat_embedding::text, summary_embedding::text";
-    const dirs = await pg.unsafe(`SELECT ${dirColumns} FROM directories WHERE repo_id = $1`, [
-      repoId,
-    ]);
-    exportDirectories(db, dirs as PgRow[], shouldExclude, redactEmbeddings);
+    const dirs = await pg.unsafe<DirRow>(
+      `SELECT ${dirColumns} FROM directories WHERE repo_id = $1`,
+      [repoId],
+    );
+    exportDirectories(db, dirs, shouldExclude, redactEmbeddings);
 
     // Export commits + embeddings (unless redacted)
     if (!redactCommits) {
       const commitColumns = redactEmbeddings
         ? "id, repo_id, commit_hash, message, authored_at::text"
         : "id, repo_id, commit_hash, message, authored_at::text, embedding::text";
-      const commits = await pg.unsafe(`SELECT ${commitColumns} FROM commits WHERE repo_id = $1`, [
-        repoId,
-      ]);
-      exportCommits(db, commits as PgRow[], redactEmbeddings);
+      const commits = await pg.unsafe<CommitRow>(
+        `SELECT ${commitColumns} FROM commits WHERE repo_id = $1`,
+        [repoId],
+      );
+      exportCommits(db, commits, redactEmbeddings);
 
       // Export file_commits (only for files that were exported)
-      const fileCommits = await pg.unsafe(
+      const fileCommits = await pg.unsafe<FileCommitRow>(
         "SELECT fc.file_id, fc.commit_id, fc.recency FROM file_commits fc JOIN files f ON fc.file_id = f.id WHERE f.repo_id = $1",
         [repoId],
       );
-      exportFileCommits(db, fileCommits as PgRow[], exportedFileIds);
+      exportFileCommits(db, fileCommits, exportedFileIds);
     }
 
     db.exec("COMMIT");

@@ -114,10 +114,10 @@ async function processDirectory(
   const fileData = await Promise.all(
     childFiles.map(async (fp) => {
       if (config.store === "pg") {
-        const rows = await pgUnsafe(
+        const rows = (await pgUnsafe(
           "SELECT skeleton, content_hash FROM files WHERE repo_id = $1 AND file_path = $2",
           [repoId, fp],
-        );
+        )) as { skeleton: string | null; content_hash: string }[];
         if (rows.length > 0) {
           return {
             skeleton: rows[0].skeleton ? `--- ${fp} ---\n${rows[0].skeleton}` : null,
@@ -141,7 +141,7 @@ async function processDirectory(
   );
 
   const skeletons = fileData.filter((d) => d?.skeleton).map((d) => d!.skeleton!);
-  const hashParts = fileData.filter((d) => d !== null).map((d) => d!.hashPart);
+  const hashParts = fileData.filter((d) => d !== null).map((d) => d.hashPart);
   const concatSkeleton = skeletons.join("\n\n");
 
   // Gather child directory summaries and their hashes (already processed, bottom-up)
@@ -315,7 +315,7 @@ async function generateSummaryViaCli(prompt: string): Promise<string | null> {
     const estimatedOutputTokens = Math.ceil(stdout.length / 4);
     await recordCost("summarize", "haiku", estimatedInputTokens, estimatedOutputTokens);
 
-    const parsed = JSON.parse(stdout);
+    const parsed = JSON.parse(stdout) as { summary?: string };
     return parsed.summary ?? null;
   } catch (err) {
     logEvent({
@@ -336,7 +336,7 @@ async function generateSummaryViaSdk(prompt: string): Promise<string | null> {
 
     // Try to parse as JSON, fall back to raw text
     try {
-      const parsed = JSON.parse(summary);
+      const parsed = JSON.parse(summary) as { summary?: string };
       return parsed.summary ?? summary;
     } catch {
       return summary;

@@ -1,6 +1,6 @@
 import { flag, type ParsedArgs } from "../cli";
 
-export async function cmdMcpConfig(parsed: ParsedArgs) {
+export function cmdMcpConfig(parsed: ParsedArgs): void {
   const transport = flag(parsed, "transport") ?? "stdio";
   const port = flag(parsed, "port") ?? "3100";
 

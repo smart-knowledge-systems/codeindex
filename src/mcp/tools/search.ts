@@ -34,7 +34,7 @@ export function registerSearchTools(ctx: McpToolContext): void {
     },
     async ({ query, topN, minScore, lang, dir, since, scope, explain }) => {
       try {
-        recordEvent({
+        void recordEvent({
           event: "mcp_tool",
           timestamp: new Date().toISOString(),
           tool: "search",
@@ -81,7 +81,7 @@ export function registerSearchTools(ctx: McpToolContext): void {
     },
     async ({ queries, topN, minScore, scope }) => {
       try {
-        recordEvent({
+        void recordEvent({
           event: "mcp_tool",
           timestamp: new Date().toISOString(),
           tool: "batchSearch",
@@ -119,7 +119,7 @@ export function registerSearchTools(ctx: McpToolContext): void {
             const results = await search(repoRoot, q, {
               topN: topN ?? undefined,
               minScore: minScore ?? undefined,
-              scope: resolvedScope as "project" | "all" | string[],
+              scope: resolvedScope,
               includeSkeleton: true,
               includeSummary: true,
               embeddingCache,
@@ -159,7 +159,7 @@ export function registerSearchTools(ctx: McpToolContext): void {
     },
     async ({ since, query, topN, minScore, scope }) => {
       try {
-        recordEvent({
+        void recordEvent({
           event: "mcp_tool",
           timestamp: new Date().toISOString(),
           tool: "searchChanged",

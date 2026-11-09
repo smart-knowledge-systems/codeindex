@@ -7,11 +7,11 @@ import { logEvent, hashPath } from "../logging";
 
 export function parseGitHubOwnerRepo(url: string): { owner: string; repo: string } | null {
   // HTTPS: https://github.com/owner/repo.git
-  const https = url.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
+  const https = /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/.exec(url);
   if (https) return { owner: https[1], repo: https[2] };
 
   // SSH: git@github.com:owner/repo.git
-  const ssh = url.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/);
+  const ssh = /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/.exec(url);
   if (ssh) return { owner: ssh[1], repo: ssh[2] };
 
   return null;

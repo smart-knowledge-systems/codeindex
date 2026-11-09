@@ -16,7 +16,7 @@ export interface GraphEdge {
 export async function cmdGraph(repoRoot: string, format: string) {
   const config = await loadConfig(repoRoot);
 
-  let rows: Array<{ source_repo_id: number; target_repo_id: number; cnt: number }>;
+  let rows: { source_repo_id: number; target_repo_id: number; cnt: number }[];
   let repoNames: Map<number, string>;
 
   if (config.store === "pg") {
@@ -44,13 +44,13 @@ export async function cmdGraph(repoRoot: string, format: string) {
          FROM cross_repo_edges
          GROUP BY source_repo_id, target_repo_id`,
       )
-      .all() as Array<{ source_repo_id: number; target_repo_id: number; cnt: number }>;
+      .all() as { source_repo_id: number; target_repo_id: number; cnt: number }[];
     rows = edgeRows;
 
-    const repoRows = db.prepare(`SELECT id, name FROM repos`).all() as Array<{
+    const repoRows = db.prepare(`SELECT id, name FROM repos`).all() as {
       id: number;
       name: string;
-    }>;
+    }[];
     repoNames = new Map(repoRows.map((r) => [r.id, r.name]));
   }
 

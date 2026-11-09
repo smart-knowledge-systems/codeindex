@@ -26,10 +26,10 @@ export interface SearchResult {
   lineEnd?: number;
   snippet?: string;
   explanation?: ScoreExplanation;
-  crossRepoEdges?: Array<{
+  crossRepoEdges?: {
     repoName: string;
     direction: "depends-on" | "depended-by";
-  }>;
+  }[];
   cluster?: string;
   clusterLabel?: string;
 }

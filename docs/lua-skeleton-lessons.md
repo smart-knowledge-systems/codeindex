@@ -6,11 +6,11 @@ Captured during M4 implementation session (2026-03-13). Lua was dropped from M4 
 
 The tree-sitter-lua grammar uses different node type names than expected:
 
-| Expected | Actual |
-|----------|--------|
-| `function_declaration` | `function_definition_statement` |
-| `local_function` | `local_function_definition_statement` |
-| `function_call` | Various — requires are often nested in `local_variable_declaration` |
+| Expected               | Actual                                                              |
+| ---------------------- | ------------------------------------------------------------------- |
+| `function_declaration` | `function_definition_statement`                                     |
+| `local_function`       | `local_function_definition_statement`                               |
+| `function_call`        | Various — requires are often nested in `local_variable_declaration` |
 
 ## Function Declaration Patterns
 
@@ -31,6 +31,7 @@ Key: `childForFieldName("name")` works correctly for both types. Parameters use 
 ## Method vs Function Naming
 
 Lua doesn't distinguish methods from functions at the AST level. Colon syntax (`M:getName`) is just syntactic sugar. The name field includes the full dotted/colon path:
+
 - `M.new` — table function
 - `M:getName` — method syntax (self is implicit)
 - `createGame` — top-level function
@@ -38,6 +39,7 @@ Lua doesn't distinguish methods from functions at the AST level. Colon syntax (`
 ## Import Detection
 
 `require()` calls don't have their own AST node type. They appear as:
+
 1. `local json = require("json")` → `local_variable_declaration` containing a `function_call`
 2. `require("module")` → standalone expression
 
@@ -46,6 +48,7 @@ Best approach: use regex on node text to extract require paths, scanning `local_
 ## collectEntries Integration
 
 Add these cases to `collectEntries`:
+
 ```typescript
 case "function_definition_statement":
 case "local_function_definition_statement": {

@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type { ScoringConfig } from "../src/search/types";
-import type { EvalQuery, EvalSummary } from "./types";
+import type { EvalQuery } from "./types";
 import { runEval } from "./run-eval";
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ async function main() {
   }
 
   const datasetPath = path.join(import.meta.dir, "dataset.json");
-  const dataset: EvalQuery[] = JSON.parse(fs.readFileSync(datasetPath, "utf-8"));
+  const dataset = JSON.parse(fs.readFileSync(datasetPath, "utf-8")) as EvalQuery[];
 
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -77,8 +77,7 @@ async function main() {
 
             const results = await runEval(repoRoot, dataset, config);
 
-            const avgPrecision5 =
-              results.reduce((s, r) => s + r.precision5, 0) / results.length;
+            const avgPrecision5 = results.reduce((s, r) => s + r.precision5, 0) / results.length;
             const avgRecall = results.reduce((s, r) => s + r.recall, 0) / results.length;
             const avgMrr = results.reduce((s, r) => s + r.mrr, 0) / results.length;
             const objective = avgPrecision5 + avgMrr;
@@ -144,10 +143,12 @@ async function main() {
     "## Top 10 Configs\n",
     "| # | alpha | beta | hybridWeight | lengthPenalty | minScore | P@5 | MRR | Objective |",
     "|---|-------|------|-------------|---------------|----------|-----|-----|-----------|",
-    ...gridResults.slice(0, 10).map(
-      (r, i) =>
-        `| ${i + 1} | ${r.config.alpha} | ${r.config.beta} | ${r.config.hybridWeight} | ${r.config.lengthPenaltyWeight} | ${r.config.minScore} | ${r.avgPrecision5.toFixed(3)} | ${r.avgMrr.toFixed(3)} | ${r.objective.toFixed(3)} |`,
-    ),
+    ...gridResults
+      .slice(0, 10)
+      .map(
+        (r, i) =>
+          `| ${i + 1} | ${r.config.alpha} | ${r.config.beta} | ${r.config.hybridWeight} | ${r.config.lengthPenaltyWeight} | ${r.config.minScore} | ${r.avgPrecision5.toFixed(3)} | ${r.avgMrr.toFixed(3)} | ${r.objective.toFixed(3)} |`,
+      ),
   ];
 
   fs.writeFileSync(path.join(outputDir, "SUMMARY.md"), summaryLines.join("\n"));

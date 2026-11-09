@@ -29,10 +29,10 @@ export interface HealthPolicy {
 export interface CheckReport {
   repo: string;
   passed: boolean;
-  results: Array<{
+  results: {
     policy: string;
     severity: "error" | "warning" | "info";
     result: PolicyResult;
-  }>;
+  }[];
   timestamp: string;
 }

@@ -7,19 +7,19 @@ description: Semantic code search across indexed repositories. Use this skill wh
 
 codeindex is a semantic search index for codebases. It embeds file skeletons, directory summaries, and commit messages, then ranks results using cosine similarity with commit-recency and directory-hierarchy boosts.
 
-**`codeindex` (alias: `cidx`) is a first-class shell primitive** — treat it like `grep`, `find`, and `glob`. Invoke the CLI directly via Bash whenever it's the right tool, not just through this skill's wrappers. The skill exists to help you recognize *when* to reach for semantic search; the CLI is the actual interface. `cidx search "query"` in Bash is always valid and usually preferred over indirection. Run `cidx --llm` at any time to get the full, agent-oriented usage doc printed to stdout.
+**`codeindex` (alias: `cidx`) is a first-class shell primitive** — treat it like `grep`, `find`, and `glob`. Invoke the CLI directly via Bash whenever it's the right tool, not just through this skill's wrappers. The skill exists to help you recognize _when_ to reach for semantic search; the CLI is the actual interface. `cidx search "query"` in Bash is always valid and usually preferred over indirection. Run `cidx --llm` at any time to get the full, agent-oriented usage doc printed to stdout.
 
 **It is a discovery layer, not a context dump.** Search results are pointers — file paths, scores, and types. Use them to decide where to look, then pull actual content with the Read tool (for file contents), Grep (for keyword search within files), and Glob (for file pattern matching). Use the dedicated Claude Code tools (Read, Grep, Glob) for reading and pattern matching inside files — but for semantic search itself, call the `cidx`/`codeindex` CLI directly via Bash.
 
 ## When to use codeindex vs Grep/Glob
 
-| Situation | Tool |
-|-----------|------|
-| You know a function/class/variable name | Grep |
-| You know a file name or pattern | Glob |
-| You want to understand *where* something is conceptually | **codeindex** |
-| The codebase is large and you're exploring blind | **codeindex** |
-| You need to search across multiple repos | **codeindex** `--scope all` |
+| Situation                                                 | Tool                            |
+| --------------------------------------------------------- | ------------------------------- |
+| You know a function/class/variable name                   | Grep                            |
+| You know a file name or pattern                           | Glob                            |
+| You want to understand _where_ something is conceptually  | **codeindex**                   |
+| The codebase is large and you're exploring blind          | **codeindex**                   |
+| You need to search across multiple repos                  | **codeindex** `--scope all`     |
 | You already have codeindex results and need file contents | Read tool (never cat/head/tail) |
 
 ## Search workflow
@@ -64,6 +64,7 @@ codeindex search "authentication middleware" --include-snippet
 ### Interpreting results
 
 Results are JSON by default. Each result has:
+
 - `filePath` — relative path (or commit hash for commit results)
 - `finalScore` — overall relevance after boosting (higher is better)
 - `cosineSimilarity` — raw embedding similarity before boosts
@@ -137,23 +138,23 @@ codeindex mcp-config --transport sse --port 3100
 
 ### MCP tools available
 
-| Tool | Description |
-|------|-------------|
-| `search` | Semantic search with all CLI flags |
-| `batchSearch` | Multiple queries in one call (shared embedding, deduplication) |
-| `searchChanged` | Files modified since a timestamp, optionally filtered by semantic query |
-| `intent` | Generate AGENTS.md from directory summaries |
-| `drift` | Detect stale intent nodes |
-| `status` | Index stats with optional cost breakdown |
-| `health` | Schema version, connection status, index freshness |
-| `check` | Run health policies |
-| `getImporters` | Find files that import a given file |
-| `getDependencies` | Find files imported by a given file |
-| `traceImportChain` | Trace transitive import paths between files |
-| `getCrossRepoEdges` | Cross-repo import relationships |
-| `findImplementors` | Find implementations of an interface/trait/protocol |
-| `findCallers` | Find callers of a function/method |
-| `reindexFiles` | Trigger reindex of specific files (rate-limited, max 50/call) |
+| Tool                | Description                                                             |
+| ------------------- | ----------------------------------------------------------------------- |
+| `search`            | Semantic search with all CLI flags                                      |
+| `batchSearch`       | Multiple queries in one call (shared embedding, deduplication)          |
+| `searchChanged`     | Files modified since a timestamp, optionally filtered by semantic query |
+| `intent`            | Generate AGENTS.md from directory summaries                             |
+| `drift`             | Detect stale intent nodes                                               |
+| `status`            | Index stats with optional cost breakdown                                |
+| `health`            | Schema version, connection status, index freshness                      |
+| `check`             | Run health policies                                                     |
+| `getImporters`      | Find files that import a given file                                     |
+| `getDependencies`   | Find files imported by a given file                                     |
+| `traceImportChain`  | Trace transitive import paths between files                             |
+| `getCrossRepoEdges` | Cross-repo import relationships                                         |
+| `findImplementors`  | Find implementations of an interface/trait/protocol                     |
+| `findCallers`       | Find callers of a function/method                                       |
+| `reindexFiles`      | Trigger reindex of specific files (rate-limited, max 50/call)           |
 
 MCP results include `indexedAt` timestamp and `stale` boolean for trust decisions. Authentication via scoped tokens (`codeindex token create`).
 
@@ -204,30 +205,39 @@ Embeddings are 1536-dimensional vectors (`text-embedding-3-small`). PostgreSQL u
 ### Escape hatches
 
 ```typescript
-import { pgUnsafe } from "./src/db/pg";        // pgUnsafe(sql, params?) => rows
+import { pgUnsafe } from "./src/db/pg"; // pgUnsafe(sql, params?) => rows
 import { sqliteUnsafe } from "./src/db/sqlite"; // sqliteUnsafe(sql, params?) => rows
 
 // Find all files changed in the last 3 commits
-const recent = await pgUnsafe(`
+const recent = await pgUnsafe(
+  `
   SELECT DISTINCT f.file_path
   FROM file_commits fc
   JOIN files f ON f.id = fc.file_id
   WHERE fc.recency <= 3 AND f.repo_id = $1
-`, [repoId]);
+`,
+  [repoId],
+);
 
 // Cosine similarity search with pgvector
-const similar = await pgUnsafe(`
+const similar = await pgUnsafe(
+  `
   SELECT file_path, 1 - (embedding <=> $1) AS sim
   FROM files WHERE repo_id = $2
   ORDER BY sim DESC LIMIT 10
-`, [vecLiteral, repoId]);
+`,
+  [vecLiteral, repoId],
+);
 
 // Find directories with summaries mentioning a topic
-const dirs = await pgUnsafe(`
+const dirs = await pgUnsafe(
+  `
   SELECT dir_path, summary
   FROM directories
   WHERE repo_id = $1 AND summary ILIKE $2
-`, [repoId, '%migration%']);
+`,
+  [repoId, "%migration%"],
+);
 ```
 
 The built-in search functions (`search`, `searchFiles`, `searchDirectories`, `searchCommits` from `src/search/query.ts`) handle embedding, scoring, and cross-repo resolution automatically. Use them when possible; drop to `pgUnsafe`/`sqliteUnsafe` when you need joins, aggregations, or queries the CLI can't express.
@@ -247,6 +257,7 @@ finalScore = (1 - hybridWeight) * semanticScore + hybridWeight * normalizedBM25
 - Use `--explain` to see the full score breakdown for each result
 
 Tune via `codeindex config`:
+
 - `--alpha <f>` — Commit boost weight (default 0.15)
 - `--beta <f>` — Parent directory boost weight (default 0.2)
 - `--gamma <f>` — Child-to-parent boost weight (default 0.1)
@@ -259,10 +270,25 @@ Tune via `codeindex config`:
 For agent or library use, import from `src/api.ts`:
 
 ```typescript
-import { search, searchFiles, searchDirectories, searchCommits, loadConfig, getCostSummary, extractImports, resolveImport, discoverCrossRepoEdges, pgUnsafe, getSqlite } from "./src/api";
+import {
+  search,
+  searchFiles,
+  searchDirectories,
+  searchCommits,
+  loadConfig,
+  getCostSummary,
+  extractImports,
+  resolveImport,
+  discoverCrossRepoEdges,
+  pgUnsafe,
+  getSqlite,
+} from "./src/api";
 
 // Semantic search
-const results = await search("/path/to/repo", "authentication middleware", { topN: 5, explain: true });
+const results = await search("/path/to/repo", "authentication middleware", {
+  topN: 5,
+  explain: true,
+});
 
 // Import graph queries
 const imports = await extractImports("/path/to/file.ts", "typescript");

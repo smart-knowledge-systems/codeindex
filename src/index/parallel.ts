@@ -168,7 +168,7 @@ async function reindexOne(
     process.stderr.write(`${tag} Building directory index...\n`);
     const nullSummaryProvider: SummaryProvider = {
       name: "none",
-      summarizeDirectory: async () => null,
+      summarizeDirectory: () => Promise.resolve(null),
     };
     await summarizeDirs(ctx, allFiles, nullSummaryProvider);
 

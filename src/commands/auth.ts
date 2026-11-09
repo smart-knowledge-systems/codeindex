@@ -94,7 +94,7 @@ export async function cmdAuth(): Promise<void> {
       const globalConfigPath = getGlobalConfigPath();
       let existing: Partial<CodeindexConfig> = {};
       try {
-        existing = await Bun.file(globalConfigPath).json();
+        existing = (await Bun.file(globalConfigPath).json()) as Partial<CodeindexConfig>;
       } catch {
         // no existing config
       }

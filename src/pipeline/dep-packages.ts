@@ -180,8 +180,8 @@ async function embedPackageMissedFiles(
 
 async function filterIndexableEntries(
   pkg: DetectedPackage,
-): Promise<Array<{ entry: PackageFileEntry; absPath: string }>> {
-  const out: Array<{ entry: PackageFileEntry; absPath: string }> = [];
+): Promise<{ entry: PackageFileEntry; absPath: string }[]> {
+  const out: { entry: PackageFileEntry; absPath: string }[] = [];
   for (const entry of pkg.files) {
     const ext = path.extname(entry.relpath).toLowerCase();
     if (!ext || !INDEXABLE_EXTENSIONS.has(ext)) continue;

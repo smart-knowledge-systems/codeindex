@@ -100,13 +100,13 @@ export class CloudClient {
   private async requestWithRetry<T>(
     method: string,
     reqPath: string,
-    body: unknown | undefined,
+    body: unknown,
     attempt: number,
   ): Promise<T> {
     const url = `${this.baseUrl}${reqPath}`;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.token) {
-      headers["Authorization"] = `Bearer ${this.token}`;
+      headers.Authorization = `Bearer ${this.token}`;
     }
 
     let response: Response;

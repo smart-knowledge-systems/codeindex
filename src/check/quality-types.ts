@@ -27,8 +27,8 @@ export type QualityResult =
 export interface QualityConfig {
   dataset: string;
   baseline?: string;
-  policies: Array<{
+  policies: {
     name: string;
     threshold: number;
-  }>;
+  }[];
 }

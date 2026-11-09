@@ -15,7 +15,7 @@ export function skeletonLua(filename: string, root: Node, content: string): stri
   for (const node of root.namedChildren) {
     if (node.type !== "local_variable_declaration" && node.type !== "variable_assignment") continue;
     const line = sourceLines[node.startPosition.row] ?? "";
-    const reqMatch = line.match(/require\s*\(?["']([^"']+)["']\)?/);
+    const reqMatch = /require\s*\(?["']([^"']+)["']\)?/.exec(line);
     if (reqMatch) imports.push(reqMatch[1]);
   }
   if (imports.length > 0) lines.push(`imports: ${imports.join(", ")}`);

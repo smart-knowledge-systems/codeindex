@@ -14,7 +14,7 @@ export async function getPg(): Promise<PgClient> {
 
 export async function pgUnsafe(sql: string, params: unknown[] = []) {
   const pg = await getPg();
-  return pg.unsafe(sql, params as never[]);
+  return pg.unsafe(sql, params);
 }
 
 export async function closePg() {

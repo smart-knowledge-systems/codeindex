@@ -12,25 +12,26 @@ For the most current pricing information, please visit [claude.com/pricing](http
 
 The following table shows pricing for all Claude models across different usage tiers:
 
-| Model             | Base Input Tokens | 5m Cache Writes | 1h Cache Writes | Cache Hits & Refreshes | Output Tokens |
-|-------------------|-------------------|-----------------|-----------------|----------------------|---------------|
-| Claude Opus 4.6     | $5 / MTok         | $6.25 / MTok    | $10 / MTok      | $0.50 / MTok | $25 / MTok    |
-| Claude Opus 4.5   | $5 / MTok         | $6.25 / MTok    | $10 / MTok      | $0.50 / MTok | $25 / MTok    |
-| Claude Opus 4.1   | $15 / MTok        | $18.75 / MTok   | $30 / MTok      | $1.50 / MTok | $75 / MTok    |
-| Claude Opus 4     | $15 / MTok        | $18.75 / MTok   | $30 / MTok      | $1.50 / MTok | $75 / MTok    |
-| Claude Sonnet 4.6   | $3 / MTok         | $3.75 / MTok    | $6 / MTok       | $0.30 / MTok | $15 / MTok    |
-| Claude Sonnet 4.5   | $3 / MTok         | $3.75 / MTok    | $6 / MTok       | $0.30 / MTok | $15 / MTok    |
-| Claude Sonnet 4   | $3 / MTok         | $3.75 / MTok    | $6 / MTok       | $0.30 / MTok | $15 / MTok    |
-| Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations)) | $3 / MTok         | $3.75 / MTok    | $6 / MTok       | $0.30 / MTok | $15 / MTok    |
-| Claude Haiku 4.5  | $1 / MTok         | $1.25 / MTok    | $2 / MTok       | $0.10 / MTok | $5 / MTok     |
-| Claude Haiku 3.5  | $0.80 / MTok      | $1 / MTok       | $1.6 / MTok     | $0.08 / MTok | $4 / MTok     |
-| Claude Opus 3 ([deprecated](/docs/en/about-claude/model-deprecations))    | $15 / MTok        | $18.75 / MTok   | $30 / MTok      | $1.50 / MTok | $75 / MTok    |
-| Claude Haiku 3    | $0.25 / MTok      | $0.30 / MTok    | $0.50 / MTok    | $0.03 / MTok | $1.25 / MTok  |
+| Model                                                                      | Base Input Tokens | 5m Cache Writes | 1h Cache Writes | Cache Hits & Refreshes | Output Tokens |
+| -------------------------------------------------------------------------- | ----------------- | --------------- | --------------- | ---------------------- | ------------- |
+| Claude Opus 4.6                                                            | $5 / MTok         | $6.25 / MTok    | $10 / MTok      | $0.50 / MTok           | $25 / MTok    |
+| Claude Opus 4.5                                                            | $5 / MTok         | $6.25 / MTok    | $10 / MTok      | $0.50 / MTok           | $25 / MTok    |
+| Claude Opus 4.1                                                            | $15 / MTok        | $18.75 / MTok   | $30 / MTok      | $1.50 / MTok           | $75 / MTok    |
+| Claude Opus 4                                                              | $15 / MTok        | $18.75 / MTok   | $30 / MTok      | $1.50 / MTok           | $75 / MTok    |
+| Claude Sonnet 4.6                                                          | $3 / MTok         | $3.75 / MTok    | $6 / MTok       | $0.30 / MTok           | $15 / MTok    |
+| Claude Sonnet 4.5                                                          | $3 / MTok         | $3.75 / MTok    | $6 / MTok       | $0.30 / MTok           | $15 / MTok    |
+| Claude Sonnet 4                                                            | $3 / MTok         | $3.75 / MTok    | $6 / MTok       | $0.30 / MTok           | $15 / MTok    |
+| Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations)) | $3 / MTok         | $3.75 / MTok    | $6 / MTok       | $0.30 / MTok           | $15 / MTok    |
+| Claude Haiku 4.5                                                           | $1 / MTok         | $1.25 / MTok    | $2 / MTok       | $0.10 / MTok           | $5 / MTok     |
+| Claude Haiku 3.5                                                           | $0.80 / MTok      | $1 / MTok       | $1.6 / MTok     | $0.08 / MTok           | $4 / MTok     |
+| Claude Opus 3 ([deprecated](/docs/en/about-claude/model-deprecations))     | $15 / MTok        | $18.75 / MTok   | $30 / MTok      | $1.50 / MTok           | $75 / MTok    |
+| Claude Haiku 3                                                             | $0.25 / MTok      | $0.30 / MTok    | $0.50 / MTok    | $0.03 / MTok           | $1.25 / MTok  |
 
 <Note>
 MTok = Million tokens. The "Base Input Tokens" column shows standard input pricing, "Cache Writes" and "Cache Hits" are specific to [prompt caching](/docs/en/build-with-claude/prompt-caching), and "Output Tokens" shows output pricing. Prompt caching offers both 5-minute (default) and 1-hour cache durations to optimize costs for different use cases.
 
 The table above reflects the following pricing multipliers for prompt caching:
+
 - 5-minute cache write tokens are 1.25 times the base input tokens price
 - 1-hour cache write tokens are 2 times the base input tokens price
 - Cache read tokens are 0.1 times the base input tokens price
@@ -39,6 +40,7 @@ The table above reflects the following pricing multipliers for prompt caching:
 ## Third-party platform pricing
 
 Claude models are available on [AWS Bedrock](/docs/en/build-with-claude/claude-on-amazon-bedrock), [Google Vertex AI](/docs/en/build-with-claude/claude-on-vertex-ai), and [Microsoft Foundry](/docs/en/build-with-claude/claude-in-microsoft-foundry). For official pricing, visit:
+
 - [AWS Bedrock pricing](https://aws.amazon.com/bedrock/pricing/)
 - [Google Vertex AI pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing)
 - [Microsoft Foundry pricing](https://azure.microsoft.com/en-us/pricing/details/ai-foundry/#pricing)
@@ -47,6 +49,7 @@ Claude models are available on [AWS Bedrock](/docs/en/build-with-claude/claude-o
 **Regional endpoint pricing for Claude 4.5 models and beyond**
 
 Starting with Claude Sonnet 4.5 and Haiku 4.5, AWS Bedrock and Google Vertex AI offer two endpoint types:
+
 - **Global endpoints**: Dynamic routing across regions for maximum availability
 - **Regional endpoints**: Data routing guaranteed within specific geographic regions
 
@@ -55,6 +58,7 @@ Regional endpoints include a 10% premium over global endpoints. **The Claude API
 **Scope**: This pricing structure applies to Claude Sonnet 4.5, Haiku 4.5, and all future models. Earlier models (Claude Sonnet 4, Opus 4, and prior releases) retain their existing pricing.
 
 For implementation details and code examples:
+
 - [AWS Bedrock global vs regional endpoints](/docs/en/build-with-claude/claude-on-amazon-bedrock#global-vs-regional-endpoints)
 - [Google Vertex AI global vs regional endpoints](/docs/en/build-with-claude/claude-on-vertex-ai#global-vs-regional-endpoints)
 </Note>
@@ -73,11 +77,12 @@ For more information, see the [data residency documentation](/docs/en/build-with
 
 [Fast mode](/docs/en/build-with-claude/fast-mode) for Claude Opus 4.6 (research preview) provides significantly faster output at premium pricing (6x standard rates). Fast mode pricing applies across the full context window, including requests over 200K input tokens. Currently supported on Opus 4.6:
 
-| Input | Output |
-|:------|:-------|
+| Input      | Output      |
+| :--------- | :---------- |
 | $30 / MTok | $150 / MTok |
 
 Fast mode pricing stacks with other pricing modifiers:
+
 - [Prompt caching multipliers](#model-pricing) apply on top of fast mode pricing
 - [Data residency](/docs/en/build-with-claude/data-residency) multipliers apply on top of fast mode pricing
 
@@ -89,20 +94,20 @@ For more information, see the [fast mode documentation](/docs/en/build-with-clau
 
 The Batch API allows asynchronous processing of large volumes of requests with a 50% discount on both input and output tokens.
 
-| Model             | Batch input      | Batch output    |
-|-------------------|------------------|-----------------|
-| Claude Opus 4.6       | $2.50 / MTok     | $12.50 / MTok   |
-| Claude Opus 4.5     | $2.50 / MTok     | $12.50 / MTok   |
-| Claude Opus 4.1     | $7.50 / MTok     | $37.50 / MTok   |
-| Claude Opus 4     | $7.50 / MTok     | $37.50 / MTok   |
-| Claude Sonnet 4.6   | $1.50 / MTok     | $7.50 / MTok    |
-| Claude Sonnet 4.5   | $1.50 / MTok     | $7.50 / MTok    |
-| Claude Sonnet 4   | $1.50 / MTok     | $7.50 / MTok    |
-| Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations)) | $1.50 / MTok     | $7.50 / MTok    |
-| Claude Haiku 4.5  | $0.50 / MTok     | $2.50 / MTok    |
-| Claude Haiku 3.5  | $0.40 / MTok     | $2 / MTok       |
-| Claude Opus 3 ([deprecated](/docs/en/about-claude/model-deprecations))  | $7.50 / MTok     | $37.50 / MTok   |
-| Claude Haiku 3    | $0.125 / MTok    | $0.625 / MTok   |
+| Model                                                                      | Batch input   | Batch output  |
+| -------------------------------------------------------------------------- | ------------- | ------------- |
+| Claude Opus 4.6                                                            | $2.50 / MTok  | $12.50 / MTok |
+| Claude Opus 4.5                                                            | $2.50 / MTok  | $12.50 / MTok |
+| Claude Opus 4.1                                                            | $7.50 / MTok  | $37.50 / MTok |
+| Claude Opus 4                                                              | $7.50 / MTok  | $37.50 / MTok |
+| Claude Sonnet 4.6                                                          | $1.50 / MTok  | $7.50 / MTok  |
+| Claude Sonnet 4.5                                                          | $1.50 / MTok  | $7.50 / MTok  |
+| Claude Sonnet 4                                                            | $1.50 / MTok  | $7.50 / MTok  |
+| Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations)) | $1.50 / MTok  | $7.50 / MTok  |
+| Claude Haiku 4.5                                                           | $0.50 / MTok  | $2.50 / MTok  |
+| Claude Haiku 3.5                                                           | $0.40 / MTok  | $2 / MTok     |
+| Claude Opus 3 ([deprecated](/docs/en/about-claude/model-deprecations))     | $7.50 / MTok  | $37.50 / MTok |
+| Claude Haiku 3                                                             | $0.125 / MTok | $0.625 / MTok |
 
 For more information about batch processing, see the [batch processing documentation](/docs/en/build-with-claude/batch-processing).
 
@@ -114,14 +119,15 @@ When using Claude Opus 4.6, Sonnet 4.6, Sonnet 4.5, or Sonnet 4 at standard spee
 The 1M token context window is currently in beta for organizations in [usage tier](/docs/en/api/rate-limits) 4 and organizations with custom rate limits. The 1M token context window is only available for Claude Opus 4.6, Sonnet 4.6, Sonnet 4.5, and Sonnet 4.
 </Note>
 
-| Model | ≤ 200K input tokens | > 200K input tokens |
-|-------|-----------------------------------|-------------------------------------|
-| Claude Opus 4.6 | Input: $5 / MTok | Input: $10 / MTok |
-|  | Output: $25 / MTok | Output: $37.50 / MTok |
-| Claude Sonnet 4.6 / 4.5 / 4 | Input: $3 / MTok | Input: $6 / MTok |
-|  | Output: $15 / MTok | Output: $22.50 / MTok |
+| Model                       | ≤ 200K input tokens | > 200K input tokens   |
+| --------------------------- | ------------------- | --------------------- |
+| Claude Opus 4.6             | Input: $5 / MTok    | Input: $10 / MTok     |
+|                             | Output: $25 / MTok  | Output: $37.50 / MTok |
+| Claude Sonnet 4.6 / 4.5 / 4 | Input: $3 / MTok    | Input: $6 / MTok      |
+|                             | Output: $15 / MTok  | Output: $22.50 / MTok |
 
 Long context pricing stacks with other pricing modifiers:
+
 - The [Batch API 50% discount](#batch-processing) applies to long context pricing
 - [Prompt caching multipliers](#model-pricing) apply on top of long context pricing
 - The [data residency 1.1x multiplier](#data-residency-pricing) applies on top of long context pricing
@@ -146,6 +152,7 @@ To check if your API request was charged at the 1M context window rates, examine
 ```
 
 Calculate the total input tokens by summing:
+
 - `input_tokens`
 - `cache_creation_input_tokens` (if using prompt caching)
 - `cache_read_input_tokens` (if using prompt caching)
@@ -157,6 +164,7 @@ For more information about the `usage` object, see the [API response documentati
 ### Tool use pricing
 
 Tool use requests are priced based on:
+
 1. The total number of input tokens sent to the model (including in the `tools` parameter)
 2. The number of output tokens generated
 3. For server-side tools, additional usage-based pricing (e.g., web search charges per search performed)
@@ -171,21 +179,21 @@ The additional tokens from tool use come from:
 
 When you use `tools`, we also automatically include a special system prompt for the model which enables tool use. The number of tool use tokens required for each model are listed below (excluding the additional tokens listed above). Note that the table assumes at least 1 tool is provided. If no `tools` are provided, then a tool choice of `none` uses 0 additional system prompt tokens.
 
-| Model                    | Tool choice                                          | Tool use system prompt token count          |
-|--------------------------|------------------------------------------------------|---------------------------------------------|
-| Claude Opus 4.6              | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Opus 4.5            | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Opus 4.1            | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Opus 4            | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Sonnet 4.6          | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Sonnet 4.5          | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Sonnet 4          | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations))        | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Haiku 4.5         | `auto`, `none`<hr />`any`, `tool`   | 346 tokens<hr />313 tokens |
-| Claude Haiku 3.5         | `auto`, `none`<hr />`any`, `tool`   | 264 tokens<hr />340 tokens |
-| Claude Opus 3 ([deprecated](/docs/en/about-claude/model-deprecations))            | `auto`, `none`<hr />`any`, `tool`   | 530 tokens<hr />281 tokens |
-| Claude Sonnet 3          | `auto`, `none`<hr />`any`, `tool`   | 159 tokens<hr />235 tokens |
-| Claude Haiku 3           | `auto`, `none`<hr />`any`, `tool`   | 264 tokens<hr />340 tokens |
+| Model                                                                      | Tool choice                       | Tool use system prompt token count |
+| -------------------------------------------------------------------------- | --------------------------------- | ---------------------------------- |
+| Claude Opus 4.6                                                            | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Opus 4.5                                                            | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Opus 4.1                                                            | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Opus 4                                                              | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Sonnet 4.6                                                          | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Sonnet 4.5                                                          | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Sonnet 4                                                            | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations)) | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Haiku 4.5                                                           | `auto`, `none`<hr />`any`, `tool` | 346 tokens<hr />313 tokens         |
+| Claude Haiku 3.5                                                           | `auto`, `none`<hr />`any`, `tool` | 264 tokens<hr />340 tokens         |
+| Claude Opus 3 ([deprecated](/docs/en/about-claude/model-deprecations))     | `auto`, `none`<hr />`any`, `tool` | 530 tokens<hr />281 tokens         |
+| Claude Sonnet 3                                                            | `auto`, `none`<hr />`any`, `tool` | 159 tokens<hr />235 tokens         |
+| Claude Haiku 3                                                             | `auto`, `none`<hr />`any`, `tool` | 264 tokens<hr />340 tokens         |
 
 These token counts are added to your normal input and output tokens to calculate the total cost of a request.
 
@@ -200,6 +208,7 @@ For more information about tool use implementation and best practices, see the [
 The bash tool adds **245 input tokens** to your API calls.
 
 Additional tokens are consumed by:
+
 - Command outputs (stdout/stderr)
 - Error messages
 - Large file contents
@@ -235,10 +244,10 @@ The text editor tool uses the same pricing structure as other tools used with Cl
 
 In addition to the base tokens, the following additional input tokens are needed for the text editor tool:
 
-| Tool | Additional input tokens |
-| ----------------------------------------- | --------------------------------------- |
-| `text_editor_20250429` (Claude 4.x) | 700 tokens |
-| `text_editor_20250124` (Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations))) | 700 tokens |
+| Tool                                                                                                | Additional input tokens |
+| --------------------------------------------------------------------------------------------------- | ----------------------- |
+| `text_editor_20250429` (Claude 4.x)                                                                 | 700 tokens              |
+| `text_editor_20250124` (Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations))) | 700 tokens              |
 
 See [tool use pricing](#tool-use-pricing) for complete pricing details.
 
@@ -283,8 +292,9 @@ The web fetch tool is available on the Claude API at **no additional cost**. You
 To protect against inadvertently fetching large content that would consume excessive tokens, use the `max_content_tokens` parameter to set appropriate limits based on your use case and budget considerations.
 
 Example token usage for typical content:
+
 - Average web page (10KB): ~2,500 tokens
-- Large documentation page (100KB): ~25,000 tokens  
+- Large documentation page (100KB): ~25,000 tokens
 - Research paper PDF (500KB): ~125,000 tokens
 
 #### Computer use tool
@@ -294,12 +304,14 @@ Computer use follows the standard [tool use pricing](/docs/en/agents-and-tools/t
 **System prompt overhead**: The computer use beta adds 466-499 tokens to the system prompt
 
 **Computer use tool token usage**:
-| Model | Input tokens per tool definition |
-| ----- | -------------------------------- |
-| Claude 4.x models | 735 tokens |
-| Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations)) | 735 tokens |
+
+| Model                                                                      | Input tokens per tool definition |
+| -------------------------------------------------------------------------- | -------------------------------- |
+| Claude 4.x models                                                          | 735 tokens                       |
+| Claude Sonnet 3.7 ([deprecated](/docs/en/about-claude/model-deprecations)) | 735 tokens                       |
 
 **Additional token consumption**:
+
 - Screenshot images (see [Vision pricing](/docs/en/build-with-claude/vision))
 - Tool execution results returned to Claude
 

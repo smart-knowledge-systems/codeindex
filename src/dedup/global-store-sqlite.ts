@@ -58,6 +58,7 @@ export async function openSqliteGlobalStore(config: CodeindexConfig): Promise<Gl
   return new SqliteGlobalStore(db);
 }
 
+/* oxlint-disable typescript/require-await -- bun:sqlite is synchronous; async methods satisfy the Promise-based GlobalDedupStore interface and turn throws into rejections */
 class SqliteGlobalStore implements GlobalDedupStore {
   // Prepared statements are lazily built on first use to keep construction cheap.
   private readonly db: Database;
@@ -74,7 +75,8 @@ class SqliteGlobalStore implements GlobalDedupStore {
          WHERE content_hash = ? AND provider = ? AND model = ? AND dimensions = ?`,
       )
       .get(key.contentHash, key.provider, key.model, key.dimensions) as
-      { id: number; skeleton: string | null; skeleton_entries: string | null } | undefined;
+      | { id: number; skeleton: string | null; skeleton_entries: string | null }
+      | undefined;
     if (!row) return null;
 
     const embRow = this.db
@@ -111,13 +113,13 @@ class SqliteGlobalStore implements GlobalDedupStore {
            WHERE cb.provider = ? AND cb.model = ? AND cb.dimensions = ?
              AND cb.content_hash IN (${placeholders})`,
         )
-        .all(provider, model, dimensions, ...chunk) as Array<{
+        .all(provider, model, dimensions, ...chunk) as {
         id: number;
         content_hash: string;
         skeleton: string | null;
         skeleton_entries: string | null;
         embedding: Uint8Array;
-      }>;
+      }[];
       for (const row of rows) {
         result.set(row.content_hash, {
           skeleton: row.skeleton,
@@ -171,14 +173,15 @@ class SqliteGlobalStore implements GlobalDedupStore {
          WHERE tree_hash = ? AND provider = ? AND model = ? AND dimensions = ?`,
       )
       .get(key.treeHash, key.provider, key.model, key.dimensions) as
-      { id: number; ecosystem: string; name: string; version: string } | undefined;
+      | { id: number; ecosystem: string; name: string; version: string }
+      | undefined;
     return row ?? null;
   }
 
   async listPackageFiles(packageId: number): Promise<PackageFileEntry[]> {
     const rows = this.db
       .prepare(`SELECT relpath, content_hash FROM package_files WHERE package_id = ?`)
-      .all(packageId) as Array<{ relpath: string; content_hash: string }>;
+      .all(packageId) as { relpath: string; content_hash: string }[];
     return rows.map((r) => ({ relpath: r.relpath, contentHash: r.content_hash }));
   }
 
@@ -237,7 +240,7 @@ class SqliteGlobalStore implements GlobalDedupStore {
     };
     const ecoRows = this.db
       .prepare(`SELECT ecosystem, COUNT(*) AS n FROM packages GROUP BY ecosystem ORDER BY n DESC`)
-      .all() as Array<{ ecosystem: string; n: number }>;
+      .all() as { ecosystem: string; n: number }[];
     const provRows = this.db
       .prepare(
         `SELECT provider, model, dimensions, COUNT(*) AS n
@@ -245,10 +248,10 @@ class SqliteGlobalStore implements GlobalDedupStore {
          GROUP BY provider, model, dimensions
          ORDER BY n DESC`,
       )
-      .all() as Array<{ provider: string; model: string; dimensions: number; n: number }>;
+      .all() as { provider: string; model: string; dimensions: number; n: number }[];
     let storageBytes: number | null = null;
     try {
-      const filename = (this.db.prepare("PRAGMA database_list").all() as Array<{ file: string }>)[0]
+      const filename = (this.db.prepare("PRAGMA database_list").all() as { file: string }[])[0]
         ?.file;
       if (filename) {
         const file = Bun.file(filename);
@@ -288,15 +291,15 @@ class SqliteGlobalStore implements GlobalDedupStore {
         `SELECT id FROM packages
          WHERE id NOT IN (SELECT DISTINCT package_id FROM repo_packages)`,
       )
-      .all() as Array<{ id: number }>;
+      .all() as { id: number }[];
     return rows.map((r) => r.id);
   }
 
   async listLivePackageBlobHashes(excludePackageIds: number[]): Promise<string[]> {
     if (excludePackageIds.length === 0) {
-      const rows = this.db
-        .prepare(`SELECT DISTINCT content_hash FROM package_files`)
-        .all() as Array<{ content_hash: string }>;
+      const rows = this.db.prepare(`SELECT DISTINCT content_hash FROM package_files`).all() as {
+        content_hash: string;
+      }[];
       return rows.map((r) => r.content_hash);
     }
     // Chunk to keep parameter count safe.
@@ -310,7 +313,7 @@ class SqliteGlobalStore implements GlobalDedupStore {
           `SELECT DISTINCT content_hash FROM package_files
            WHERE package_id NOT IN (${placeholders})`,
         )
-        .all(...chunk) as Array<{ content_hash: string }>;
+        .all(...chunk) as { content_hash: string }[];
       for (const r of rows) live.add(r.content_hash);
     }
     return Array.from(live);
@@ -400,3 +403,4 @@ class SqliteGlobalStore implements GlobalDedupStore {
     this.db.close();
   }
 }
+/* oxlint-enable typescript/require-await */

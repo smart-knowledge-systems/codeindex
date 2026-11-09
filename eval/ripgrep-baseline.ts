@@ -2,11 +2,44 @@ import { execSync } from "child_process";
 import path from "path";
 
 const STOP_WORDS = new Set([
-  "the", "a", "an", "in", "of", "to", "for", "is", "it", "on",
-  "at", "by", "with", "as", "from", "this", "that", "which",
-  "and", "or", "not", "are", "be", "was", "were", "has", "have",
-  "had", "do", "does", "did", "but", "if", "so", "no", "how",
-  "get", "end",
+  "the",
+  "a",
+  "an",
+  "in",
+  "of",
+  "to",
+  "for",
+  "is",
+  "it",
+  "on",
+  "at",
+  "by",
+  "with",
+  "as",
+  "from",
+  "this",
+  "that",
+  "which",
+  "and",
+  "or",
+  "not",
+  "are",
+  "be",
+  "was",
+  "were",
+  "has",
+  "have",
+  "had",
+  "do",
+  "does",
+  "did",
+  "but",
+  "if",
+  "so",
+  "no",
+  "how",
+  "get",
+  "end",
 ]);
 
 function extractKeywords(query: string): string[] {
@@ -37,11 +70,11 @@ function rgSearch(repoRoot: string, keyword: string): string[] {
   }
 }
 
-export async function ripgrepBaseline(
+export function ripgrepBaseline(
   repoRoot: string,
   query: string,
   expectedFiles: string[],
-): Promise<{ precision5: number; returnedFiles: string[] }> {
+): { precision5: number; returnedFiles: string[] } {
   const keywords = extractKeywords(query);
 
   if (keywords.length === 0) {
@@ -58,9 +91,7 @@ export async function ripgrepBaseline(
   }
 
   // Sort by match count descending
-  const ranked = [...fileCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([f]) => f);
+  const ranked = [...fileCounts.entries()].sort((a, b) => b[1] - a[1]).map(([f]) => f);
 
   // Compute precision@5
   const top5 = ranked.slice(0, 5);

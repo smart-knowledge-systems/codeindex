@@ -47,7 +47,7 @@ export function resolveLangExtensions(langs: string[]): string[] {
 }
 
 export function parseSince(since: string): Date {
-  const match = since.match(/^(\d+)([dwm])$/);
+  const match = /^(\d+)([dwm])$/.exec(since);
   if (match) {
     const n = parseInt(match[1]);
     const unit = match[2];
