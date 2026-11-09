@@ -75,16 +75,24 @@ export function getRepoName(repoRoot: string): Promise<string> {
 
 export async function getChangedFiles(repoRoot: string, commitHash?: string): Promise<string[]> {
   const args = commitHash
-    ? ["-C", repoRoot, "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash]
-    : ["-C", repoRoot, "diff", "--name-only", "HEAD"];
+    ? [
+        "-C",
+        repoRoot,
+        "diff-tree",
+        "--root",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        "-z",
+        commitHash,
+      ]
+    : ["-C", repoRoot, "diff", "--name-only", "-z", "HEAD"];
 
   const result = await runGit(args, "getChangedFiles");
   if (!result.ok) return [];
 
-  return result.stdout
-    .trim()
-    .split("\n")
-    .filter((line) => line.length > 0);
+  // -z: NUL-separated and unquoted, so non-ASCII and newline-bearing names survive.
+  return result.stdout.split("\0").filter((name) => name.length > 0);
 }
 
 function parseCommitOutput(output: string): CommitEntry[] {
