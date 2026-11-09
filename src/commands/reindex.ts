@@ -1,5 +1,6 @@
 import path from "path";
-import { loadConfig, detectFormatter } from "../config";
+import { loadConfig } from "../config";
+import { resolveFormatter } from "../index/formatter-trust";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { getProvider } from "../embedding-provider";
@@ -87,7 +88,7 @@ export async function cmdReindex(repoRoot: string, dryRun = false, budget?: numb
     }
   }
 
-  const formatter = config.formatter ?? (await detectFormatter(repoRoot));
+  const formatter = await resolveFormatter(repoRoot, config);
 
   console.log(`Indexing ${repoRoot} (repo_id=${repoId}, store=${config.store})`);
   if (dryRun) console.log("(dry run — no changes will be made)");

@@ -1,5 +1,6 @@
 import path from "path";
-import { loadConfig, detectFormatter } from "../config";
+import { loadConfig } from "../config";
+import { resolveFormatter } from "../index/formatter-trust";
 import { getPg, pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
 import { serializeEmbedding } from "@easier-idx/core/db";
@@ -25,7 +26,7 @@ export async function cmdUpdate(repoRoot: string, files: string[], commitHash?: 
   const repoId = await ensureRepo(repoRoot);
   setCurrentRepo(repoId, repoRoot, config.store);
   setCorrelationContext({ repoId });
-  const formatter = config.formatter ?? (await detectFormatter(repoRoot));
+  const formatter = await resolveFormatter(repoRoot, config);
 
   await initParser();
 

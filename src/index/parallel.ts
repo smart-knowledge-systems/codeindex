@@ -1,5 +1,6 @@
 import path from "path";
-import { loadConfig, detectFormatter } from "../config";
+import { loadConfig } from "../config";
+import { resolveFormatter } from "./formatter-trust";
 import { ensurePgSchema } from "../db/schema";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
@@ -72,7 +73,7 @@ async function reindexOne(
 
   const origin = await getRepoOrigin(repoRoot);
   const name = await getRepoName(repoRoot);
-  const formatter = config.formatter ?? (await detectFormatter(repoRoot));
+  const formatter = await resolveFormatter(repoRoot, config);
 
   // Ensure repo row exists
   let repoId: number;

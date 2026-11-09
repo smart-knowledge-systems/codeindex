@@ -5,6 +5,7 @@ import path from "path";
 import os from "os";
 import { hasFlag, type ParsedArgs } from "../cli";
 import { loadConfig } from "../config";
+import { resolveFormatter } from "../index/formatter-trust";
 import { getSqlite } from "../db/sqlite";
 import { ensureSqliteSchema } from "../db/schema";
 import { collectFiles } from "../pipeline/collect";
@@ -170,7 +171,7 @@ export async function cloudReindex(repoRoot: string, parsed: ParsedArgs): Promis
     repoRoot,
     repoId: repoRow.id,
     config,
-    formatter: config.formatter ?? null,
+    formatter: await resolveFormatter(repoRoot, config),
     store: "sqlite",
     dryRun: false,
     force: true, // bypass local hash dedup — let the cloud decide

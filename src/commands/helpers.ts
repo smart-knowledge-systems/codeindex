@@ -1,5 +1,6 @@
 import path from "path";
-import { loadConfig, detectFormatter } from "../config";
+import { loadConfig } from "../config";
+import { resolveFormatter } from "../index/formatter-trust";
 import { ensurePgSchema, ensureSqliteSchema } from "../db/schema";
 import { pgUnsafe } from "../db/pg";
 import { getSqlite } from "../db/sqlite";
@@ -16,7 +17,7 @@ export async function ensureRepo(repoRoot: string): Promise<number> {
   const config = await loadConfig(repoRoot);
   const origin = await getRepoOrigin(repoRoot);
   const name = await getRepoName(repoRoot);
-  const formatter = config.formatter ?? (await detectFormatter(repoRoot));
+  const formatter = await resolveFormatter(repoRoot, config);
 
   if (config.store === "pg") {
     await ensurePgSchema();
