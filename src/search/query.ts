@@ -524,7 +524,9 @@ export async function searchChanged(
 
   // Run semantic search and intersect with changed files
   const semanticResults = await search(repoRoot, query, options);
-  return semanticResults.filter((r) => r.type === "file" && changedPaths.has(r.filePath));
+  return semanticResults.filter(
+    (r) => r.type !== "dir" && r.type !== "commit" && changedPaths.has(r.filePath),
+  );
 }
 
 /**
