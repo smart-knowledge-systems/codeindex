@@ -272,9 +272,9 @@ bun eval/compare-models.ts                    # Compare embedding models
 ## Development
 
 ```bash
-bun run check            # lint + typecheck
-bun run format           # Prettier write
-bun run lint:fix         # ESLint with auto-fix
+bun run check            # format check + lint + typecheck
+bun run format           # oxfmt write
+bun run lint:fix         # oxlint (type-aware) with auto-fix
 bun test                 # Run tests
 ```
 
