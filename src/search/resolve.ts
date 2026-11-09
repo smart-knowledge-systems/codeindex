@@ -27,6 +27,7 @@ export function resolveSearchOptions(
     dir: options?.dir ?? [],
     since: options?.since ?? "",
     explain: options?.explain ?? false,
+    allowedRepoIds: options?.allowedRepoIds ?? null,
   };
 }
 
