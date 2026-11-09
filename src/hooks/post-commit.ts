@@ -8,7 +8,15 @@ import { logEvent } from "../logging";
 
 const HOOK_MARKER = "# codeindex hook";
 
+// Files are comma-joined into a single quoted arg: `--files` takes one value
+// and the CLI splits it on commas.
 const HOOK_LINES = `${HOOK_MARKER}
+files=$(git diff-tree --no-commit-id --name-only -r HEAD | paste -sd, -)
+commit=$(git rev-parse HEAD)
+if [ -n "$files" ]; then codeindex update --files "$files" --commit "$commit"; fi`;
+
+// Pre-fix hook body: unquoted $files meant only the first changed file was indexed.
+const LEGACY_HOOK_LINES = `${HOOK_MARKER}
 files=$(git diff-tree --no-commit-id --name-only -r HEAD)
 commit=$(git rev-parse HEAD)
 codeindex update --files $files --commit $commit`;
@@ -24,9 +32,10 @@ ${HOOK_LINES}
 type HookState =
   | { readonly kind: "does-not-exist"; readonly hookPath: string }
   | { readonly kind: "already-installed"; readonly hookPath: string }
+  | { readonly kind: "needs-upgrade"; readonly hookPath: string; readonly existing: string }
   | { readonly kind: "needs-append"; readonly hookPath: string; readonly existing: string };
 
-export type HookAction = "created" | "appended" | "skipped";
+export type HookAction = "created" | "appended" | "upgraded" | "skipped";
 
 export interface HookInstallResult {
   hookPath: string;
@@ -45,6 +54,11 @@ function decideHookContent(state: HookState): { action: HookAction; content: str
       return { action: "created", content: FULL_HOOK_SCRIPT };
     case "already-installed":
       return { action: "skipped", content: null };
+    case "needs-upgrade":
+      return {
+        action: "upgraded",
+        content: state.existing.replace(LEGACY_HOOK_LINES, HOOK_LINES),
+      };
     case "needs-append": {
       const separator = state.existing.endsWith("\n") ? "\n" : "\n\n";
       return { action: "appended", content: state.existing + separator + HOOK_LINES + "\n" };
@@ -64,6 +78,7 @@ async function readHookState(hookPath: string): Promise<HookState> {
   if (!exists) return { kind: "does-not-exist", hookPath };
 
   const existing = await hookFile.text();
+  if (existing.includes(LEGACY_HOOK_LINES)) return { kind: "needs-upgrade", hookPath, existing };
   if (existing.includes(HOOK_MARKER)) return { kind: "already-installed", hookPath };
 
   return { kind: "needs-append", hookPath, existing };
